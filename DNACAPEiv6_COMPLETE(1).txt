@@ -1,0 +1,2827 @@
+﻿# DNA Center API Interactive Menu Script with Device Filtering
+# Author: In Memory of Zesty.PS1
+
+# Allow script to run
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
+# Handle errors gracefully
+$ErrorActionPreference = "Continue"
+
+# DNA Center URL - UPDATE THIS
+$dnaCenter = "sanitized"
+
+# Output directory for CSV files
+$outputDir = "C:\DNACenter_Reports"
+if (-not (Test-Path $outputDir)) {
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+}
+
+# Global variable to store selected devices
+$global:selectedDevices = @()
+$global:allDevices = @()
+
+# ASCII Art Banner
+function Show-Banner {
+    Clear-Host
+    $banner = @"
+ ██████╗ ███╗   ██╗ ██████╗      ██████╗██████╗███╗   ██╗████████╗
+ ██╔══██╗████╗  ██║██╔══██╗    ██╔════╝██╔════╝████╗  ██║╚══██╔══╝
+ ██║  ██║██╔██╗ ██║███████║    ██║     █████╗  ██╔██╗ ██║   ██║
+ ██║  ██║██║╚██╗██║██╔══██║    ██║     ██╔══╝  ██║╚██╗██║   ██║
+ ██████╔╝██║ ╚████║██║  ██║    ╚██████╗███████╗██║ ╚████║   ██║
+ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝     ╚═════╝╚══════╝╚═╝  ╚═══╝   ╚═╝
+
+  ██████╗ ██████╗██╗     ████████╗ ██████╗  ██████╗ ██╗
+ ██╔══██╗██╔══██╗██║     ╚══██╔══╝██╔═══██╗██╔═══██╗██║
+ ███████║██████╔╝██║        ██║   ██║   ██║██║   ██║██║
+ ██╔══██║██╔═══╝ ██║        ██║   ██║   ██║██║   ██║██║
+ ██║  ██║██║     ██║        ██║   ╚██████╔╝╚██████╔╝███████╗
+
+	   Cisco DNA Center API Interface
+	   Network Management Tool v1.0 
+	   Courtesy of MECHAREA
+"@
+    
+    Write-Host $banner -ForegroundColor Cyan
+    Start-Sleep -Milliseconds 500
+}
+
+# Animated progress bar
+function Show-ProgressBar {
+    param(
+        [int]$Current,
+        [int]$Total,
+        [string]$Activity
+    )
+    
+    if ($Total -eq 0) { return }
+    
+    $percent = [math]::Round(($Current / $Total) * 100)
+    $barLength = 50
+    $filled = [math]::Floor($percent / 2)
+    
+    Write-Host "`r[" -NoNewline -ForegroundColor Cyan
+    Write-Host ("█" * $filled) -NoNewline -ForegroundColor Cyan
+    Write-Host ("░" * ($barLength - $filled)) -NoNewline -ForegroundColor DarkGray
+    Write-Host "] $percent% - $Activity" -NoNewline -ForegroundColor Cyan
+}
+
+# Function to check task status (for async operations)
+function Wait-ForTask {
+    param(
+        [string]$TaskId,
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [int]$TimeoutSeconds = 300
+    )
+    
+    $startTime = Get-Date
+    $completed = $false
+    
+    Write-Host "`nWaiting for task to complete..." -ForegroundColor Yellow
+    
+    while (-not $completed) {
+        Start-Sleep -Seconds 2
+        
+        try {
+            $taskResponse = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/task/$TaskId" -Method Get -Headers $Headers
+            
+            if ($taskResponse.response) {
+                $task = $taskResponse.response
+                
+                if ($task.isError) {
+                    Write-Host "`n✗ Task failed: $($task.failureReason)" -ForegroundColor Red
+                    return $null
+                }
+                
+                if ($task.endTime) {
+                    $completed = $true
+                    Write-Host "`n✓ Task completed successfully" -ForegroundColor Green
+                    return $task
+                }
+                
+                # Show progress
+                if ($task.progress) {
+                    Write-Host "`r  Progress: $($task.progress)" -NoNewline -ForegroundColor Cyan
+                }
+            }
+        } catch {
+            Write-Host "`n✗ Error checking task status: $($_.Exception.Message)" -ForegroundColor Red
+            return $null
+        }
+        
+        # Check timeout
+        $elapsed = ((Get-Date) - $startTime).TotalSeconds
+        if ($elapsed -gt $TimeoutSeconds) {
+            Write-Host "`n✗ Task timed out after $TimeoutSeconds seconds" -ForegroundColor Red
+            return $null
+        }
+    }
+    
+    return $taskResponse.response
+}
+
+# Function to authenticate and get token
+function Get-DNACToken {
+    param (
+        [string]$dnaCenter
+    )
+    
+    Write-Host ""
+    Write-Host "╔════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "         Authentication Required                    " -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Simple console input method
+    Write-Host "Enter DNA Center Username: " -NoNewline -ForegroundColor Yellow
+    $username = Read-Host
+    
+    Write-Host "Enter DNA Center Password: " -NoNewline -ForegroundColor Yellow
+    $securePassword = Read-Host -AsSecureString
+    
+    # Convert secure string to plain text
+    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+    $password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+
+    # Create Base64 encoded credentials
+    $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $username, $password)))
+
+    # Bypass certificate validation
+    if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type) {
+        $certCallback = @"
+            using System;
+            using System.Net;
+            using System.Net.Security;
+            using System.Security.Cryptography.X509Certificates;
+            public class ServerCertificateValidationCallback
+            {
+                public static void Ignore()
+                {
+                    if(ServicePointManager.ServerCertificateValidationCallback == null)
+                    {
+                        ServicePointManager.ServerCertificateValidationCallback += 
+                            delegate
+                            (
+                                Object obj, 
+                                X509Certificate certificate, 
+                                X509Chain chain, 
+                                SslPolicyErrors errors
+                            )
+                            {
+                                return true;
+                            };
+                    }
+                }
+            }
+"@
+        Add-Type $certCallback
+    }
+    [ServerCertificateValidationCallback]::Ignore()
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+    # Get authentication token
+    $authUrl = "$dnaCenter/dna/system/api/v1/auth/token"
+    $headers = @{
+        "Authorization" = "Basic $base64AuthInfo"
+        "Content-Type" = "application/json"
+    }
+
+    try {
+        Write-Host "`nAuthenticating..." -ForegroundColor Yellow
+        $response = Invoke-RestMethod -Uri $authUrl -Method Post -Headers $headers
+        
+        if ($response -and $response.Token) {
+            Write-Host ""
+            Write-Host "✓ Authentication successful!" -ForegroundColor Green
+            Write-Host "✓ Token acquired" -ForegroundColor Green
+            Start-Sleep -Milliseconds 800
+            return $response.Token
+        } else {
+            Write-Host "✗ No token received from server" -ForegroundColor Red
+            return $null
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "✗ Authentication failed" -ForegroundColor Red
+        Write-Host "✗ Error: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Function to load all devices
+function Load-AllDevices {
+    param($headers, $dnaCenter)
+    
+    Write-Host ""
+    Write-Host "Loading network devices..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device" -Method Get -Headers $headers
+        
+        if ($response -and $response.response) {
+            $global:allDevices = $response.response
+            Write-Host "✓ Loaded $($global:allDevices.Count) devices" -ForegroundColor Green
+            Start-Sleep -Milliseconds 500
+            return $true
+        } else {
+            Write-Host "✗ No devices returned from API" -ForegroundColor Red
+            return $false
+        }
+    } catch {
+        Write-Host "✗ Failed to load devices: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Function to display device selection menu
+function Show-DeviceSelectionMenu {
+    Clear-Host
+    Write-Host ""
+    Write-Host "    ╔═════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "    ║            Device Filter Options                                ║" -ForegroundColor Cyan
+    Write-Host "    ╚═════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "    1. All Devices" -ForegroundColor White
+    Write-Host "    2. Select by Hostname" -ForegroundColor White
+    Write-Host "    3. Select by IP Address" -ForegroundColor White
+    Write-Host "    4. Filter by Device Role" -ForegroundColor White
+    Write-Host "    5. Filter by Device Family" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    0. Back to Main Menu" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    ══════════════════════════════════════════════════" -ForegroundColor Cyan
+}
+
+# Function to select devices
+function Select-Devices {
+    param($headers, $dnaCenter)
+    
+    do {
+        Show-DeviceSelectionMenu
+        $choice = Read-Host "`nSelect option"
+        
+        switch ($choice) {
+            "1" {
+                $global:selectedDevices = $global:allDevices
+                Write-Host "`n✓ Selected all $($global:selectedDevices.Count) devices`n" -ForegroundColor Green
+                Start-Sleep -Seconds 1
+                return
+            }
+            "2" {
+                Clear-Host
+                Write-Host "`nAvailable Devices:`n" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $global:allDevices.Count; $i++) {
+                    $hostname = if ($global:allDevices[$i].hostname) { $global:allDevices[$i].hostname } else { "Unknown" }
+                    $ip = if ($global:allDevices[$i].managementIpAddress) { $global:allDevices[$i].managementIpAddress } else { "N/A" }
+                    Write-Host "  $($i+1). $hostname - $ip" -ForegroundColor White
+                }
+                
+                Write-Host "`nEnter device numbers (comma-separated) or 'all':" -ForegroundColor Yellow
+                $input = Read-Host
+                
+                if ($input.ToLower() -eq "all") {
+                    $global:selectedDevices = $global:allDevices
+                } else {
+                    $indices = $input -split ',' | ForEach-Object { 
+                        try { [int]$_.Trim() - 1 } catch { -1 }
+                    }
+                    $global:selectedDevices = @()
+                    foreach ($index in $indices) {
+                        if ($index -ge 0 -and $index -lt $global:allDevices.Count) {
+                            $global:selectedDevices += $global:allDevices[$index]
+                        }
+                    }
+                }
+                
+                Write-Host "`n✓ Selected $($global:selectedDevices.Count) device(s)" -ForegroundColor Green
+                $global:selectedDevices | ForEach-Object { 
+                    $hostname = if ($_.hostname) { $_.hostname } else { "Unknown" }
+                    Write-Host "  → $hostname" -ForegroundColor Cyan 
+                }
+                Start-Sleep -Seconds 2
+                return
+            }
+            "3" {
+                Write-Host "`nEnter IP address(es) (comma-separated):" -ForegroundColor Yellow
+                $ips = Read-Host
+                $ipList = $ips -split ',' | ForEach-Object { $_.Trim() }
+                
+                $global:selectedDevices = $global:allDevices | Where-Object { 
+                    $_.managementIpAddress -and ($ipList -contains $_.managementIpAddress)
+                }
+                
+                Write-Host "`n✓ Selected $($global:selectedDevices.Count) device(s)" -ForegroundColor Green
+                $global:selectedDevices | ForEach-Object { 
+                    $hostname = if ($_.hostname) { $_.hostname } else { "Unknown" }
+                    $ip = if ($_.managementIpAddress) { $_.managementIpAddress } else { "N/A" }
+                    Write-Host "  → $hostname ($ip)" -ForegroundColor Cyan 
+                }
+                Start-Sleep -Seconds 2
+                return
+            }
+            "4" {
+                Clear-Host
+                $roles = $global:allDevices | Where-Object { $_.role } | Select-Object -ExpandProperty role -Unique | Sort-Object
+                
+                if ($roles.Count -eq 0) {
+                    Write-Host "`n✗ No roles found in device data" -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                    continue
+                }
+                
+                Write-Host "`nAvailable Roles:`n" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $roles.Count; $i++) {
+                    $count = ($global:allDevices | Where-Object { $_.role -eq $roles[$i] }).Count
+                    Write-Host "  $($i+1). $($roles[$i]) ($count devices)" -ForegroundColor White
+                }
+                
+                Write-Host "`nEnter role number(s) (comma-separated):" -ForegroundColor Yellow
+                $input = Read-Host
+                $indices = $input -split ',' | ForEach-Object { 
+                    try { [int]$_.Trim() - 1 } catch { -1 }
+                }
+                
+                $selectedRoles = @()
+                foreach ($index in $indices) {
+                    if ($index -ge 0 -and $index -lt $roles.Count) {
+                        $selectedRoles += $roles[$index]
+                    }
+                }
+                
+                $global:selectedDevices = $global:allDevices | Where-Object { $selectedRoles -contains $_.role }
+                
+                Write-Host "`n✓ Selected $($global:selectedDevices.Count) devices with role: $($selectedRoles -join ', ')" -ForegroundColor Green
+                Start-Sleep -Seconds 2
+                return
+            }
+            "5" {
+                Clear-Host
+                $families = $global:allDevices | Where-Object { $_.family } | Select-Object -ExpandProperty family -Unique | Sort-Object
+                
+                if ($families.Count -eq 0) {
+                    Write-Host "`n✗ No families found in device data" -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                    continue
+                }
+                
+                Write-Host "`nAvailable Device Families:`n" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $families.Count; $i++) {
+                    $count = ($global:allDevices | Where-Object { $_.family -eq $families[$i] }).Count
+                    Write-Host "  $($i+1). $($families[$i]) ($count devices)" -ForegroundColor White
+                }
+                
+                Write-Host "`nEnter family number(s) (comma-separated):" -ForegroundColor Yellow
+                $input = Read-Host
+                $indices = $input -split ',' | ForEach-Object { 
+                    try { [int]$_.Trim() - 1 } catch { -1 }
+                }
+                
+                $selectedFamilies = @()
+                foreach ($index in $indices) {
+                    if ($index -ge 0 -and $index -lt $families.Count) {
+                        $selectedFamilies += $families[$index]
+                    }
+                }
+                
+                $global:selectedDevices = $global:allDevices | Where-Object { $selectedFamilies -contains $_.family }
+                
+                Write-Host "`n✓ Selected $($global:selectedDevices.Count) devices" -ForegroundColor Green
+                Start-Sleep -Seconds 2
+                return
+            }
+            "0" {
+                return
+            }
+            default {
+                Write-Host "`n✗ Invalid selection" -ForegroundColor Red
+                Start-Sleep -Seconds 1
+            }
+        }
+    } while ($true)
+}
+
+# Function to display menu
+function Show-Menu {
+    Clear-Host
+    Write-Host ""
+    Write-Host "    ╔═══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "    ║              DNA Center API Main Menu                 ║" -ForegroundColor Cyan
+    Write-Host "    ╚═══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    if ($global:selectedDevices.Count -gt 0) {
+        Write-Host "    Current Filter: $($global:selectedDevices.Count) device(s) selected" -ForegroundColor Yellow
+    } else {
+        Write-Host "    Current Filter: All devices" -ForegroundColor Green
+    }
+    Write-Host ""
+    Write-Host "    ┌─────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+    Write-Host "    │  Device Selection                                   │" -ForegroundColor Cyan
+    Write-Host "    └─────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "    99. Configure Device Filter" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "    ┌─────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+    Write-Host "    │  Advanced Operations                                │" -ForegroundColor Cyan
+    Write-Host "    └─────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "    21. Command Runner (Execute CLI Commands)" -ForegroundColor Yellow
+    Write-Host "    22. Path Trace (Network Path Analysis)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    ┌─────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+    Write-Host "    │  Standard Reports                                  │" -ForegroundColor Cyan
+    Write-Host "    └─────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "     1. Network Devices (Basic Info)" -ForegroundColor White
+    Write-Host "     2. Network Devices (Detailed)" -ForegroundColor White
+    Write-Host "     3. Device Configurations" -ForegroundColor White
+    Write-Host "     4. Device Interfaces" -ForegroundColor White
+    Write-Host "     5. Device Inventory Count" -ForegroundColor White
+    Write-Host "     6. Sites/Locations" -ForegroundColor White
+    Write-Host "     7. Network Health" -ForegroundColor White
+    Write-Host "     8. Client Health" -ForegroundColor White
+    Write-Host "     9. Compliance Status" -ForegroundColor White
+    Write-Host "    10. Device Reachability Status" -ForegroundColor White
+    Write-Host "    11. VLANs" -ForegroundColor White
+    Write-Host "    12. Software/Image Information" -ForegroundColor White
+    Write-Host "    13. Issues/Events" -ForegroundColor White
+    Write-Host "    14. Templates" -ForegroundColor White
+    Write-Host "    15. Physical Topology" -ForegroundColor White
+    Write-Host "    16. Device Module Information" -ForegroundColor White
+    Write-Host "    17. OSPF Neighbors" -ForegroundColor White
+    Write-Host "    18. CDP Neighbors" -ForegroundColor White
+    Write-Host "    19. LLDP Neighbors" -ForegroundColor White
+    Write-Host "    20. Access Points" -ForegroundColor White
+    Write-Host ""
+    Write-Host "     0. Exit" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "    ════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+# Function to get filtered devices for processing
+function Get-FilteredDevices {
+    if ($global:selectedDevices.Count -gt 0) {
+        return $global:selectedDevices
+    } else {
+        return $global:allDevices
+    }
+}
+
+# NEW: Function to apply filters to output lines
+function Apply-Filters {
+    param(
+        [string[]]$Lines,
+        [string[]]$Filters
+    )
+    
+    if ($Filters.Count -eq 0) {
+        return $Lines
+    }
+    
+    $matchedLines = @()
+    foreach ($line in $Lines) {
+        foreach ($pattern in $Filters) {
+            # Use -like for simple substring matching (case-insensitive)
+            if ($line -like "*$pattern*") {
+                $matchedLines += $line
+                break  # Stop checking other patterns once matched
+            }
+        }
+    }
+    
+    return $matchedLines
+}
+
+# =====================================================
+# COMPLETE: Command Runner with Parallel Execution
+# =====================================================
+function Invoke-CommandRunner {
+    param($headers, $dnaCenter)
+
+    Clear-Host
+    Write-Host ""
+    Write-Host "╔═══════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║           Command Runner - CLI Execution          ║" -ForegroundColor Cyan
+    Write-Host "╚═══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Get devices to run command on
+    $devices = Get-FilteredDevices
+
+    if ($devices.Count -eq 0) {
+        Write-Host "✗ No devices available. Please load devices first." -ForegroundColor Red
+        Read-Host "`nPress Enter to continue"
+        return
+    }
+
+    Write-Host "Current device selection: $($devices.Count) device(s)" -ForegroundColor Yellow
+    Write-Host ""
+
+    # Ask for output format preference
+    Write-Host "Choose output format:" -ForegroundColor Yellow
+    Write-Host "1. Separate files per hostname (recommended for large outputs)" -ForegroundColor White
+    Write-Host "2. Single CSV with all results (good for analysis)" -ForegroundColor White
+    Write-Host "3. Both formats" -ForegroundColor White
+    Write-Host "4. Both formats + Concatenated text file" -ForegroundColor White
+    Write-Host ""
+    $outputFormat = Read-Host "Select option (1/2/3/4)"
+
+    $useSeparateFiles = $false
+    $useConsolidatedCSV = $false
+    $useConcatenatedText = $false
+
+    switch ($outputFormat) {
+        "1" { $useSeparateFiles = $true }
+        "2" { $useConsolidatedCSV = $true }
+        "3" {
+            $useSeparateFiles = $true
+            $useConsolidatedCSV = $true
+        }
+        "4" {
+            $useSeparateFiles = $true
+            $useConsolidatedCSV = $true
+            $useConcatenatedText = $true
+        }
+        default {
+            Write-Host "Invalid option. Using separate files per hostname." -ForegroundColor Yellow
+            $useSeparateFiles = $true
+        }
+    }
+
+    Write-Host ""
+    if ($useSeparateFiles -and $useConsolidatedCSV -and $useConcatenatedText) {
+        Write-Host "✓ Will generate separate files, consolidated CSV, and concatenated text file" -ForegroundColor Green
+    }
+    elseif ($useSeparateFiles -and $useConsolidatedCSV) {
+        Write-Host "✓ Will generate both separate files and consolidated CSV" -ForegroundColor Green
+    }
+    elseif ($useSeparateFiles) {
+        Write-Host "✓ Will generate separate files per hostname" -ForegroundColor Green
+    }
+    else {
+        Write-Host "✓ Will generate consolidated CSV with all results" -ForegroundColor Green
+    }
+    Write-Host ""
+
+    # Get command(s) to execute with per-command filters
+    Write-Host ""
+    Write-Host "Enter CLI command(s) to execute:" -ForegroundColor Yellow
+    Write-Host "(For multiple commands, enter one per line. Type 'DONE' when finished)" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  NOTE: Pipes (|) are NOT supported by DNA Center API" -ForegroundColor Yellow
+    Write-Host "   Use plain commands only. Filtering will be done after." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "FILTERING INSTRUCTIONS:" -ForegroundColor Magenta
+    Write-Host "  • Filters match partial text in output lines" -ForegroundColor Gray
+    Write-Host "  • Matching is case-insensitive" -ForegroundColor Gray
+    Write-Host "  • No special regex syntax needed - just enter text to find" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "Examples:" -ForegroundColor DarkGray
+    Write-Host "  Command: show ip interface brief" -ForegroundColor DarkGray
+    Write-Host "  Filter for this command? (yes/no): yes" -ForegroundColor DarkGray
+    Write-Host "  Filter 1: up" -ForegroundColor DarkGray
+    Write-Host "  Filter 2: Gigabit" -ForegroundColor DarkGray
+    Write-Host "  Filter 3: 10.1.1." -ForegroundColor DarkGray
+    Write-Host "  Filter 4: DONE" -ForegroundColor DarkGray
+    Write-Host "  Next command: show version" -ForegroundColor DarkGray
+    Write-Host "  Filter for this command? (yes/no): no" -ForegroundColor DarkGray
+    Write-Host "  DONE (to finish entering commands)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $commands = @()
+    $commandNumber = 1
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "--- Command $commandNumber ---" -ForegroundColor Cyan
+        $command = Read-Host "Enter command (or type DONE)"
+
+        if ($command.ToUpper() -eq "DONE") {
+            break
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($command)) {
+            # Check for unsupported characters
+            $cleanCommand = $command
+            if ($command -match '\|') {
+                Write-Host "    Warning: Pipes (|) detected - removing filter. Will apply after." -ForegroundColor Yellow
+                Write-Host "     Original: $command" -ForegroundColor DarkGray
+
+                # Extract base command (before pipe)
+                $cleanCommand = ($command -split '\|')[0].Trim()
+                Write-Host "     Using: $cleanCommand" -ForegroundColor Green
+            }
+
+            # Ask if user wants to filter THIS specific command
+            $commandFilters = @()
+            $filterChoice = Read-Host "Filter output for this command? (yes/no)"
+
+            if ($filterChoice -eq "yes") {
+                Write-Host ""
+                Write-Host "Enter filter patterns for '$cleanCommand' (one per line, type DONE when finished):" -ForegroundColor Yellow
+                Write-Host "  • Enter text to match in output lines" -ForegroundColor Gray
+                Write-Host "  • Examples: 'Gig0/1', 'up', '192.168.1.', 'TenGig'" -ForegroundColor Gray
+                Write-Host ""
+                $filterNumber = 1
+                while ($true) {
+                    $pattern = Read-Host "  Filter $filterNumber (or DONE)"
+                    if ($pattern.ToUpper() -eq "DONE") {
+                        break
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($pattern)) {
+                        $commandFilters += $pattern.Trim()
+                        $filterNumber++
+                    }
+                }
+            }
+
+            # Store command with its specific filters
+            $commands += [PSCustomObject]@{
+                Command = $cleanCommand
+                Filters = $commandFilters
+            }
+
+            Write-Host "  ✓ Added command: $cleanCommand" -ForegroundColor Green
+            if ($commandFilters.Count -gt 0) {
+                Write-Host "  ✓ With $($commandFilters.Count) filter(s): $($commandFilters -join ', ')" -ForegroundColor Yellow
+            }
+
+            $commandNumber++
+        }
+    }
+
+    if ($commands.Count -eq 0) {
+        Write-Host "`n✗ No commands entered" -ForegroundColor Red
+        Read-Host "`nPress Enter to continue"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Summary of commands to execute:" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $commands.Count; $i++) {
+        Write-Host "$($i+1). $($commands[$i].Command)" -ForegroundColor White
+        if ($commands[$i].Filters.Count -gt 0) {
+            Write-Host "   Filters: $($commands[$i].Filters -join ', ')" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "   No filters" -ForegroundColor Gray
+        }
+    }
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "On $($devices.Count) device(s)" -ForegroundColor Cyan
+    Write-Host ""
+
+    $confirm = Read-Host "Proceed? (yes/no)"
+    if ($confirm -ne "yes") {
+        Write-Host "✗ Operation cancelled" -ForegroundColor Yellow
+        Read-Host "`nPress Enter to continue"
+        return
+    }
+
+    Write-Host "`nSubmitting all commands to DNA Center..." -ForegroundColor Yellow
+
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $outputFolder = "$outputDir\CommandRunner_$timestamp"
+    New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
+
+    # Track all tasks
+    $taskTracker = @()
+
+    # PHASE 1: Submit ALL commands for ALL devices
+    Write-Host ""
+    Write-Host "Phase 1: Submitting commands..." -ForegroundColor Cyan
+    $submitCounter = 0
+    $totalSubmissions = $devices.Count * $commands.Count
+
+    foreach ($device in $devices) {
+        $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+        $deviceId = $device.id
+
+        foreach ($cmdObj in $commands) {
+            $submitCounter++
+            Show-ProgressBar -Current $submitCounter -Total $totalSubmissions -Activity "$hostname : $($cmdObj.Command)"
+
+            $requestBody = @{
+                "name"       = "Cmd-$hostname-$(Get-Random)"
+                "commands"   = @($cmdObj.Command)
+                "deviceUuids" = @($deviceId)
+            } | ConvertTo-Json -Depth 10
+
+            try {
+                $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device-poller/cli/read-request" `
+                    -Method Post `
+                    -Headers $headers `
+                    -Body $requestBody `
+                    -ContentType "application/json"
+
+                if ($response -and $response.response -and $response.response.taskId) {
+                    $taskTracker += [PSCustomObject]@{
+                        TaskId     = $response.response.taskId
+                        Hostname   = $hostname
+                        DeviceId   = $deviceId
+                        DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                        Command    = $cmdObj.Command
+                        Status     = "Submitted"
+                        FileId     = $null
+                        Output     = $null
+                        RawOutput  = $null
+                        SubmitTime = Get-Date
+                        Filters    = $cmdObj.Filters
+                    }
+                }
+                else {
+                    $taskTracker += [PSCustomObject]@{
+                        TaskId     = $null
+                        Hostname   = $hostname
+                        DeviceId   = $deviceId
+                        DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                        Command    = $cmdObj.Command
+                        Status     = "Submit Failed"
+                        FileId     = $null
+                        Output     = $null
+                        RawOutput  = $null
+                        SubmitTime = Get-Date
+                        Filters    = $cmdObj.Filters
+                    }
+                }
+            }
+            catch {
+                $errorMsg = $_.Exception.Message
+                if ($_.ErrorDetails.Message) {
+                    try {
+                        $errorObj = $_.ErrorDetails.Message | ConvertFrom-Json
+                        if ($errorObj.response -and $errorObj.response.message) {
+                            $errorMsg = $errorObj.response.message
+                        }
+                    }
+                    catch {
+                        $errorMsg = $_.ErrorDetails.Message
+                    }
+                }
+
+                $taskTracker += [PSCustomObject]@{
+                    TaskId     = $null
+                    Hostname   = $hostname
+                    DeviceId   = $deviceId
+                    DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    Command    = $cmdObj.Command
+                    Status     = "Error: $errorMsg"
+                    FileId     = $null
+                    Output     = $null
+                    RawOutput  = $null
+                    SubmitTime = Get-Date
+                    Filters    = $cmdObj.Filters
+                }
+            }
+
+            # Small delay to avoid overwhelming the API
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    Write-Host "`n"
+    Write-Host "✓ Submitted $submitCounter command(s)" -ForegroundColor Green
+    Write-Host ""
+
+    # PHASE 2: Poll ALL tasks until they complete
+    Write-Host "Phase 2: Waiting for all tasks to complete..." -ForegroundColor Cyan
+    Write-Host "(This may take 1-3 minutes depending on device count)" -ForegroundColor DarkGray
+
+    $maxWaitTime = 300  # 5 minutes total
+    $startTime = Get-Date
+    $checkInterval = 3  # Check every 3 seconds
+
+    $pendingTasks = $taskTracker | Where-Object { $_.TaskId -and $_.Status -eq "Submitted" }
+
+    while ($pendingTasks.Count -gt 0) {
+        $elapsed = ((Get-Date) - $startTime).TotalSeconds
+
+        if ($elapsed -gt $maxWaitTime) {
+            Write-Host "`n! Timeout reached - some tasks may still be running" -ForegroundColor Yellow
+            break
+        }
+
+        # Check status of all pending tasks
+        foreach ($task in $pendingTasks) {
+            try {
+                $taskResponse = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/task/$($task.TaskId)" `
+                    -Method Get `
+                    -Headers $headers
+
+                if ($taskResponse -and $taskResponse.response) {
+                    $taskInfo = $taskResponse.response
+
+                    # Check if completed
+                    if ($taskInfo.isError) {
+                        $task.Status = "Failed"
+                    }
+                    elseif ($taskInfo.endTime) {
+                        $task.Status = "Completed"
+
+                        # Extract file ID
+                        if ($taskInfo.additionalStatusURL -and $taskInfo.additionalStatusURL -match '/file/([a-f0-9\-]+)') {
+                            $task.FileId = $Matches[1]
+                        }
+                        elseif ($taskInfo.progress) {
+                            try {
+                                $progressData = $taskInfo.progress | ConvertFrom-Json
+                                if ($progressData.fileId) {
+                                    $task.FileId = $progressData.fileId
+                                }
+                            }
+                            catch {
+                                if ($taskInfo.progress -match '"fileId"\s*:\s*"([^"]+)"') {
+                                    $task.FileId = $Matches[1]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch {
+                # Keep trying
+            }
+        }
+
+        # Update pending list
+        $pendingTasks = $taskTracker | Where-Object { $_.Status -eq "Submitted" }
+
+        # Show progress
+        $completedCount = ($taskTracker | Where-Object { $_.Status -in @("Completed", "Failed") }).Count
+        $totalCount = $taskTracker.Count
+        $percentComplete = [math]::Round(($completedCount / $totalCount) * 100)
+
+        Write-Host "`r  Progress: $completedCount/$totalCount tasks completed ($percentComplete%) - Elapsed: $([math]::Round($elapsed))s" -NoNewline -ForegroundColor Cyan
+
+        if ($pendingTasks.Count -gt 0) {
+            Start-Sleep -Seconds $checkInterval
+        }
+    }
+
+    Write-Host "`n"
+    Write-Host "✓ All tasks completed!" -ForegroundColor Green
+    Write-Host ""
+
+    # PHASE 3: Download outputs
+    Write-Host "Phase 3: Downloading outputs..." -ForegroundColor Cyan
+
+    $completedTasks = $taskTracker | Where-Object { $_.Status -eq "Completed" -and $_.FileId }
+    $downloadCounter = 0
+
+    Write-Host ""
+    foreach ($task in $completedTasks) {
+        $downloadCounter++
+        Show-ProgressBar -Current $downloadCounter -Total $completedTasks.Count -Activity "$($task.Hostname)"
+
+        try {
+            $fileResponse = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/file/$($task.FileId)" `
+                -Method Get `
+                -Headers $headers
+
+            $task.Status = "Downloaded"
+            $task.Output = $fileResponse
+            $task.RawOutput = $fileResponse  # Keep raw output for JSON
+
+        }
+        catch {
+            $task.Status = "Download Failed"
+        }
+    }
+
+    Write-Host "`n"
+
+    # PHASE 4: Create output files based on user preference
+    Write-Host "Phase 4: Creating output files..." -ForegroundColor Cyan
+
+    $summaryList = @()
+    $consolidatedData = @()  # For CSV output
+
+    # Process tasks for consolidated CSV if requested
+    if ($useConsolidatedCSV) {
+        Write-Host "Preparing consolidated CSV data..." -ForegroundColor Cyan
+
+        foreach ($task in $taskTracker) {
+            $cleanOutput = ""
+
+            # *** THE FIX: Check for $null instead of a "truthy" value ***
+            if ($task.Status -eq "Downloaded" -and $null -ne $task.Output) {
+                # Parse and clean output
+                if ($task.Output -is [string]) {
+                    $cleanOutput = $task.Output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                }
+                elseif ($task.Output -is [array]) {
+                    foreach ($item in $task.Output) {
+                        $itemProps = $item.PSObject.Properties
+                        $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+                        if ($commandKey) {
+                            $rawOutput = $commandKey.Value
+                            if ($rawOutput -is [string]) {
+                                $cleanOutput += $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                        }
+                        elseif ($item.commandOutput) {
+                            $cleanOutput += $item.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                        elseif ($item.output) {
+                            $cleanOutput += $item.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                    }
+                }
+                else {
+                    $outputProps = $task.Output.PSObject.Properties
+                    $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+                    if ($commandKey) {
+                        $rawOutput = $commandKey.Value
+                        if ($rawOutput -is [string]) {
+                            $cleanOutput = $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                    }
+                    elseif ($task.Output.commandOutput) {
+                        $cleanOutput = $task.Output.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                    }
+                    elseif ($task.Output.output) {
+                        $cleanOutput = $task.Output.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                    }
+                }
+
+                $cleanOutput = $cleanOutput.Trim('"')
+                $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
+
+                # Split into proper lines and remove empty lines
+                $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
+                $cleanOutput = $outputLines -join "`n"
+
+                # Apply filters if any - FIXED VERSION
+                $filteredOutput = ""
+                if ($task.Filters.Count -gt 0) {
+                    $matchedLines = Apply-Filters -Lines $outputLines -Filters $task.Filters
+                    $filteredOutput = $matchedLines -join "`n"
+                }
+            }
+
+            # Add to consolidated data
+            $consolidatedData += [PSCustomObject]@{
+                Hostname          = $task.Hostname
+                DeviceIP          = $task.DeviceIP
+                Command           = $task.Command
+                Status            = $task.Status
+                ExecutionTime     = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
+                Filters           = if ($task.Filters.Count -gt 0) { $task.Filters -join ", " } else { "None" }
+                Output            = $cleanOutput
+                FilteredOutput    = if ($filteredOutput) { $filteredOutput } else { "N/A" }
+                OutputLineCount   = if ($cleanOutput) { ($cleanOutput -split "`n").Count } else { 0 }
+                FilteredLineCount = if ($filteredOutput) { ($filteredOutput -split "`n").Count } else { 0 }
+            }
+        }
+
+        # Export consolidated CSV
+        $consolidatedCSVPath = "$outputDir\CommandRunner_AllResults_$timestamp.csv"
+        $consolidatedData | Export-Csv -Path $consolidatedCSVPath -NoTypeInformation
+        Write-Host "✓ Created consolidated CSV: $consolidatedCSVPath" -ForegroundColor Green
+    }
+
+    # Create separate files if requested
+    if ($useSeparateFiles) {
+        $deviceGroups = $taskTracker | Group-Object -Property Hostname
+
+        foreach ($deviceGroup in $deviceGroups) {
+            $hostname = $deviceGroup.Name
+            $deviceTasks = $deviceGroup.Group
+
+            $safeHostname = $hostname -replace '[\\/:*?"<>|]', '_'
+
+            # Create JSON data structure
+            $jsonData = @{
+                Device        = $hostname
+                DeviceIP      = $deviceTasks[0].DeviceIP
+                ExecutionTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Commands      = @()
+            }
+
+            # Full output with clean formatting
+            $fullOutputFile = "$outputFolder\${safeHostname}_output_full.txt"
+            $fullLines = @()
+
+            $fullLines += "=" * 80
+            $fullLines += "Device: $hostname"
+            $fullLines += "IP Address: $($deviceTasks[0].DeviceIP)"
+            $fullLines += "Total Commands: $($deviceTasks.Count)"
+            $fullLines += "Execution Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            $fullLines += "=" * 80
+            $fullLines += ""
+
+            $successCount = 0
+            $failCount = 0
+
+            # Check if ANY command has filters
+            $hasFilters = ($deviceTasks | Where-Object { $_.Filters.Count -gt 0 }).Count -gt 0
+            $filteredLines = @()
+
+            if ($hasFilters) {
+                $filteredLines += "=" * 80
+                $filteredLines += "Device: $hostname (FILTERED RESULTS)"
+                $filteredLines += "IP Address: $($deviceTasks[0].DeviceIP)"
+                $filteredLines += "=" * 80
+                $filteredLines += ""
+            }
+
+            foreach ($task in $deviceTasks) {
+                # Command info for JSON
+                $commandInfo = @{
+                    Command       = $task.Command
+                    Status        = $task.Status
+                    Filters       = $task.Filters
+                    ExecutionTime = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
+                }
+
+                # Add to full output
+                $fullLines += ""
+                $fullLines += "=" * 80
+                $fullLines += "Command: $($task.Command)"
+                $fullLines += "Status: $($task.Status)"
+                $fullLines += "Execution Time: $($task.SubmitTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                if ($task.Filters.Count -gt 0) {
+                    $fullLines += "Filters: $($task.Filters -join ', ')"
+                }
+                $fullLines += "=" * 80
+                $fullLines += ""
+
+                # *** THE FIX: Check for $null instead of a "truthy" value ***
+                if ($task.Status -eq "Downloaded" -and $null -ne $task.Output) {
+                    # Parse and clean output
+                    $cleanOutput = ""
+                    $rawJsonOutput = $null
+
+                    if ($task.Output -is [string]) {
+                        $cleanOutput = $task.Output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        $rawJsonOutput = $task.Output
+                    }
+                    elseif ($task.Output -is [array]) {
+                        $rawJsonOutput = $task.Output
+                        foreach ($item in $task.Output) {
+                            $itemProps = $item.PSObject.Properties
+                            $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+                            if ($commandKey) {
+                                $rawOutput = $commandKey.Value
+                                if ($rawOutput -is [string]) {
+                                    $cleanOutput += $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                                }
+                                else {
+                                    $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                                }
+                            }
+                            elseif ($item.commandOutput) {
+                                $cleanOutput += $item.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            elseif ($item.output) {
+                                $cleanOutput += $item.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            else {
+                                $cleanOutput += ($item | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                            }
+                        }
+                    }
+                    else {
+                        $rawJsonOutput = $task.Output
+                        $outputProps = $task.Output.PSObject.Properties
+                        $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+                        if ($commandKey) {
+                            $rawOutput = $commandKey.Value
+                            if ($rawOutput -is [string]) {
+                                $cleanOutput = $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            else {
+                                $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                            }
+                        }
+                        elseif ($task.Output.commandOutput) {
+                            $cleanOutput = $task.Output.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                        elseif ($task.Output.output) {
+                            $cleanOutput = $task.Output.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                        else {
+                            $cleanOutput += ($task.Output | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                        }
+                    }
+
+                    # Remove any remaining JSON quotes at start/end and clean up
+                    $cleanOutput = $cleanOutput.Trim('"')
+                    $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
+
+                    # Split into proper lines and remove empty lines
+                    $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
+
+                    # Add to full output with proper line breaks
+                    if ($outputLines.Count -gt 0) {
+                        $fullLines += $outputLines
+                    }
+                    else {
+                        $fullLines += "(No output returned from device)"
+                    }
+                    $fullLines += ""
+                    $successCount++
+
+                    # Add to JSON structure
+                    $commandInfo | Add-Member -NotePropertyName "Output" -NotePropertyValue ($outputLines -join "`n")
+                    $commandInfo | Add-Member -NotePropertyName "RawOutput" -NotePropertyValue $rawJsonOutput
+                    $commandInfo | Add-Member -NotePropertyName "Success" -NotePropertyValue $true
+
+                    # Apply THIS command's specific filters - FIXED VERSION
+                    if ($task.Filters.Count -gt 0) {
+                        $filteredLines += ""
+                        $filteredLines += "-" * 80
+                        $filteredLines += "Command: $($task.Command)"
+                        $filteredLines += "Filters: $($task.Filters -join ', ')"
+                        $filteredLines += "-" * 80
+                        $filteredLines += ""
+
+                        $matchedLines = Apply-Filters -Lines $outputLines -Filters $task.Filters
+
+                        if ($matchedLines.Count -gt 0) {
+                            $filteredLines += $matchedLines
+                            $filteredLines += ""
+                            $filteredLines += "  ✓ Matched $($matchedLines.Count) line(s)"
+
+                            # Add filtered output to JSON
+                            $commandInfo | Add-Member -NotePropertyName "FilteredOutput" -NotePropertyValue ($matchedLines -join "`n")
+                            $commandInfo | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue $matchedLines.Count
+                        }
+                        else {
+                            $filteredLines += "    No matches found"
+                            $commandInfo | Add-Member -NotePropertyName "FilteredOutput" -NotePropertyValue "No matches found"
+                            $commandInfo | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue 0
+                        }
+                    }
+
+                }
+                else {
+                    $fullLines += "ERROR: $($task.Status)"
+                    $fullLines += ""
+                    $failCount++
+
+                    # Add error to JSON
+                    $commandInfo | Add-Member -NotePropertyName "Error" -NotePropertyValue $task.Status
+                    $commandInfo | Add-Member -NotePropertyName "Success" -NotePropertyValue $false
+
+                    if ($task.Filters.Count -gt 0) {
+                        $filteredLines += ""
+                        $filteredLines += "-" * 80
+                        $filteredLines += "Command: $($task.Command)"
+                        $filteredLines += "-" * 80
+                        $filteredLines += "ERROR: $($task.Status)"
+                        $filteredLines += ""
+                    }
+                }
+
+                # Add command to JSON structure
+                $jsonData.Commands += $commandInfo
+            }
+
+            # Save text files
+            $fullLines | Out-File -FilePath $fullOutputFile -Encoding UTF8
+
+            $filteredOutputFile = $null
+            if ($hasFilters) {
+                $filteredOutputFile = "$outputFolder\${safeHostname}_output_filtered.txt"
+                $filteredLines | Out-File -FilePath $filteredOutputFile -Encoding UTF8
+            }
+
+            # Save JSON file with increased depth to capture all output
+            $jsonFile = "$outputFolder\${safeHostname}_output.json"
+            
+            # DEBUG: Check what we're about to save
+            $commandsWithOutput = $jsonData.Commands | Where-Object { $_.Output }
+            $commandsWithFiltered = $jsonData.Commands | Where-Object { $_.FilteredOutput -and $_.FilteredOutput -ne "No matches found" }
+            
+            Write-Host "  Device: $hostname - Commands with output: $($commandsWithOutput.Count), with filtered: $($commandsWithFiltered.Count)" -ForegroundColor Gray
+            
+            $jsonData | ConvertTo-Json -Depth 20 | Out-File -FilePath $jsonFile -Encoding UTF8
+
+            # Build summary
+            $filterSummary = @()
+            foreach ($task in $deviceTasks) {
+                if ($task.Filters.Count -gt 0) {
+                    $filterSummary += "$($task.Command): [$($task.Filters -join ', ')]"
+                }
+            }
+
+            $summaryList += [PSCustomObject]@{
+                Hostname           = $hostname
+                DeviceIP           = $deviceTasks[0].DeviceIP
+                TotalCommands      = $deviceTasks.Count
+                SuccessfulCommands = $successCount
+                FailedCommands     = $failCount
+                CommandList        = (($deviceTasks | Select-Object -ExpandProperty Command) -join "; ")
+                FiltersApplied     = if ($filterSummary.Count -gt 0) { $filterSummary -join " | " } else { "None" }
+                Status             = if ($failCount -eq 0) { "All Success" } elseif ($successCount -eq 0) { "All Failed" } else { "Partial" }
+                FullOutputFile     = if ($useSeparateFiles) { $fullOutputFile } else { "N/A" }
+                FilteredOutputFile = if ($filteredOutputFile) { $filteredOutputFile } else { "N/A" }
+                JsonFile           = if ($useSeparateFiles) { $jsonFile } else { "N/A" }
+                ExecutionTime      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            }
+        }
+    }
+
+    # Create concatenated text file if requested
+    if ($useConcatenatedText -and $useSeparateFiles) {
+        Write-Host "Creating concatenated text file..." -ForegroundColor Cyan
+        
+        $concatenatedFile = "$outputFolder\ALL_DEVICES_OUTPUT_CONCATENATED.txt"
+        $concatenatedLines = @()
+        
+        # Also prepare CSV version of concatenated output
+        $concatenatedCSVData = @()
+        
+        $concatenatedLines += "=" * 100
+        $concatenatedLines += "DNA CENTER COMMAND RUNNER - ALL DEVICES CONCATENATED OUTPUT"
+        $concatenatedLines += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $concatenatedLines += "Total Devices: $($deviceGroups.Count)"
+        $concatenatedLines += "Total Commands: $($commands.Count)"
+        $concatenatedLines += "=" * 100
+        $concatenatedLines += ""
+        
+        foreach ($deviceGroup in $deviceGroups) {
+            $hostname = $deviceGroup.Name
+            $deviceTasks = $deviceGroup.Group
+            
+            $concatenatedLines += ""
+            $concatenatedLines += "#" * 80
+            $concatenatedLines += "DEVICE: $hostname"
+            $concatenatedLines += "IP: $($deviceTasks[0].DeviceIP)"
+            $concatenatedLines += "#" * 80
+            $concatenatedLines += ""
+            
+            foreach ($task in $deviceTasks) {
+                $concatenatedLines += ""
+                $concatenatedLines += "-" * 60
+                $concatenatedLines += "Command: $($task.Command)"
+                $concatenatedLines += "Status: $($task.Status)"
+                if ($task.Filters.Count -gt 0) {
+                    $concatenatedLines += "Filters Applied: $($task.Filters -join ', ')"
+                }
+                $concatenatedLines += "-" * 60
+                $concatenatedLines += ""
+                
+                if ($task.Status -eq "Downloaded" -and $null -ne $task.Output) {
+                    # Parse and clean output (comprehensive logic)
+                    $cleanOutput = ""
+                    if ($task.Output -is [string]) {
+                        $cleanOutput = $task.Output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                    }
+                    elseif ($task.Output -is [array]) {
+                        foreach ($item in $task.Output) {
+                            $itemProps = $item.PSObject.Properties
+                            $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+                            if ($commandKey) {
+                                $rawOutput = $commandKey.Value
+                                if ($rawOutput -is [string]) {
+                                    $cleanOutput += $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                                }
+                                else {
+                                    $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                                }
+                            }
+                            elseif ($item.commandOutput) {
+                                $cleanOutput += $item.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            elseif ($item.output) {
+                                $cleanOutput += $item.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            else {
+                                $cleanOutput += ($item | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                            }
+                        }
+                    }
+                    else {
+                        # Handle object output
+                        $outputProps = $task.Output.PSObject.Properties
+                        $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+                        
+                        if ($commandKey) {
+                            $rawOutput = $commandKey.Value
+                            if ($rawOutput -is [string]) {
+                                $cleanOutput = $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                            }
+                            else {
+                                $cleanOutput = ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                            }
+                        }
+                        elseif ($task.Output.commandOutput) {
+                            $cleanOutput = $task.Output.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                        elseif ($task.Output.output) {
+                            $cleanOutput = $task.Output.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
+                        }
+                        else {
+                            $cleanOutput = ($task.Output | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
+                        }
+                    }
+                    
+                    $cleanOutput = $cleanOutput.Trim('"')
+                    $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
+                    $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
+                    
+                    # Apply filters if any
+                    $displayOutput = ""
+                    $filterNote = ""
+                    if ($task.Filters.Count -gt 0) {
+                        $matchedLines = Apply-Filters -Lines $outputLines -Filters $task.Filters
+                        if ($matchedLines.Count -gt 0) {
+                            $concatenatedLines += $matchedLines
+                            $displayOutput = $matchedLines -join "`n"
+                            $filterNote = "FILTERED: Showed $($matchedLines.Count) matching lines from $($outputLines.Count) total"
+                            $concatenatedLines += ""
+                            $concatenatedLines += "  [$filterNote]"
+                        }
+                        else {
+                            $filterNote = "NO MATCHES: No lines matched the filter(s): $($task.Filters -join ', ')"
+                            $concatenatedLines += "  [$filterNote]"
+                            $displayOutput = ""
+                        }
+                    }
+                    else {
+                        # No filters - show all output
+                        if ($outputLines.Count -gt 0) {
+                            $concatenatedLines += $outputLines
+                            $displayOutput = $outputLines -join "`n"
+                        }
+                        else {
+                            $concatenatedLines += "  (No output lines returned)"
+                            $displayOutput = "(No output lines returned)"
+                        }
+                    }
+                    
+                    # Add to CSV data
+                    $concatenatedCSVData += [PSCustomObject]@{
+                        Hostname        = $hostname
+                        DeviceIP        = $task.DeviceIP
+                        Command         = $task.Command
+                        Status          = $task.Status
+                        FiltersApplied  = if ($task.Filters.Count -gt 0) { $task.Filters -join ", " } else { "None" }
+                        FilterNote      = $filterNote
+                        FullOutput      = $outputLines -join "`n"
+                        DisplayedOutput = $displayOutput
+                        TotalLines      = $outputLines.Count
+                        DisplayedLines  = if ($displayOutput) { ($displayOutput -split "`n").Count } else { 0 }
+                        ExecutionTime   = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    }
+                }
+                else {
+                    $concatenatedLines += "ERROR: $($task.Status)"
+                    
+                    # Add error to CSV data
+                    $concatenatedCSVData += [PSCustomObject]@{
+                        Hostname        = $hostname
+                        DeviceIP        = $task.DeviceIP
+                        Command         = $task.Command
+                        Status          = $task.Status
+                        FiltersApplied  = if ($task.Filters.Count -gt 0) { $task.Filters -join ", " } else { "None" }
+                        FilterNote      = "ERROR"
+                        FullOutput      = ""
+                        DisplayedOutput = ""
+                        TotalLines      = 0
+                        DisplayedLines  = 0
+                        ExecutionTime   = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    }
+                }
+                $concatenatedLines += ""
+            }
+        }
+        
+        # Save text file
+        $concatenatedLines | Out-File -FilePath $concatenatedFile -Encoding UTF8
+        Write-Host "✓ Created concatenated text file: $concatenatedFile" -ForegroundColor Green
+        
+        # Save CSV version
+        $concatenatedCSVFile = "$outputFolder\ALL_DEVICES_OUTPUT_CONCATENATED.csv"
+        $concatenatedCSVData | Export-Csv -Path $concatenatedCSVFile -NoTypeInformation
+        Write-Host "✓ Created concatenated CSV file: $concatenatedCSVFile" -ForegroundColor Green
+    }
+
+    # Export summary
+    $csvPath = "$outputDir\CommandRunner_Summary_$timestamp.csv"
+    $summaryList | Export-Csv -Path $csvPath -NoTypeInformation
+
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Green
+    Write-Host "Command Runner Complete!" -ForegroundColor Green
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Green
+    Write-Host "Summary: $csvPath" -ForegroundColor Cyan
+    Write-Host "Outputs: $outputFolder" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Filter statistics
+    $tasksWithFilters = $taskTracker | Where-Object { $_.Filters -and $_.Filters.Count -gt 0 }
+    $tasksWithOutput = $taskTracker | Where-Object { $_.Status -eq "Downloaded" -and $null -ne $_.Output }
+    Write-Host "Execution Statistics:" -ForegroundColor Cyan
+    Write-Host "  Total tasks: $($taskTracker.Count)" -ForegroundColor White
+    Write-Host "  Successfully downloaded: $($tasksWithOutput.Count)" -ForegroundColor Green
+    Write-Host "  Tasks with filters: $($tasksWithFilters.Count)" -ForegroundColor Yellow
+    if ($tasksWithFilters.Count -gt 0) {
+        Write-Host "  Filter details:" -ForegroundColor Yellow
+        foreach ($task in $tasksWithFilters) {
+            Write-Host "    - $($task.Hostname): $($task.Command) [Filters: $($task.Filters -join ', ')]" -ForegroundColor Gray
+        }
+    }
+    Write-Host ""
+
+    if ($useConsolidatedCSV) {
+        Write-Host "Consolidated Files:" -ForegroundColor Cyan
+        Write-Host "  - CommandRunner_AllResults_$timestamp.csv (all results in one file)" -ForegroundColor White
+        Write-Host ""
+    }
+
+    if ($useConcatenatedText) {
+        Write-Host "Concatenated Files:" -ForegroundColor Cyan
+        Write-Host "  - ALL_DEVICES_OUTPUT_CONCATENATED.txt (all devices in one text file)" -ForegroundColor White
+        Write-Host "  - ALL_DEVICES_OUTPUT_CONCATENATED.csv (all devices in one CSV file)" -ForegroundColor White
+        Write-Host ""
+    }
+
+    if ($useSeparateFiles) {
+        Write-Host "Files per device:" -ForegroundColor Cyan
+        Write-Host "  - *_output_full.txt (clean formatted output)" -ForegroundColor White
+        if (($taskTracker | Where-Object { $_.Filters.Count -gt 0 }).Count -gt 0) {
+            Write-Host "  - *_output_filtered.txt (filtered results)" -ForegroundColor Yellow
+        }
+        Write-Host "  - *_output.json (raw data in JSON format)" -ForegroundColor Magenta
+        Write-Host ""
+    }
+
+    Write-Host ""
+    Read-Host "Press Enter to continue"
+}
+
+# =====================================================
+# ENHANCED: Path Trace - Network Path Analysis
+# =====================================================
+function Invoke-PathTrace {
+    param($headers, $dnaCenter)
+    
+    Clear-Host
+    Write-Host ""
+    Write-Host "╔═══════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║         Path Trace - Network Path Analysis        ║" -ForegroundColor Cyan
+    Write-Host "╚═══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Input validation helper
+    function Test-IPAddress {
+        param($ip)
+        return $ip -match '^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+    }
+    
+    # Get source IP with validation
+    do {
+        Write-Host "Enter source IP address:" -ForegroundColor Yellow
+        $sourceIP = Read-Host
+        
+        if ([string]::IsNullOrWhiteSpace($sourceIP)) {
+            Write-Host "✗ Source IP cannot be empty" -ForegroundColor Red
+            continue
+        }
+        
+        if (-not (Test-IPAddress -ip $sourceIP)) {
+            Write-Host "✗ Invalid IP address format" -ForegroundColor Red
+            Write-Host "  Example: 192.168.1.1" -ForegroundColor Gray
+            continue
+        }
+        
+        break
+    } while ($true)
+    
+    # Get destination IP with validation
+    do {
+        Write-Host "Enter destination IP address:" -ForegroundColor Yellow
+        $destIP = Read-Host
+        
+        if ([string]::IsNullOrWhiteSpace($destIP)) {
+            Write-Host "✗ Destination IP cannot be empty" -ForegroundColor Red
+            continue
+        }
+        
+        if (-not (Test-IPAddress -ip $destIP)) {
+            Write-Host "✗ Invalid IP address format" -ForegroundColor Red
+            Write-Host "  Example: 192.168.2.1" -ForegroundColor Gray
+            continue
+        }
+        
+        break
+    } while ($true)
+    
+    Write-Host ""
+    Write-Host "Optional parameters (press Enter to skip):" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Get protocol with validation
+    do {
+        Write-Host "Protocol (TCP/UDP/ICMP) [default: ICMP]:" -ForegroundColor Yellow
+        $protocol = Read-Host
+        
+        if ([string]::IsNullOrWhiteSpace($protocol)) {
+            $protocol = "ICMP"
+            break
+        }
+        
+        if ($protocol -notin @("TCP", "UDP", "ICMP")) {
+            Write-Host "✗ Invalid protocol. Must be TCP, UDP, or ICMP" -ForegroundColor Red
+            continue
+        }
+        
+        $protocol = $protocol.ToUpper()
+        break
+    } while ($true)
+    
+    # Get ports for TCP/UDP
+    $sourcePort = $null
+    $destPort = $null
+    
+    if ($protocol -ne "ICMP") {
+        # Source port
+        do {
+            Write-Host "Source Port [optional, 1-65535]:" -ForegroundColor Yellow
+            $sourcePortInput = Read-Host
+            
+            if ([string]::IsNullOrWhiteSpace($sourcePortInput)) {
+                break
+            }
+            
+            if ($sourcePortInput -notmatch '^\d+$' -or [int]$sourcePortInput -lt 1 -or [int]$sourcePortInput -gt 65535) {
+                Write-Host "✗ Invalid port number. Must be between 1 and 65535" -ForegroundColor Red
+                continue
+            }
+            
+            $sourcePort = [int]$sourcePortInput
+            break
+        } while ($true)
+        
+        # Destination port
+        do {
+            Write-Host "Destination Port [optional, 1-65535]:" -ForegroundColor Yellow
+            $destPortInput = Read-Host
+            
+            if ([string]::IsNullOrWhiteSpace($destPortInput)) {
+                break
+            }
+            
+            if ($destPortInput -notmatch '^\d+$' -or [int]$destPortInput -lt 1 -or [int]$destPortInput -gt 65535) {
+                Write-Host "✗ Invalid port number. Must be between 1 and 65535" -ForegroundColor Red
+                continue
+            }
+            
+            $destPort = [int]$destPortInput
+            break
+        } while ($true)
+    }
+    
+    # Additional options
+    Write-Host ""
+    Write-Host "Additional options:" -ForegroundColor Cyan
+    Write-Host "Include detailed interface information? (yes/no) [default: yes]:" -ForegroundColor Yellow
+    $detailedInfo = Read-Host
+    if ([string]::IsNullOrWhiteSpace($detailedInfo)) { $detailedInfo = "yes" }
+    
+    Write-Host "Save results in JSON format as well? (yes/no) [default: yes]:" -ForegroundColor Yellow
+    $saveJson = Read-Host
+    if ([string]::IsNullOrWhiteSpace($saveJson)) { $saveJson = "yes" }
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Path Trace Configuration:" -ForegroundColor Cyan
+    Write-Host "  Source IP: $sourceIP" -ForegroundColor White
+    Write-Host "  Destination IP: $destIP" -ForegroundColor White
+    Write-Host "  Protocol: $protocol" -ForegroundColor White
+    if ($sourcePort) { Write-Host "  Source Port: $sourcePort" -ForegroundColor White }
+    if ($destPort) { Write-Host "  Destination Port: $destPort" -ForegroundColor White }
+    Write-Host "  Detailed Info: $detailedInfo" -ForegroundColor White
+    Write-Host "  Save JSON: $saveJson" -ForegroundColor White
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+    
+    $confirm = Read-Host "Start path trace? (yes/no)"
+    if ($confirm -ne "yes") {
+        Write-Host "✗ Operation cancelled" -ForegroundColor Yellow
+        Read-Host "`nPress Enter to continue"
+        return
+    }
+    
+    Write-Host "`nInitiating path trace..." -ForegroundColor Yellow
+    
+    # Build request body
+    $requestBody = @{
+        "sourceIP" = $sourceIP
+        "destIP" = $destIP
+        "protocol" = $protocol
+    }
+    
+    if ($sourcePort) { $requestBody["sourcePort"] = $sourcePort }
+    if ($destPort) { $requestBody["destPort"] = $destPort }
+    
+    $requestJson = $requestBody | ConvertTo-Json -Depth 10
+    
+    try {
+        # Initiate flow analysis
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/flow-analysis" `
+            -Method Post `
+            -Headers $headers `
+            -Body $requestJson `
+            -ContentType "application/json"
+        
+        if ($response -and $response.response -and $response.response.flowAnalysisId) {
+            $flowAnalysisId = $response.response.flowAnalysisId
+            Write-Host "✓ Flow analysis initiated (ID: $flowAnalysisId)" -ForegroundColor Green
+            
+            Write-Host "`nWaiting for path trace to complete..." -ForegroundColor Yellow
+            
+            $completed = $false
+            $attempts = 0
+            $maxAttempts = 30
+            $startTime = Get-Date
+            
+            while (-not $completed -and $attempts -lt $maxAttempts) {
+                Start-Sleep -Seconds 2
+                $attempts++
+                $elapsed = ((Get-Date) - $startTime).TotalSeconds
+                
+                # Check flow analysis status
+                $statusResponse = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/flow-analysis/$flowAnalysisId" `
+                    -Method Get `
+                    -Headers $headers
+                
+                if ($statusResponse -and $statusResponse.response) {
+                    $status = $statusResponse.response.request.status
+                    
+                    # Show progress with time
+                    Write-Host "`r  Status: $status (attempt $attempts/$maxAttempts, elapsed: $([math]::Round($elapsed))s)" -NoNewline -ForegroundColor Cyan
+                    
+                    if ($status -eq "COMPLETED") {
+                        $completed = $true
+                        Write-Host "`n✓ Path trace completed!" -ForegroundColor Green
+                        
+                        # Parse and display results
+                        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+                        $csvPath = "$outputDir\PathTrace_${sourceIP}_to_${destIP}_$timestamp.csv"
+                        
+                        $pathList = @()
+                        $hopNumber = 1
+                        $totalLatency = 0
+                        
+                        # Prepare JSON structure
+                        $jsonData = @{
+                            PathTrace = @{
+                                SourceIP = $sourceIP
+                                DestinationIP = $destIP
+                                Protocol = $protocol
+                                SourcePort = $sourcePort
+                                DestinationPort = $destPort
+                                FlowAnalysisId = $flowAnalysisId
+                                StartTime = $startTime.ToString("yyyy-MM-dd HH:mm:ss")
+                                CompletionTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                                Status = $status
+                                TotalHops = 0
+                                PathHealthy = $statusResponse.response.request.periodicRefresh -eq $false
+                                Hops = @()
+                            }
+                        }
+                        
+                        Write-Host ""
+                        Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+                        Write-Host "Path Trace Results:" -ForegroundColor Cyan
+                        Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+                        
+                        if ($statusResponse.response.networkElementsInfo) {
+                            foreach ($element in $statusResponse.response.networkElementsInfo) {
+                                $deviceName = if ($element.name) { $element.name } else { "Unknown" }
+                                $deviceIP = if ($element.ip) { $element.ip } else { "N/A" }
+                                $deviceType = if ($element.type) { $element.type } else { "N/A" }
+                                
+                                # Enhanced interface extraction with better error handling
+                                $ingressInterface = "N/A"
+                                if ($element.ingressInterface) {
+                                    if ($element.ingressInterface.physicalInterface -and $element.ingressInterface.physicalInterface.name) {
+                                        $ingressInterface = $element.ingressInterface.physicalInterface.name
+                                    } elseif ($element.ingressInterface.name) {
+                                        $ingressInterface = $element.ingressInterface.name
+                                    }
+                                }
+                                
+                                $egressInterface = "N/A"
+                                if ($element.egressInterface) {
+                                    if ($element.egressInterface.physicalInterface -and $element.egressInterface.physicalInterface.name) {
+                                        $egressInterface = $element.egressInterface.physicalInterface.name
+                                    } elseif ($element.egressInterface.name) {
+                                        $egressInterface = $element.egressInterface.name
+                                    }
+                                }
+                                
+                                # Extract additional information if available
+                                $latency = if ($element.latency) { $element.latency } else { "N/A" }
+                                if ($latency -ne "N/A" -and $latency -match '^\d+$') {
+                                    $totalLatency += [int]$latency
+                                }
+                                
+                                $interfaceType = "N/A"
+                                if ($element.ingressInterface -and $element.ingressInterface.interfaceType) {
+                                    $interfaceType = $element.ingressInterface.interfaceType
+                                }
+                                
+                                # Display hop information
+                                Write-Host "Hop $hopNumber`: $deviceName ($deviceIP)" -ForegroundColor White
+                                Write-Host "  Type: $deviceType" -ForegroundColor Gray
+                                Write-Host "  Path: $ingressInterface → $egressInterface" -ForegroundColor Gray
+                                if ($latency -ne "N/A") { Write-Host "  Latency: $latency ms" -ForegroundColor Gray }
+                                if ($detailedInfo -eq "yes" -and $interfaceType -ne "N/A") { 
+                                    Write-Host "  Interface Type: $interfaceType" -ForegroundColor Gray 
+                                }
+                                Write-Host ""
+                                
+                                # Create hop object for CSV
+                                $csvHop = [PSCustomObject]@{
+                                    HopNumber = $hopNumber
+                                    DeviceName = $deviceName
+                                    DeviceIP = $deviceIP
+                                    DeviceType = $deviceType
+                                    IngressInterface = $ingressInterface
+                                    EgressInterface = $egressInterface
+                                    Latency = $latency
+                                    InterfaceType = $interfaceType
+                                    SourceIP = $sourceIP
+                                    DestinationIP = $destIP
+                                    Protocol = $protocol
+                                    SourcePort = if ($sourcePort) { $sourcePort } else { "N/A" }
+                                    DestinationPort = if ($destPort) { $destPort } else { "N/A" }
+                                    TraceTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                                }
+                                
+                                $pathList += $csvHop
+                                
+                                # Create hop object for JSON
+                                $jsonHop = [PSCustomObject]@{
+                                    HopNumber = $hopNumber
+                                    Device = @{
+                                        Name = $deviceName
+                                        IP = $deviceIP
+                                        Type = $deviceType
+                                    }
+                                    Interfaces = @{
+                                        Ingress = $ingressInterface
+                                        Egress = $egressInterface
+                                        Type = $interfaceType
+                                    }
+                                    Latency = $latency
+                                }
+                                
+                                $jsonData.PathTrace.Hops += $jsonHop
+                                $hopNumber++
+                            }
+                            
+                            $jsonData.PathTrace.TotalHops = $pathList.Count
+                            $jsonData.PathTrace.TotalLatency = $totalLatency
+                        }
+                        
+                        Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+                        
+                        # Export to CSV
+                        $pathList | Export-Csv -Path $csvPath -NoTypeInformation
+                        
+                        Write-Host ""
+                        Write-Host "✓ Path trace exported to: $csvPath" -ForegroundColor Green
+                        Write-Host "✓ Total hops: $($pathList.Count)" -ForegroundColor Green
+                        if ($totalLatency -gt 0) {
+                            Write-Host "✓ Total estimated latency: $totalLatency ms" -ForegroundColor Green
+                        }
+                        
+                        # Export to JSON if requested
+                        if ($saveJson -eq "yes") {
+                            $jsonPath = "$outputDir\PathTrace_${sourceIP}_to_${destIP}_$timestamp.json"
+                            $jsonData | ConvertTo-Json -Depth 10 | Out-File -FilePath $jsonPath -Encoding UTF8
+                            Write-Host "✓ JSON data exported to: $jsonPath" -ForegroundColor Green
+                        }
+                        
+                        # Show path health and any issues
+                        if ($statusResponse.response.request.periodicRefresh -eq $false) {
+                            Write-Host "✓ Path is healthy" -ForegroundColor Green
+                        } else {
+                            Write-Host "⚠ Path may have issues (periodic refresh enabled)" -ForegroundColor Yellow
+                        }
+                        
+                        # Check for additional warnings or errors
+                        if ($statusResponse.response.request.failureReason) {
+                            Write-Host "⚠ Warning: $($statusResponse.response.request.failureReason)" -ForegroundColor Yellow
+                        }
+                        
+                    } elseif ($status -eq "FAILED") {
+                        Write-Host "`n✗ Path trace failed" -ForegroundColor Red
+                        if ($statusResponse.response.request.failureReason) {
+                            Write-Host "  Reason: $($statusResponse.response.request.failureReason)" -ForegroundColor Red
+                        }
+                        break
+                    } elseif ($status -eq "IN_PROGRESS") {
+                        # Continue polling
+                    } else {
+                        Write-Host "`n⚠ Unknown status: $status" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "`n⚠ No response received from DNA Center" -ForegroundColor Yellow
+                }
+            }
+            
+            if (-not $completed -and $attempts -ge $maxAttempts) {
+                Write-Host "`n✗ Path trace timed out after $([math]::Round(((Get-Date) - $startTime).TotalSeconds)) seconds" -ForegroundColor Red
+            }
+            
+        } else {
+            Write-Host "✗ Failed to initiate path trace" -ForegroundColor Red
+            if ($response.response) {
+                Write-Host "  Response: $($response.response | ConvertTo-Json -Depth 5)" -ForegroundColor Gray
+            }
+        }
+        
+    } catch {
+        Write-Host "`n✗ Error during path trace: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.ErrorDetails.Message) {
+            try {
+                $errorObj = $_.ErrorDetails.Message | ConvertFrom-Json
+                if ($errorObj.response -and $errorObj.response.message) {
+                    Write-Host "  Details: $($errorObj.response.message)" -ForegroundColor Red
+                }
+            } catch {
+                Write-Host "  Details: $($_.ErrorDetails.Message)" -ForegroundColor Red
+            }
+        }
+    }
+    
+    Write-Host ""
+    Read-Host "Press Enter to continue"
+}
+
+# Include all your existing report functions here (1-20)
+# I'll include just a few as examples - you already have these from before
+
+function Get-NetworkDevicesBasic {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching network devices (basic info)..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    
+    $deviceList = @()
+    foreach ($device in $devices) {
+        $deviceList += [PSCustomObject]@{
+            Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+            IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+            SerialNumber = if ($device.serialNumber) { $device.serialNumber } else { "N/A" }
+            Platform = if ($device.platformId) { $device.platformId } else { "N/A" }
+            SoftwareVersion = if ($device.softwareVersion) { $device.softwareVersion } else { "N/A" }
+            Role = if ($device.role) { $device.role } else { "N/A" }
+            ReachabilityStatus = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "N/A" }
+            Family = if ($device.family) { $device.family } else { "N/A" }
+            Type = if ($device.type) { $device.type } else { "N/A" }
+            UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\NetworkDevices_Basic_$timestamp.csv"
+    $deviceList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($deviceList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 2: Network Devices (Detailed)
+# =====================================================
+function Get-NetworkDevicesDetailed {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching network devices (detailed info)..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    
+    $deviceList = @()
+    foreach ($device in $devices) {
+        $deviceList += [PSCustomObject]@{
+            Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+            IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+            MacAddress = if ($device.macAddress) { $device.macAddress } else { "N/A" }
+            SerialNumber = if ($device.serialNumber) { $device.serialNumber } else { "N/A" }
+            Platform = if ($device.platformId) { $device.platformId } else { "N/A" }
+            SoftwareVersion = if ($device.softwareVersion) { $device.softwareVersion } else { "N/A" }
+            SoftwareType = if ($device.softwareType) { $device.softwareType } else { "N/A" }
+            Role = if ($device.role) { $device.role } else { "N/A" }
+            ReachabilityStatus = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "N/A" }
+            Family = if ($device.family) { $device.family } else { "N/A" }
+            Type = if ($device.type) { $device.type } else { "N/A" }
+            Series = if ($device.series) { $device.series } else { "N/A" }
+            Location = if ($device.location) { $device.location } else { "N/A" }
+            LocationName = if ($device.locationName) { $device.locationName } else { "N/A" }
+            MemorySize = if ($device.memorySize) { $device.memorySize } else { "N/A" }
+            LastUpdated = if ($device.lastUpdated) { $device.lastUpdated } else { "N/A" }
+            CollectionStatus = if ($device.collectionStatus) { $device.collectionStatus } else { "N/A" }
+            ErrorCode = if ($device.errorCode) { $device.errorCode } else { "N/A" }
+            ErrorDescription = if ($device.errorDescription) { $device.errorDescription } else { "N/A" }
+            UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
+            BootDateTime = if ($device.bootDateTime) { $device.bootDateTime } else { "N/A" }
+            ApManagerInterfaceIp = if ($device.apManagerInterfaceIp) { $device.apManagerInterfaceIp } else { "N/A" }
+            AssociatedWlcIp = if ($device.associatedWlcIp) { $device.associatedWlcIp } else { "N/A" }
+            InstanceUuid = if ($device.instanceUuid) { $device.instanceUuid } else { "N/A" }
+            Id = if ($device.id) { $device.id } else { "N/A" }
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\NetworkDevices_Detailed_$timestamp.csv"
+    $deviceList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($deviceList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 3: Device Configurations
+# =====================================================
+function Get-DeviceConfigurations {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching device configurations..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $configList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device/$($device.id)/config" -Method Get -Headers $headers
+            
+            if ($response) {
+                $configList += [PSCustomObject]@{
+                    Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                    IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    ConfigStatus = "Retrieved"
+                    ConfigSize = if ($response.response) { $response.response.Length } else { 0 }
+                    LastBackup = if ($device.lastUpdated) { $device.lastUpdated } else { "N/A" }
+                    DeviceId = $device.id
+                }
+            }
+        }
+        catch {
+            $configList += [PSCustomObject]@{
+                Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                ConfigStatus = "Failed"
+                ConfigSize = 0
+                LastBackup = "N/A"
+                DeviceId = $device.id
+            }
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\DeviceConfigurations_$timestamp.csv"
+    $configList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($configList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 4: Device Interfaces
+# =====================================================
+function Get-DeviceInterfaces {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching device interfaces..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $interfaceList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                foreach ($interface in $response.response) {
+                    $interfaceList += [PSCustomObject]@{
+                        Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                        InterfaceName = if ($interface.portName) { $interface.portName } else { "N/A" }
+                        Status = if ($interface.status) { $interface.status } else { "N/A" }
+                        AdminStatus = if ($interface.adminStatus) { $interface.adminStatus } else { "N/A" }
+                        Speed = if ($interface.speed) { $interface.speed } else { "N/A" }
+                        Duplex = if ($interface.duplex) { $interface.duplex } else { "N/A" }
+                        PortMode = if ($interface.portMode) { $interface.portMode } else { "N/A" }
+                        PortType = if ($interface.portType) { $interface.portType } else { "N/A" }
+                        VlanId = if ($interface.vlanId) { $interface.vlanId } else { "N/A" }
+                        VoiceVlan = if ($interface.voiceVlan) { $interface.voiceVlan } else { "N/A" }
+                        IPAddress = if ($interface.ipv4Address) { $interface.ipv4Address } else { "N/A" }
+                        SubnetMask = if ($interface.ipv4Mask) { $interface.ipv4Mask } else { "N/A" }
+                        MacAddress = if ($interface.macAddress) { $interface.macAddress } else { "N/A" }
+                        Description = if ($interface.description) { $interface.description } else { "N/A" }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "    ✗ Failed to get interfaces for $($device.hostname)" -ForegroundColor Red
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\DeviceInterfaces_$timestamp.csv"
+    $interfaceList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total interfaces: $($interfaceList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 5: Device Inventory Count
+# =====================================================
+function Get-DeviceInventoryCount {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nCalculating device inventory counts..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    
+    # Group by various attributes
+    $byFamily = $devices | Group-Object -Property family | Select-Object Name, Count
+    $byRole = $devices | Group-Object -Property role | Select-Object Name, Count
+    $byType = $devices | Group-Object -Property type | Select-Object Name, Count
+    $byPlatform = $devices | Group-Object -Property platformId | Select-Object Name, Count
+    $bySoftware = $devices | Group-Object -Property softwareVersion | Select-Object Name, Count
+    $byReachability = $devices | Group-Object -Property reachabilityStatus | Select-Object Name, Count
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    
+    # Export by Family
+    $byFamily | Export-Csv -Path "$outputDir\DeviceInventory_ByFamily_$timestamp.csv" -NoTypeInformation
+    # Export by Role
+    $byRole | Export-Csv -Path "$outputDir\DeviceInventory_ByRole_$timestamp.csv" -NoTypeInformation
+    # Export by Type
+    $byType | Export-Csv -Path "$outputDir\DeviceInventory_ByType_$timestamp.csv" -NoTypeInformation
+    # Export by Platform
+    $byPlatform | Export-Csv -Path "$outputDir\DeviceInventory_ByPlatform_$timestamp.csv" -NoTypeInformation
+    # Export by Software
+    $bySoftware | Export-Csv -Path "$outputDir\DeviceInventory_BySoftware_$timestamp.csv" -NoTypeInformation
+    # Export by Reachability
+    $byReachability | Export-Csv -Path "$outputDir\DeviceInventory_ByReachability_$timestamp.csv" -NoTypeInformation
+    
+    Write-Host "✓ Exported 6 inventory count files to: $outputDir" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($devices.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 6: Sites/Locations
+# =====================================================
+function Get-SitesLocations {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching sites and locations..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/site" -Method Get -Headers $headers
+        
+        $siteList = @()
+        if ($response -and $response.response) {
+            foreach ($site in $response.response) {
+                $siteList += [PSCustomObject]@{
+                    SiteName = if ($site.name) { $site.name } else { "N/A" }
+                    SiteId = if ($site.id) { $site.id } else { "N/A" }
+                    ParentId = if ($site.parentId) { $site.parentId } else { "N/A" }
+                    SiteType = if ($site.additionalInfo) { 
+                        ($site.additionalInfo | ForEach-Object { if ($_.nameSpace -eq "Location") { $_.attributes.type } }) -join ", "
+                    } else { "N/A" }
+                    Latitude = if ($site.latitude) { $site.latitude } else { "N/A" }
+                    Longitude = if ($site.longitude) { $site.longitude } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\Sites_$timestamp.csv"
+        $siteList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total sites: $($siteList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve sites: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 7: Network Health
+# =====================================================
+function Get-NetworkHealth {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching network health..." -ForegroundColor Yellow
+    
+    try {
+        $timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-health?timestamp=$timestamp_ms" -Method Get -Headers $headers
+        
+        $healthList = @()
+        if ($response -and $response.response) {
+            foreach ($item in $response.response) {
+                $healthList += [PSCustomObject]@{
+                    HealthCategory = if ($item.healthCategory) { $item.healthCategory } else { "N/A" }
+                    TotalCount = if ($item.totalCount) { $item.totalCount } else { 0 }
+                    GoodCount = if ($item.goodCount) { $item.goodCount } else { 0 }
+                    FairCount = if ($item.fairCount) { $item.fairCount } else { 0 }
+                    BadCount = if ($item.badCount) { $item.badCount } else { 0 }
+                    UnmonitoredCount = if ($item.unmonCount) { $item.unmonCount } else { 0 }
+                    HealthScore = if ($item.healthScore) { $item.healthScore } else { 0 }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\NetworkHealth_$timestamp.csv"
+        $healthList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Health categories: $($healthList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve network health: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 8: Client Health
+# =====================================================
+function Get-ClientHealth {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching client health..." -ForegroundColor Yellow
+    
+    try {
+        $timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/client-health?timestamp=$timestamp_ms" -Method Get -Headers $headers
+        
+        $clientList = @()
+        if ($response -and $response.response) {
+            foreach ($client in $response.response) {
+                $clientList += [PSCustomObject]@{
+                    SiteId = if ($client.siteId) { $client.siteId } else { "N/A" }
+                    TotalCount = if ($client.scoreDetail) { $client.scoreDetail.totalCount } else { 0 }
+                    ConnectedCount = if ($client.scoreDetail) { $client.scoreDetail.connectedCount } else { 0 }
+                    GoodCount = if ($client.scoreDetail) { $client.scoreDetail.clientCount.good } else { 0 }
+                    FairCount = if ($client.scoreDetail) { $client.scoreDetail.clientCount.fair } else { 0 }
+                    PoorCount = if ($client.scoreDetail) { $client.scoreDetail.clientCount.poor } else { 0 }
+                    HealthScore = if ($client.scoreDetail) { $client.scoreDetail.healthScore } else { 0 }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\ClientHealth_$timestamp.csv"
+        $clientList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Client health records: $($clientList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve client health: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 9: Compliance Status
+# =====================================================
+function Get-ComplianceStatus {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching compliance status..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $complianceList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/compliance/$($device.id)" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                $complianceList += [PSCustomObject]@{
+                    Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                    IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    ComplianceStatus = if ($response.response.status) { $response.response.status } else { "N/A" }
+                    LastSyncTime = if ($response.response.lastSyncTime) { $response.response.lastSyncTime } else { "N/A" }
+                    DeviceId = $device.id
+                }
+            }
+        }
+        catch {
+            $complianceList += [PSCustomObject]@{
+                Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                ComplianceStatus = "Unknown"
+                LastSyncTime = "N/A"
+                DeviceId = $device.id
+            }
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\ComplianceStatus_$timestamp.csv"
+    $complianceList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($complianceList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 10: Device Reachability Status
+# =====================================================
+function Get-DeviceReachability {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching device reachability status..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    
+    $reachabilityList = @()
+    foreach ($device in $devices) {
+        $reachabilityList += [PSCustomObject]@{
+            Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+            IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+            ReachabilityStatus = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "N/A" }
+            LastUpdated = if ($device.lastUpdated) { $device.lastUpdated } else { "N/A" }
+            CollectionStatus = if ($device.collectionStatus) { $device.collectionStatus } else { "N/A" }
+            ErrorCode = if ($device.errorCode) { $device.errorCode } else { "None" }
+            ErrorDescription = if ($device.errorDescription) { $device.errorDescription } else { "None" }
+            Family = if ($device.family) { $device.family } else { "N/A" }
+            Role = if ($device.role) { $device.role } else { "N/A" }
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\DeviceReachability_$timestamp.csv"
+    $reachabilityList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total devices: $($reachabilityList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 11: VLANs
+# =====================================================
+function Get-VLANs {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching VLANs..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $vlanList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                $vlans = $response.response | Where-Object { $_.vlanId -and $_.vlanId -ne "N/A" } | Select-Object -Property vlanId -Unique
+                
+                foreach ($vlan in $vlans) {
+                    $vlanList += [PSCustomObject]@{
+                        Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                        IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                        VlanId = $vlan.vlanId
+                        DeviceId = $device.id
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "    ✗ Failed to get VLANs for $($device.hostname)" -ForegroundColor Red
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\VLANs_$timestamp.csv"
+    $vlanList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total VLAN entries: $($vlanList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 12: Software/Image Information
+# =====================================================
+function Get-SoftwareImageInfo {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching software/image information..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/image/importation" -Method Get -Headers $headers
+        
+        $imageList = @()
+        if ($response -and $response.response) {
+            foreach ($image in $response.response) {
+                $imageList += [PSCustomObject]@{
+                    ImageName = if ($image.name) { $image.name } else { "N/A" }
+                    ImageFamily = if ($image.family) { $image.family } else { "N/A" }
+                    Version = if ($image.version) { $image.version } else { "N/A" }
+                    Vendor = if ($image.vendor) { $image.vendor } else { "N/A" }
+                    FileSize = if ($image.fileSize) { $image.fileSize } else { "N/A" }
+                    IsTaggedGolden = if ($image.isTaggedGolden) { $image.isTaggedGolden } else { $false }
+                    ImageType = if ($image.imageType) { $image.imageType } else { "N/A" }
+                    CreatedTime = if ($image.createdTime) { $image.createdTime } else { "N/A" }
+                    ImageUuid = if ($image.imageUuid) { $image.imageUuid } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\SoftwareImages_$timestamp.csv"
+        $imageList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total images: $($imageList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve software images: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 13: Issues/Events
+# =====================================================
+function Get-IssuesEvents {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching issues and events..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/issues" -Method Get -Headers $headers
+        
+        $issueList = @()
+        if ($response -and $response.response) {
+            foreach ($issue in $response.response) {
+                $issueList += [PSCustomObject]@{
+                    IssueId = if ($issue.issueId) { $issue.issueId } else { "N/A" }
+                    Name = if ($issue.name) { $issue.name } else { "N/A" }
+                    DeviceId = if ($issue.deviceId) { $issue.deviceId } else { "N/A" }
+                    Severity = if ($issue.severity) { $issue.severity } else { "N/A" }
+                    Priority = if ($issue.priority) { $issue.priority } else { "N/A" }
+                    Status = if ($issue.status) { $issue.status } else { "N/A" }
+                    Category = if ($issue.category) { $issue.category } else { "N/A" }
+                    LastOccurenceTime = if ($issue.lastOccurenceTime) { $issue.lastOccurenceTime } else { "N/A" }
+                    Description = if ($issue.description) { $issue.description } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\Issues_$timestamp.csv"
+        $issueList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total issues: $($issueList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve issues: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 14: Templates
+# =====================================================
+function Get-Templates {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching configuration templates..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/template-programmer/template" -Method Get -Headers $headers
+        
+        $templateList = @()
+        if ($response -and $response) {
+            foreach ($template in $response) {
+                $templateList += [PSCustomObject]@{
+                    TemplateName = if ($template.name) { $template.name } else { "N/A" }
+                    ProjectName = if ($template.projectName) { $template.projectName } else { "N/A" }
+                    TemplateId = if ($template.templateId) { $template.templateId } else { "N/A" }
+                    SoftwareType = if ($template.softwareType) { $template.softwareType } else { "N/A" }
+                    SoftwareVersion = if ($template.softwareVersion) { $template.softwareVersion } else { "N/A" }
+                    DeviceTypes = if ($template.deviceTypes) { ($template.deviceTypes | ForEach-Object { $_.productFamily }) -join ", " } else { "N/A" }
+                    CreateTime = if ($template.createTime) { $template.createTime } else { "N/A" }
+                    LastUpdateTime = if ($template.lastUpdateTime) { $template.lastUpdateTime } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\Templates_$timestamp.csv"
+        $templateList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total templates: $($templateList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve templates: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 15: Physical Topology
+# =====================================================
+function Get-PhysicalTopology {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching physical topology..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/topology/physical-topology" -Method Get -Headers $headers
+        
+        $linkList = @()
+        if ($response -and $response.response -and $response.response.links) {
+            foreach ($link in $response.response.links) {
+                $linkList += [PSCustomObject]@{
+                    SourceDevice = if ($link.source) { $link.source } else { "N/A" }
+                    SourceInterface = if ($link.startPortName) { $link.startPortName } else { "N/A" }
+                    TargetDevice = if ($link.target) { $link.target } else { "N/A" }
+                    TargetInterface = if ($link.endPortName) { $link.endPortName } else { "N/A" }
+                    LinkStatus = if ($link.linkStatus) { $link.linkStatus } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\PhysicalTopology_$timestamp.csv"
+        $linkList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total links: $($linkList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve physical topology: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 16: Device Module Information
+# =====================================================
+function Get-DeviceModules {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching device module information..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $moduleList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device/module?deviceId=$($device.id)" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                foreach ($module in $response.response) {
+                    $moduleList += [PSCustomObject]@{
+                        Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                        ModuleName = if ($module.name) { $module.name } else { "N/A" }
+                        PartNumber = if ($module.partNumber) { $module.partNumber } else { "N/A" }
+                        SerialNumber = if ($module.serialNumber) { $module.serialNumber } else { "N/A" }
+                        Description = if ($module.description) { $module.description } else { "N/A" }
+                        ModuleIndex = if ($module.moduleIndex) { $module.moduleIndex } else { "N/A" }
+                        OperationalStateCode = if ($module.operationalStateCode) { $module.operationalStateCode } else { "N/A" }
+                        VendorEquipmentType = if ($module.vendorEquipmentType) { $module.vendorEquipmentType } else { "N/A" }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "    ✗ Failed to get modules for $($device.hostname)" -ForegroundColor Red
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\DeviceModules_$timestamp.csv"
+    $moduleList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total modules: $($moduleList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 17: OSPF Neighbors
+# =====================================================
+function Get-OSPFNeighbors {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching OSPF neighbors..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $ospfList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device/$($device.id)/ospf-neighbor" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                foreach ($neighbor in $response.response) {
+                    $ospfList += [PSCustomObject]@{
+                        Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                        NeighborId = if ($neighbor.neighborId) { $neighbor.neighborId } else { "N/A" }
+                        NeighborIp = if ($neighbor.neighborIp) { $neighbor.neighborIp } else { "N/A" }
+                        State = if ($neighbor.state) { $neighbor.state } else { "N/A" }
+                        Interface = if ($neighbor.interfaceName) { $neighbor.interfaceName } else { "N/A" }
+                    }
+                }
+            }
+        }
+        catch {
+            # OSPF may not be configured - silent skip
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\OSPF_Neighbors_$timestamp.csv"
+    $ospfList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total OSPF neighbors: $($ospfList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 18: CDP Neighbors
+# =====================================================
+function Get-CDPNeighbors {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching CDP neighbors..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $cdpList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device/$($device.id)/neighbor" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                foreach ($neighbor in $response.response) {
+                    if ($neighbor.neighborDevice -or $neighbor.neighborPort) {
+                        $cdpList += [PSCustomObject]@{
+                            Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                            LocalInterface = if ($neighbor.localInterfaceName) { $neighbor.localInterfaceName } else { "N/A" }
+                            NeighborDevice = if ($neighbor.neighborDevice) { $neighbor.neighborDevice } else { "N/A" }
+                            NeighborPort = if ($neighbor.neighborPort) { $neighbor.neighborPort } else { "N/A" }
+                            Platform = if ($neighbor.platform) { $neighbor.platform } else { "N/A" }
+                            Capabilities = if ($neighbor.capabilities) { $neighbor.capabilities } else { "N/A" }
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "    ✗ Failed to get CDP neighbors for $($device.hostname)" -ForegroundColor Red
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\CDP_Neighbors_$timestamp.csv"
+    $cdpList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total CDP neighbors: $($cdpList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 19: LLDP Neighbors
+# =====================================================
+function Get-LLDPNeighbors {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching LLDP neighbors..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
+    $lldpList = @()
+    
+    foreach ($device in $devices) {
+        Write-Host "  Processing: $($device.hostname)" -ForegroundColor Gray
+        
+        try {
+            $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device/$($device.id)/interface/lldp" -Method Get -Headers $headers
+            
+            if ($response -and $response.response) {
+                foreach ($neighbor in $response.response) {
+                    $lldpList += [PSCustomObject]@{
+                        Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                        LocalInterface = if ($neighbor.localInterface) { $neighbor.localInterface } else { "N/A" }
+                        NeighborDevice = if ($neighbor.systemName) { $neighbor.systemName } else { "N/A" }
+                        NeighborPort = if ($neighbor.portId) { $neighbor.portId } else { "N/A" }
+                        ManagementAddress = if ($neighbor.managementAddress) { $neighbor.managementAddress } else { "N/A" }
+                        SystemDescription = if ($neighbor.systemDescription) { $neighbor.systemDescription } else { "N/A" }
+                    }
+                }
+            }
+        }
+        catch {
+            # LLDP may not be available - silent skip
+        }
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = "$outputDir\LLDP_Neighbors_$timestamp.csv"
+    $lldpList | Export-Csv -Path $csvPath -NoTypeInformation
+    
+    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+    Write-Host "✓ Total LLDP neighbors: $($lldpList.Count)" -ForegroundColor Green
+}
+
+# =====================================================
+# FUNCTION 20: Access Points
+# =====================================================
+function Get-AccessPoints {
+    param($headers, $dnaCenter)
+    
+    Write-Host "`nFetching access points..." -ForegroundColor Yellow
+    
+    try {
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/wireless/access-point" -Method Get -Headers $headers
+        
+        $apList = @()
+        if ($response -and $response.response) {
+            foreach ($ap in $response.response) {
+                $apList += [PSCustomObject]@{
+                    APName = if ($ap.name) { $ap.name } else { "N/A" }
+                    MacAddress = if ($ap.macAddress) { $ap.macAddress } else { "N/A" }
+                    IPAddress = if ($ap.ipAddress) { $ap.ipAddress } else { "N/A" }
+                    Model = if ($ap.model) { $ap.model } else { "N/A" }
+                    SerialNumber = if ($ap.serialNumber) { $ap.serialNumber } else { "N/A" }
+                    Location = if ($ap.location) { $ap.location } else { "N/A" }
+                    AdminStatus = if ($ap.adminStatus) { $ap.adminStatus } else { "N/A" }
+                    OperationStatus = if ($ap.operationStatus) { $ap.operationStatus } else { "N/A" }
+                    WLCName = if ($ap.controllerName) { $ap.controllerName } else { "N/A" }
+                    ClientCount = if ($ap.clientCount) { $ap.clientCount } else { 0 }
+                    SoftwareVersion = if ($ap.softwareVersion) { $ap.softwareVersion } else { "N/A" }
+                }
+            }
+        }
+        
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = "$outputDir\AccessPoints_$timestamp.csv"
+        $apList | Export-Csv -Path $csvPath -NoTypeInformation
+        
+        Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
+        Write-Host "✓ Total access points: $($apList.Count)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve access points: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Main script execution
+Show-Banner
+
+# Authenticate
+$token = Get-DNACToken -dnaCenter $dnaCenter
+
+if (-not $token) {
+    Write-Host "`n✗ Authentication failed. Exiting...`n" -ForegroundColor Red
+    Write-Host "Press Enter to exit..."
+    Read-Host
+    exit
+}
+
+# Create headers for API calls
+$apiHeaders = @{
+    "X-Auth-Token" = $token
+    "Content-Type" = "application/json"
+}
+
+# Load all devices
+$loadSuccess = Load-AllDevices -headers $apiHeaders -dnaCenter $dnaCenter
+
+if (-not $loadSuccess) {
+    Write-Host "✗ Failed to load devices. Exiting..." -ForegroundColor Red
+    Write-Host "Press Enter to exit..."
+    Read-Host
+    exit
+}
+
+Write-Host "`nOutput directory: $outputDir" -ForegroundColor Cyan
+
+# Main menu loop
+$selectedOptions = @()
+
+do {
+    Show-Menu
+    $selection = Read-Host "Select option"
+    
+    if ($selection -eq "0") {
+        break
+    }
+    
+    if ($selection -eq "99") {
+        Select-Devices -headers $apiHeaders -dnaCenter $dnaCenter
+        continue
+    }
+    
+    # Handle new advanced operations immediately (don't queue)
+    if ($selection -eq "21") {
+        Invoke-CommandRunner -headers $apiHeaders -dnaCenter $dnaCenter
+        continue
+    }
+    
+    if ($selection -eq "22") {
+        Invoke-PathTrace -headers $apiHeaders -dnaCenter $dnaCenter
+        continue
+    }
+    
+    if ($selection -match '^\d+$') {
+        $selNum = [int]$selection
+        if ($selNum -ge 1 -and $selNum -le 20) {
+            if ($selectedOptions -notcontains $selection) {
+                $selectedOptions += $selection
+                Write-Host "✓ Added option $selection to queue" -ForegroundColor Green
+            } else {
+                Write-Host "! Option $selection already in queue" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "✗ Invalid selection" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "✗ Invalid selection" -ForegroundColor Red
+    }
+    
+    if ($selectedOptions.Count -gt 0) {
+        Write-Host "`nCurrent queue: $($selectedOptions -join ', ')" -ForegroundColor Cyan
+    }
+    Write-Host ""
+    Read-Host "Press Enter to continue"
+    
+} while ($true)
+
+# Process all selected options
+if ($selectedOptions.Count -gt 0) {
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Processing $($selectedOptions.Count) report(s)..." -ForegroundColor Cyan
+    
+    if ($global:selectedDevices.Count -gt 0) {
+        Write-Host "Device filter: $($global:selectedDevices.Count) device(s)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Device filter: All devices" -ForegroundColor Green
+    }
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+    
+    foreach ($option in $selectedOptions) {
+        Write-Host "`n--- Report $option ---" -ForegroundColor Cyan
+        
+        switch ($option) {
+            "1"  { Get-NetworkDevicesBasic -headers $apiHeaders -dnaCenter $dnaCenter }
+            "2"  { Get-NetworkDevicesDetailed -headers $apiHeaders -dnaCenter $dnaCenter }
+            "3"  { Get-DeviceConfigurations -headers $apiHeaders -dnaCenter $dnaCenter }
+            "4"  { Get-DeviceInterfaces -headers $apiHeaders -dnaCenter $dnaCenter }
+            "5"  { Get-DeviceInventoryCount -headers $apiHeaders -dnaCenter $dnaCenter }
+            "6"  { Get-SitesLocations -headers $apiHeaders -dnaCenter $dnaCenter }
+            "7"  { Get-NetworkHealth -headers $apiHeaders -dnaCenter $dnaCenter }
+            "8"  { Get-ClientHealth -headers $apiHeaders -dnaCenter $dnaCenter }
+            "9"  { Get-ComplianceStatus -headers $apiHeaders -dnaCenter $dnaCenter }
+            "10" { Get-DeviceReachability -headers $apiHeaders -dnaCenter $dnaCenter }
+            "11" { Get-VLANs -headers $apiHeaders -dnaCenter $dnaCenter }
+            "12" { Get-SoftwareImageInfo -headers $apiHeaders -dnaCenter $dnaCenter }
+            "13" { Get-IssuesEvents -headers $apiHeaders -dnaCenter $dnaCenter }
+            "14" { Get-Templates -headers $apiHeaders -dnaCenter $dnaCenter }
+            "15" { Get-PhysicalTopology -headers $apiHeaders -dnaCenter $dnaCenter }
+            "16" { Get-DeviceModules -headers $apiHeaders -dnaCenter $dnaCenter }
+            "17" { Get-OSPFNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
+            "18" { Get-CDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
+            "19" { Get-LLDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
+            "20" { Get-AccessPoints -headers $apiHeaders -dnaCenter $dnaCenter }
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Green
+    Write-Host "All reports completed!" -ForegroundColor Green
+    Write-Host "Files saved to: $outputDir" -ForegroundColor Green
+    Write-Host "═══════════════════════════════════════" -ForegroundColor Green
+    Write-Host ""
+} else {
+    Write-Host "`nNo options selected. Exiting...`n" -ForegroundColor Yellow
+}
+
+Write-Host "Press Enter to exit..."
+Read-Host
