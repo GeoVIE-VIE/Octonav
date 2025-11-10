@@ -710,6 +710,111 @@ function Apply-Filters {
     return $matchedLines
 }
 
+function Get-TaskOutputDetails {
+    param(
+        [pscustomobject]$Task
+    )
+
+    $result = [ordered]@{
+        CleanOutput       = ""
+        OutputLines       = @()
+        FilteredOutput    = ""
+        FilteredLines     = @()
+        OutputLineCount   = 0
+        FilteredLineCount = 0
+    }
+
+    if (-not $Task -or $Task.Status -ne "Downloaded" -or $null -eq $Task.Output) {
+        return [PSCustomObject]$result
+    }
+
+    $cleanOutput = ""
+    $raw = $Task.Output
+
+    if ($raw -is [string]) {
+        $cleanOutput = $raw
+    }
+    elseif ($raw -is [array]) {
+        foreach ($item in $raw) {
+            if ($null -eq $item) { continue }
+
+            $itemProps = $item.PSObject.Properties
+            $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+            if ($commandKey) {
+                $rawOutput = $commandKey.Value
+                if ($rawOutput -is [string]) {
+                    $cleanOutput += $rawOutput
+                }
+                else {
+                    $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10)
+                }
+            }
+            elseif ($item.commandOutput) {
+                $cleanOutput += $item.commandOutput
+            }
+            elseif ($item.output) {
+                $cleanOutput += $item.output
+            }
+            else {
+                $cleanOutput += ($item | ConvertTo-Json -Depth 10)
+            }
+        }
+    }
+    else {
+        $outputProps = $raw.PSObject.Properties
+        $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+        if ($commandKey) {
+            $rawOutput = $commandKey.Value
+            if ($rawOutput -is [string]) {
+                $cleanOutput = $rawOutput
+            }
+            else {
+                $cleanOutput = ($rawOutput | ConvertTo-Json -Depth 10)
+            }
+        }
+        elseif ($raw.commandOutput) {
+            $cleanOutput = $raw.commandOutput
+        }
+        elseif ($raw.output) {
+            $cleanOutput = $raw.output
+        }
+        else {
+            $cleanOutput = ($raw | ConvertTo-Json -Depth 10)
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($cleanOutput)) {
+        return [PSCustomObject]$result
+    }
+
+    $cleanOutput = $cleanOutput -replace '\\r\\n', "`n" -replace '\\r', "`n" -replace '\\n', "`n"
+    $cleanOutput = $cleanOutput.Trim('"')
+    $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
+
+    $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
+
+    $filteredLines = @()
+    $filteredOutput = ""
+
+    if ($Task.Filters -and $Task.Filters.Count -gt 0) {
+        $filteredLines = Apply-Filters -Lines $outputLines -Filters $Task.Filters
+        if ($filteredLines.Count -gt 0) {
+            $filteredOutput = $filteredLines -join "`n"
+        }
+    }
+
+    $result.CleanOutput = $outputLines -join "`n"
+    $result.OutputLines = $outputLines
+    $result.FilteredOutput = $filteredOutput
+    $result.FilteredLines = $filteredLines
+    $result.OutputLineCount = $outputLines.Count
+    $result.FilteredLineCount = $filteredLines.Count
+
+    return [PSCustomObject]$result
+}
+
 # =====================================================
 # COMPLETE: Command Runner with Parallel Execution
 # =====================================================
@@ -1118,72 +1223,34 @@ function Invoke-CommandRunner {
     $summaryList = @()
     $consolidatedData = @()  # For CSV output
 
+    foreach ($task in $taskTracker) {
+        $details = Get-TaskOutputDetails -Task $task
+        $task | Add-Member -NotePropertyName "CleanOutput" -NotePropertyValue $details.CleanOutput -Force
+        $task | Add-Member -NotePropertyName "OutputLines" -NotePropertyValue $details.OutputLines -Force
+        $task | Add-Member -NotePropertyName "FilteredOutput" -NotePropertyValue $details.FilteredOutput -Force
+        $task | Add-Member -NotePropertyName "FilteredLines" -NotePropertyValue $details.FilteredLines -Force
+        $task | Add-Member -NotePropertyName "OutputLineCount" -NotePropertyValue $details.OutputLineCount -Force
+        $task | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue $details.FilteredLineCount -Force
+    }
+
     # Process tasks for consolidated CSV if requested
     if ($useConsolidatedCSV) {
         Write-Host "Preparing consolidated CSV data..." -ForegroundColor Cyan
 
         foreach ($task in $taskTracker) {
-            $cleanOutput = ""
+            $cleanOutput = $task.CleanOutput
+            $filteredOutput = $task.FilteredOutput
 
-            # *** THE FIX: Check for $null instead of a "truthy" value ***
-            if ($task.Status -eq "Downloaded" -and $null -ne $task.Output) {
-                # Parse and clean output
-                if ($task.Output -is [string]) {
-                    $cleanOutput = $task.Output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                }
-                elseif ($task.Output -is [array]) {
-                    foreach ($item in $task.Output) {
-                        $itemProps = $item.PSObject.Properties
-                        $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
-
-                        if ($commandKey) {
-                            $rawOutput = $commandKey.Value
-                            if ($rawOutput -is [string]) {
-                                $cleanOutput += $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                            }
-                        }
-                        elseif ($item.commandOutput) {
-                            $cleanOutput += $item.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        }
-                        elseif ($item.output) {
-                            $cleanOutput += $item.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        }
-                    }
-                }
-                else {
-                    $outputProps = $task.Output.PSObject.Properties
-                    $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
-
-                    if ($commandKey) {
-                        $rawOutput = $commandKey.Value
-                        if ($rawOutput -is [string]) {
-                            $cleanOutput = $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        }
-                    }
-                    elseif ($task.Output.commandOutput) {
-                        $cleanOutput = $task.Output.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                    }
-                    elseif ($task.Output.output) {
-                        $cleanOutput = $task.Output.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                    }
-                }
-
-                $cleanOutput = $cleanOutput.Trim('"')
-                $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
-
-                # Split into proper lines and remove empty lines
-                $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
-                $cleanOutput = $outputLines -join "`n"
-
-                # Apply filters if any - FIXED VERSION
-                $filteredOutput = ""
-                if ($task.Filters.Count -gt 0) {
-                    $matchedLines = Apply-Filters -Lines $outputLines -Filters $task.Filters
-                    $filteredOutput = $matchedLines -join "`n"
-                }
+            $filteredDisplay = if ($task.FilteredLineCount -gt 0) {
+                $filteredOutput
+            }
+            elseif ($task.Filters.Count -gt 0) {
+                "No matches found"
+            }
+            else {
+                "N/A"
             }
 
-            # Add to consolidated data
             $consolidatedData += [PSCustomObject]@{
                 Hostname          = $task.Hostname
                 DeviceIP          = $task.DeviceIP
@@ -1192,9 +1259,9 @@ function Invoke-CommandRunner {
                 ExecutionTime     = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
                 Filters           = if ($task.Filters.Count -gt 0) { $task.Filters -join ", " } else { "None" }
                 Output            = $cleanOutput
-                FilteredOutput    = if ($filteredOutput) { $filteredOutput } else { "N/A" }
-                OutputLineCount   = if ($cleanOutput) { ($cleanOutput -split "`n").Count } else { 0 }
-                FilteredLineCount = if ($filteredOutput) { ($filteredOutput -split "`n").Count } else { 0 }
+                FilteredOutput    = $filteredDisplay
+                OutputLineCount   = $task.OutputLineCount
+                FilteredLineCount = $task.FilteredLineCount
             }
         }
 
@@ -1250,7 +1317,6 @@ function Invoke-CommandRunner {
             }
 
             foreach ($task in $deviceTasks) {
-                # Command info for JSON
                 $commandInfo = @{
                     Command       = $task.Command
                     Status        = $task.Status
@@ -1258,7 +1324,6 @@ function Invoke-CommandRunner {
                     ExecutionTime = $task.SubmitTime.ToString("yyyy-MM-dd HH:mm:ss")
                 }
 
-                # Add to full output
                 $fullLines += ""
                 $fullLines += "=" * 80
                 $fullLines += "Command: $($task.Command)"
@@ -1270,77 +1335,9 @@ function Invoke-CommandRunner {
                 $fullLines += "=" * 80
                 $fullLines += ""
 
-                # *** THE FIX: Check for $null instead of a "truthy" value ***
                 if ($task.Status -eq "Downloaded" -and $null -ne $task.Output) {
-                    # Parse and clean output
-                    $cleanOutput = ""
-                    $rawJsonOutput = $null
-
-                    if ($task.Output -is [string]) {
-                        $cleanOutput = $task.Output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        $rawJsonOutput = $task.Output
-                    }
-                    elseif ($task.Output -is [array]) {
-                        $rawJsonOutput = $task.Output
-                        foreach ($item in $task.Output) {
-                            $itemProps = $item.PSObject.Properties
-                            $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
-
-                            if ($commandKey) {
-                                $rawOutput = $commandKey.Value
-                                if ($rawOutput -is [string]) {
-                                    $cleanOutput += $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                                }
-                                else {
-                                    $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
-                                }
-                            }
-                            elseif ($item.commandOutput) {
-                                $cleanOutput += $item.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                            }
-                            elseif ($item.output) {
-                                $cleanOutput += $item.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                            }
-                            else {
-                                $cleanOutput += ($item | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
-                            }
-                        }
-                    }
-                    else {
-                        $rawJsonOutput = $task.Output
-                        $outputProps = $task.Output.PSObject.Properties
-                        $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
-
-                        if ($commandKey) {
-                            $rawOutput = $commandKey.Value
-                            if ($rawOutput -is [string]) {
-                                $cleanOutput = $rawOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                            }
-                            else {
-                                $cleanOutput += ($rawOutput | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
-                            }
-                        }
-                        elseif ($task.Output.commandOutput) {
-                            $cleanOutput = $task.Output.commandOutput -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        }
-                        elseif ($task.Output.output) {
-                            $cleanOutput = $task.Output.output -replace '\\n', "`n" -replace '\\r\\n', "`n" -replace '\\r', "`n"
-                        }
-                        else {
-                            $cleanOutput += ($task.Output | ConvertTo-Json -Depth 10) -replace '\\n', "`n" -replace '\\r\\n', "`n"
-                        }
-                    }
-
-                    # Remove any remaining JSON quotes at start/end and clean up
-                    $cleanOutput = $cleanOutput.Trim('"')
-                    $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
-
-                    # Split into proper lines and remove empty lines
-                    $outputLines = $cleanOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
-
-                    # Add to full output with proper line breaks
-                    if ($outputLines.Count -gt 0) {
-                        $fullLines += $outputLines
+                    if ($task.OutputLineCount -gt 0) {
+                        $fullLines += $task.OutputLines
                     }
                     else {
                         $fullLines += "(No output returned from device)"
@@ -1348,12 +1345,10 @@ function Invoke-CommandRunner {
                     $fullLines += ""
                     $successCount++
 
-                    # Add to JSON structure
-                    $commandInfo | Add-Member -NotePropertyName "Output" -NotePropertyValue ($outputLines -join "`n")
-                    $commandInfo | Add-Member -NotePropertyName "RawOutput" -NotePropertyValue $rawJsonOutput
+                    $commandInfo | Add-Member -NotePropertyName "Output" -NotePropertyValue $task.CleanOutput
+                    $commandInfo | Add-Member -NotePropertyName "RawOutput" -NotePropertyValue $task.RawOutput
                     $commandInfo | Add-Member -NotePropertyName "Success" -NotePropertyValue $true
 
-                    # Apply THIS command's specific filters - FIXED VERSION
                     if ($task.Filters.Count -gt 0) {
                         $filteredLines += ""
                         $filteredLines += "-" * 80
@@ -1362,16 +1357,13 @@ function Invoke-CommandRunner {
                         $filteredLines += "-" * 80
                         $filteredLines += ""
 
-                        $matchedLines = Apply-Filters -Lines $outputLines -Filters $task.Filters
-
-                        if ($matchedLines.Count -gt 0) {
-                            $filteredLines += $matchedLines
+                        if ($task.FilteredLineCount -gt 0) {
+                            $filteredLines += $task.FilteredLines
                             $filteredLines += ""
-                            $filteredLines += "  ✓ Matched $($matchedLines.Count) line(s)"
+                            $filteredLines += "  ✓ Matched $($task.FilteredLineCount) line(s)"
 
-                            # Add filtered output to JSON
-                            $commandInfo | Add-Member -NotePropertyName "FilteredOutput" -NotePropertyValue ($matchedLines -join "`n")
-                            $commandInfo | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue $matchedLines.Count
+                            $commandInfo | Add-Member -NotePropertyName "FilteredOutput" -NotePropertyValue $task.FilteredOutput
+                            $commandInfo | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue $task.FilteredLineCount
                         }
                         else {
                             $filteredLines += "    No matches found"
@@ -1379,14 +1371,12 @@ function Invoke-CommandRunner {
                             $commandInfo | Add-Member -NotePropertyName "FilteredLineCount" -NotePropertyValue 0
                         }
                     }
-
                 }
                 else {
                     $fullLines += "ERROR: $($task.Status)"
                     $fullLines += ""
                     $failCount++
 
-                    # Add error to JSON
                     $commandInfo | Add-Member -NotePropertyName "Error" -NotePropertyValue $task.Status
                     $commandInfo | Add-Member -NotePropertyName "Success" -NotePropertyValue $false
 
@@ -1400,7 +1390,6 @@ function Invoke-CommandRunner {
                     }
                 }
 
-                # Add command to JSON structure
                 $jsonData.Commands += $commandInfo
             }
 
@@ -1447,6 +1436,67 @@ function Invoke-CommandRunner {
                 ExecutionTime      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
             }
         }
+    }
+
+    $filterEnabledTasks = $taskTracker | Where-Object { $_.Filters -and $_.Filters.Count -gt 0 }
+    if ($filterEnabledTasks.Count -gt 0) {
+        $filteredSummaryLines = @()
+        $filteredSummaryLines += "=" * 100
+        $filteredSummaryLines += "DNA CENTER COMMAND RUNNER - FILTERED OUTPUT ONLY"
+        $filteredSummaryLines += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $filteredSummaryLines += "Total Devices With Filters: $(( $filterEnabledTasks | Select-Object -ExpandProperty Hostname -Unique ).Count)"
+        $filteredSummaryLines += "Total Commands With Filters: $($filterEnabledTasks.Count)"
+        $filteredSummaryLines += "=" * 100
+        $filteredSummaryLines += ""
+
+        foreach ($deviceGroup in ($filterEnabledTasks | Group-Object -Property Hostname)) {
+            $filteredSummaryLines += ""
+            $filteredSummaryLines += "#" * 80
+            $filteredSummaryLines += "DEVICE: $($deviceGroup.Name)"
+            $filteredSummaryLines += "IP: $($deviceGroup.Group[0].DeviceIP)"
+            $filteredSummaryLines += "#" * 80
+            $filteredSummaryLines += ""
+
+            foreach ($task in $deviceGroup.Group) {
+                $filteredSummaryLines += "-" * 60
+                $filteredSummaryLines += "Command: $($task.Command)"
+                $filteredSummaryLines += "Filters: $($task.Filters -join ', ')"
+                $filteredSummaryLines += "Status: $($task.Status)"
+                $filteredSummaryLines += "-" * 60
+
+                if ($task.Status -eq "Downloaded" -and $task.FilteredLineCount -gt 0) {
+                    $filteredSummaryLines += $task.FilteredLines
+                }
+                elseif ($task.Status -eq "Downloaded") {
+                    $filteredSummaryLines += "  No matches found for the specified filters."
+                }
+                else {
+                    $filteredSummaryLines += "  ERROR: $($task.Status)"
+                }
+
+                $filteredSummaryLines += ""
+            }
+        }
+
+        $filteredSummaryFile = "$outputFolder\ALL_DEVICES_FILTERED_OUTPUT.txt"
+        $filteredSummaryLines | Out-File -FilePath $filteredSummaryFile -Encoding UTF8
+        Write-Host "✓ Created filtered text file: $filteredSummaryFile" -ForegroundColor Green
+
+        $filteredCsvData = foreach ($task in $filterEnabledTasks) {
+            [PSCustomObject]@{
+                Hostname         = $task.Hostname
+                DeviceIP         = $task.DeviceIP
+                Command          = $task.Command
+                FiltersApplied   = $task.Filters -join ", "
+                Status           = $task.Status
+                MatchedLineCount = $task.FilteredLineCount
+                FilteredOutput   = if ($task.FilteredLineCount -gt 0) { $task.FilteredOutput } elseif ($task.Status -eq "Downloaded") { "No matches found" } else { "ERROR: $($task.Status)" }
+            }
+        }
+
+        $filteredCsvPath = "$outputDir\CommandRunner_FilteredOnly_$timestamp.csv"
+        $filteredCsvData | Export-Csv -Path $filteredCsvPath -NoTypeInformation
+        Write-Host "✓ Created filtered CSV: $filteredCsvPath" -ForegroundColor Green
     }
 
     # Create concatenated text file if requested
@@ -1672,6 +1722,13 @@ function Invoke-CommandRunner {
             Write-Host "  - *_output_filtered.txt (filtered results)" -ForegroundColor Yellow
         }
         Write-Host "  - *_output.json (raw data in JSON format)" -ForegroundColor Magenta
+        Write-Host ""
+    }
+
+    if ($tasksWithFilters.Count -gt 0) {
+        Write-Host "Filtered result files:" -ForegroundColor Cyan
+        Write-Host "  - ALL_DEVICES_FILTERED_OUTPUT.txt (all filtered matches in one file)" -ForegroundColor Yellow
+        Write-Host "  - CommandRunner_FilteredOnly_$timestamp.csv (filtered summary across devices)" -ForegroundColor Yellow
         Write-Host ""
     }
 
