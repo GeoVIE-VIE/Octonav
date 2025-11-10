@@ -545,7 +545,7 @@ function Show-Menu {
     Write-Host "    18. CDP Neighbors" -ForegroundColor White
     Write-Host "    19. LLDP Neighbors" -ForegroundColor White
     Write-Host "    20. Access Points" -ForegroundColor White
-    Write-Host "     C. Certificate Status (Hostname Certificates)" -ForegroundColor White
+    Write-Host "    23. Certificate CLI Report (Custom)" -ForegroundColor White
     Write-Host ""
     Write-Host "     0. Exit" -ForegroundColor Red
     Write-Host ""
@@ -768,6 +768,180 @@ function ConvertTo-ReadableTimestamp {
     }
 
     return $Value.ToString()
+}
+
+function Invoke-DeviceCliCommand {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [psobject]$Device,
+        [string]$Command,
+        [int]$TimeoutSeconds = 180
+    )
+
+    if (-not $Device -or -not $Device.id) {
+        return $null
+    }
+
+    $requestBody = @{
+        name        = "Cmd-$($Device.hostname)-$(Get-Random)"
+        commands    = @($Command)
+        deviceUuids = @($Device.id)
+    } | ConvertTo-Json -Depth 10
+
+    try {
+        $submitResponse = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/network-device-poller/cli/read-request" `
+            -Method Post `
+            -Headers $Headers `
+            -Body $requestBody `
+            -ContentType "application/json"
+    }
+    catch {
+        Write-Host "✗ Failed to submit '$Command' for $($Device.hostname): $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+
+    if (-not $submitResponse -or -not $submitResponse.response -or -not $submitResponse.response.taskId) {
+        Write-Host "✗ DNA Center did not return a task ID for '$Command' on $($Device.hostname)" -ForegroundColor Red
+        return $null
+    }
+
+    $taskInfo = Wait-ForTask -TaskId $submitResponse.response.taskId -Headers $Headers -DnaCenter $DnaCenter -TimeoutSeconds $TimeoutSeconds
+    if (-not $taskInfo) {
+        return $null
+    }
+
+    $fileId = $null
+    if ($taskInfo.fileId) {
+        $fileId = $taskInfo.fileId
+    }
+    elseif ($taskInfo.additionalStatusURL -and $taskInfo.additionalStatusURL -match '/file/([a-f0-9\-]+)') {
+        $fileId = $Matches[1]
+    }
+    elseif ($taskInfo.progress) {
+        try {
+            $progressObj = $taskInfo.progress | ConvertFrom-Json
+            if ($progressObj.fileId) {
+                $fileId = $progressObj.fileId
+            }
+        }
+        catch {
+            if ($taskInfo.progress -match '"fileId"\s*:\s*"([^"]+)"') {
+                $fileId = $Matches[1]
+            }
+        }
+    }
+
+    if (-not $fileId) {
+        Write-Host "✗ Unable to determine output file ID for '$Command' on $($Device.hostname)" -ForegroundColor Red
+        return $null
+    }
+
+    try {
+        $fileResponse = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/file/$fileId" -Method Get -Headers $Headers
+    }
+    catch {
+        Write-Host "✗ Failed to download CLI output for '$Command' on $($Device.hostname): $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+
+    $taskRecord = [pscustomobject]@{
+        Status = "Downloaded"
+        Output = $fileResponse
+        Filters = @()
+    }
+
+    $details = Get-TaskOutputDetails -Task $taskRecord
+    return [pscustomobject]@{
+        RawOutput = $details.CleanOutput
+        Lines     = $details.OutputLines
+    }
+}
+
+function Parse-CertificateCliOutput {
+    param(
+        [string[]]$Lines,
+        [string[]]$Filters
+    )
+
+    $records = @()
+    if (-not $Lines -or $Lines.Count -eq 0) {
+        return $records
+    }
+
+    $current = $null
+
+    foreach ($line in $Lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+        if ($line -match '(?i)cn\s*=\s*(.+)') {
+            if ($current -and ($current.CertificateName -or $current.StartDate -or $current.EndDate)) {
+                $records += [pscustomobject]$current
+            }
+
+            $current = [ordered]@{
+                CertificateName = ($Matches[1]).Trim()
+                StartDate       = $null
+                EndDate         = $null
+                SourceLines     = @()
+            }
+        }
+
+        if ($null -eq $current) {
+            continue
+        }
+
+        $current.SourceLines += $line
+
+        if ($line -match '(?i)start\s*date\s*:\s*(.+)') {
+            $current.StartDate = ($Matches[1]).Trim()
+            continue
+        }
+
+        if ($line -match '(?i)end\s*date\s*:\s*(.+)') {
+            $current.EndDate = ($Matches[1]).Trim()
+            continue
+        }
+    }
+
+    if ($current -and ($current.CertificateName -or $current.StartDate -or $current.EndDate)) {
+        $records += [pscustomobject]$current
+    }
+
+    if ($Filters -and $Filters.Count -gt 0) {
+        $filtered = @()
+        foreach ($record in $records) {
+            $textToCheck = @($record.CertificateName, $record.StartDate, $record.EndDate, ($record.SourceLines -join ' ')) -join ' '
+            $matchFound = $false
+            foreach ($filter in $Filters) {
+                if ([string]::IsNullOrWhiteSpace($filter)) { continue }
+                if ($textToCheck -like "*$filter*") {
+                    $matchFound = $true
+                    break
+                }
+            }
+
+            if ($matchFound) {
+                $filtered += $record
+            }
+        }
+
+        return $filtered
+    }
+
+    return $records
+}
+
+function Get-TunnelInterfacesFromCli {
+    param(
+        [string[]]$Lines
+    )
+
+    if (-not $Lines) {
+        return @()
+    }
+
+    return $Lines | Where-Object { $_ -match '(?i)\bTun' }
 }
 
 function Get-ConfigText {
@@ -3096,121 +3270,83 @@ function Get-AccessPoints {
 }
 
 # =====================================================
-# FUNCTION 21: Certificate Status by Hostname
+# FUNCTION 21: Certificate CLI Report (Custom)
 # =====================================================
-function Get-CertificateStatus {
+function Get-CertificateCliReport {
     param($headers, $dnaCenter)
 
-    Write-Host "`nFetching certificate status by hostname..." -ForegroundColor Yellow
+    Write-Host "`nRunning certificate CLI report..." -ForegroundColor Yellow
 
     $devices = Get-ActiveDevices
     if (-not $devices) { return }
 
-    $certificateUri = "$dnaCenter/dna/intent/api/v1/certificate"
-    $certificateResponse = $null
+    $filters = @("U00", "2024", "2025", "2028")
+    $reportRows = @()
 
-    try {
-        $certificateResponse = Invoke-RestMethod -Uri $certificateUri -Method Get -Headers $headers
-    }
-    catch {
-        Write-Host "✗ Failed to retrieve certificate data: $($_.Exception.Message)" -ForegroundColor Red
-        return
-    }
-
-    $certificates = @()
-
-    if ($certificateResponse) {
-        if ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['response']) {
-            $certificates = @($certificateResponse.response)
-        }
-        elseif ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['certificates']) {
-            $certificates = @($certificateResponse.certificates)
-        }
-        elseif ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['certificateDetails']) {
-            $certificates = @($certificateResponse.certificateDetails)
-        }
-        elseif ($certificateResponse -is [System.Collections.IEnumerable] -and -not ($certificateResponse -is [string])) {
-            $certificates = @($certificateResponse)
-        }
-        else {
-            $certificates = @($certificateResponse)
-        }
-    }
-
-    if ($certificates.Count -eq 1 -and $certificates[0].PSObject) {
-        if ($certificates[0].PSObject.Properties['certificates']) {
-            $certificates = @($certificates[0].certificates)
-        }
-        elseif ($certificates[0].PSObject.Properties['certificateDetails']) {
-            $certificates = @($certificates[0].certificateDetails)
-        }
-    }
-
-    $certificateLookup = @{}
-    foreach ($certificate in $certificates) {
-        if ($null -eq $certificate) { continue }
-
-        $name = Get-FirstPropertyValue -Object $certificate -PropertyNames @('name', 'certificateName', 'hostName', 'hostname')
-        if (-not $name) { continue }
-
-        $key = $name.ToString().ToLowerInvariant()
-        if (-not $certificateLookup.ContainsKey($key)) {
-            $certificateLookup[$key] = @()
-        }
-
-        $certificateLookup[$key] += $certificate
-    }
-
-    if ($certificateLookup.Count -eq 0) {
-        Write-Host "! No certificate records matched the expected format. Results will mark certificates as not found." -ForegroundColor Yellow
-    }
-
-    $certificateRows = foreach ($device in $devices) {
+    foreach ($device in $devices) {
         $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
-        $hostnameKey = if ($hostname) { $hostname.ToLowerInvariant() } else { "" }
+        Write-Host "  Processing: $hostname" -ForegroundColor Gray
 
-        $matchedCertificate = $null
-        if ($hostnameKey -and $certificateLookup.ContainsKey($hostnameKey)) {
-            $matchedCertificate = $certificateLookup[$hostnameKey] | Select-Object -First 1
-        }
+        $managementIp = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+        $reachability = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "Unknown" }
+        $upTime = if ($device.upTime) { $device.upTime } else { "N/A" }
 
-        $certificateName = if ($matchedCertificate) {
-            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('name', 'certificateName', 'hostName', 'hostname')
+        $cryptoResult = Invoke-DeviceCliCommand -Headers $headers -DnaCenter $dnaCenter -Device $device -Command "show crypto pki certificate"
+        $certRecords = if ($cryptoResult -and $cryptoResult.Lines) {
+            Parse-CertificateCliOutput -Lines $cryptoResult.Lines -Filters $filters
         } else {
-            $hostname
+            @()
         }
 
-        $statusValue = if ($matchedCertificate) {
-            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('status', 'certificateStatus', 'state', 'lifecycleState')
-        } else {
-            $null
+        if (-not $cryptoResult) {
+            Write-Host "    ! CLI output for certificates unavailable on $hostname" -ForegroundColor Yellow
+        }
+        elseif ($certRecords.Count -eq 0) {
+            Write-Host "    ! No certificate entries matched filters on $hostname" -ForegroundColor Yellow
         }
 
-        $startValue = if ($matchedCertificate) {
-            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('validFrom', 'notBefore', 'startTime', 'startDate', 'validityStartTime')
-        } else {
-            $null
+        if ($certRecords.Count -eq 0) {
+            $certRecords = @([pscustomobject]@{
+                CertificateName = "No matching certificate"
+                StartDate       = $null
+                EndDate         = $null
+                SourceLines     = if ($cryptoResult -and $cryptoResult.Lines) { $cryptoResult.Lines } else { @() }
+            })
         }
 
-        $endValue = if ($matchedCertificate) {
-            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('validTo', 'notAfter', 'endTime', 'endDate', 'validityEndTime')
-        } else {
-            $null
+        $tunnelResult = Invoke-DeviceCliCommand -Headers $headers -DnaCenter $dnaCenter -Device $device -Command "show ip interface brief"
+        $tunnelLines = if ($tunnelResult) { Get-TunnelInterfacesFromCli -Lines $tunnelResult.Lines } else { @() }
+
+        if (-not $tunnelResult) {
+            Write-Host "    ! CLI output for tunnels unavailable on $hostname" -ForegroundColor Yellow
         }
 
-        $startDate = ConvertTo-ReadableTimestamp $startValue
-        $endDate = ConvertTo-ReadableTimestamp $endValue
+        $tunnelSummary = if ($tunnelLines.Count -gt 0) { $tunnelLines -join '; ' } else { "None" }
+        $filtersApplied = $filters -join ', '
 
-        [PSCustomObject]@{
-            Hostname = $hostname
-            CertificateName = if ($certificateName) { $certificateName } else { "Unknown" }
-            CertificateStatus = if ($statusValue) { $statusValue } elseif ($matchedCertificate) { "Unknown" } else { "Not Found" }
-            StartDate = if ($startDate) { $startDate } else { "N/A" }
-            EndDate = if ($endDate) { $endDate } else { "N/A" }
+        foreach ($record in $certRecords) {
+            $sourceInfo = if ($record.SourceLines -and $record.SourceLines.Count -gt 0) {
+                $record.SourceLines -join ' | '
+            } else {
+                "N/A"
+            }
+
+            $reportRows += [PSCustomObject]@{
+                Hostname              = $hostname
+                ManagementIP          = $managementIp
+                Reachability          = $reachability
+                UpTime                = $upTime
+                CertificateName       = if ($record.CertificateName) { $record.CertificateName } else { "N/A" }
+                CertificateStartDate  = if ($record.StartDate) { $record.StartDate } else { "N/A" }
+                CertificateEndDate    = if ($record.EndDate) { $record.EndDate } else { "N/A" }
+                CertificateSourceData = $sourceInfo
+                TunnelInterfaces      = $tunnelSummary
+                FiltersApplied        = $filtersApplied
+            }
         }
     }
 
-    Export-Report -Rows $certificateRows -BaseName "CertificateStatus" -RecordLabel "certificate records" | Out-Null
+    Export-Report -Rows $reportRows -BaseName "CertificateCliReport" -RecordLabel "certificate entries" | Out-Null
 }
 
 # Main script execution
@@ -3254,8 +3390,6 @@ do {
         $selection = $selection.Trim()
     }
 
-    $normalizedSelection = if ($selection) { $selection.ToUpper() } else { "" }
-
     if ($selection -eq "0") {
         break
     }
@@ -3273,17 +3407,9 @@ do {
         Invoke-PathTrace -headers $apiHeaders -dnaCenter $dnaCenter
         continue
     }
-    elseif ($normalizedSelection -eq "C") {
-        if ($selectedOptions -notcontains "C") {
-            $selectedOptions += "C"
-            Write-Host "✓ Added certificate status report to queue" -ForegroundColor Green
-        } else {
-            Write-Host "! Certificate status report already in queue" -ForegroundColor Yellow
-        }
-    }
     elseif ($selection -match '^\d+$') {
         $selNum = [int]$selection
-        if ($selNum -ge 1 -and $selNum -le 20) {
+        if ($selNum -ge 1 -and $selNum -le 23) {
             if ($selectedOptions -notcontains $selection) {
                 $selectedOptions += $selection
                 Write-Host "✓ Added option $selection to queue" -ForegroundColor Green
@@ -3321,7 +3447,7 @@ if ($selectedOptions.Count -gt 0) {
     
     foreach ($option in $selectedOptions) {
         $reportLabel = switch ($option) {
-            "C" { "Certificate Status" }
+            "23" { "Certificate CLI Report" }
             default { "Report $option" }
         }
 
@@ -3348,7 +3474,7 @@ if ($selectedOptions.Count -gt 0) {
             "18" { Get-CDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "19" { Get-LLDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "20" { Get-AccessPoints -headers $apiHeaders -dnaCenter $dnaCenter }
-            "C"  { Get-CertificateStatus -headers $apiHeaders -dnaCenter $dnaCenter }
+            "23" { Get-CertificateCliReport -headers $apiHeaders -dnaCenter $dnaCenter }
         }
     }
     
