@@ -545,6 +545,7 @@ function Show-Menu {
     Write-Host "    18. CDP Neighbors" -ForegroundColor White
     Write-Host "    19. LLDP Neighbors" -ForegroundColor White
     Write-Host "    20. Access Points" -ForegroundColor White
+    Write-Host "     C. Certificate Status (Hostname Certificates)" -ForegroundColor White
     Write-Host ""
     Write-Host "     0. Exit" -ForegroundColor Red
     Write-Host ""
@@ -664,6 +665,109 @@ function Get-SafeFileName {
     }
 
     return ($InputName -replace '[\\/:*?"<>|]', '_')
+}
+
+function Get-FirstPropertyValue {
+    param(
+        [object]$Object,
+        [string[]]$PropertyNames
+    )
+
+    if ($null -eq $Object -or -not $PropertyNames -or $PropertyNames.Count -eq 0) {
+        return $null
+    }
+
+    foreach ($propertyName in $PropertyNames) {
+        if ([string]::IsNullOrWhiteSpace($propertyName)) { continue }
+
+        $property = $Object.PSObject.Properties[$propertyName]
+        if ($null -eq $property) { continue }
+
+        $value = $property.Value
+        if ($null -eq $value) { continue }
+
+        if ($value -is [string]) {
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value
+            }
+        }
+        else {
+            return $value
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-ReadableTimestamp {
+    param(
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Value -is [DateTime]) {
+        return ($Value.ToUniversalTime().ToString("u"))
+    }
+
+    if ($Value -is [DateTimeOffset]) {
+        return ($Value.ToUniversalTime().ToString("u"))
+    }
+
+    if ($Value -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return $null
+        }
+
+        if ($Value -match '^-?\d+$') {
+            try {
+                return ConvertTo-ReadableTimestamp([long]$Value)
+            }
+            catch {
+                return $Value
+            }
+        }
+
+        try {
+            $parsed = Get-Date $Value
+            return ($parsed.ToUniversalTime().ToString("u"))
+        }
+        catch {
+            return $Value
+        }
+    }
+
+    if ($Value -is [long] -or $Value -is [int]) {
+        $numeric = [long]$Value
+
+        try {
+            if ($numeric -gt 9999999999) {
+                return ([DateTimeOffset]::FromUnixTimeMilliseconds($numeric)).UtcDateTime.ToString("u")
+            }
+            elseif ($numeric -gt 0) {
+                return ([DateTimeOffset]::FromUnixTimeSeconds($numeric)).UtcDateTime.ToString("u")
+            }
+        }
+        catch {
+            return $numeric.ToString()
+        }
+
+        return $numeric.ToString()
+    }
+
+    if ($Value -is [double] -or $Value -is [decimal]) {
+        try {
+            $rounded = [long][Math]::Round([double]$Value)
+            return ConvertTo-ReadableTimestamp($rounded)
+        }
+        catch {
+            return $Value.ToString()
+        }
+    }
+
+    return $Value.ToString()
 }
 
 function Get-ConfigText {
@@ -2192,6 +2296,26 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
+        $lastOnlineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+            'lastSeenTime',
+            'lastSeen',
+            'lastUpTime',
+            'lastConnectedTime',
+            'lastSuccessfulConnectionTime',
+            'lastSyncTime'
+        )
+
+        $lastOfflineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+            'lastDownTime',
+            'lastDisconnectTime',
+            'lastStateChangeTime',
+            'lastBootTime',
+            'lastContactTime'
+        )
+
+        $lastOnline = ConvertTo-ReadableTimestamp $lastOnlineValue
+        $lastOffline = ConvertTo-ReadableTimestamp $lastOfflineValue
+
         [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
             IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
@@ -2203,6 +2327,8 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
+            LastOnlineTime = if ($lastOnline) { $lastOnline } else { "N/A" }
+            LastOfflineTime = if ($lastOffline) { $lastOffline } else { "N/A" }
         }
     }
 
@@ -2969,6 +3095,124 @@ function Get-AccessPoints {
     }
 }
 
+# =====================================================
+# FUNCTION 21: Certificate Status by Hostname
+# =====================================================
+function Get-CertificateStatus {
+    param($headers, $dnaCenter)
+
+    Write-Host "`nFetching certificate status by hostname..." -ForegroundColor Yellow
+
+    $devices = Get-ActiveDevices
+    if (-not $devices) { return }
+
+    $certificateUri = "$dnaCenter/dna/intent/api/v1/certificate"
+    $certificateResponse = $null
+
+    try {
+        $certificateResponse = Invoke-RestMethod -Uri $certificateUri -Method Get -Headers $headers
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve certificate data: $($_.Exception.Message)" -ForegroundColor Red
+        return
+    }
+
+    $certificates = @()
+
+    if ($certificateResponse) {
+        if ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['response']) {
+            $certificates = @($certificateResponse.response)
+        }
+        elseif ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['certificates']) {
+            $certificates = @($certificateResponse.certificates)
+        }
+        elseif ($certificateResponse.PSObject -and $certificateResponse.PSObject.Properties['certificateDetails']) {
+            $certificates = @($certificateResponse.certificateDetails)
+        }
+        elseif ($certificateResponse -is [System.Collections.IEnumerable] -and -not ($certificateResponse -is [string])) {
+            $certificates = @($certificateResponse)
+        }
+        else {
+            $certificates = @($certificateResponse)
+        }
+    }
+
+    if ($certificates.Count -eq 1 -and $certificates[0].PSObject) {
+        if ($certificates[0].PSObject.Properties['certificates']) {
+            $certificates = @($certificates[0].certificates)
+        }
+        elseif ($certificates[0].PSObject.Properties['certificateDetails']) {
+            $certificates = @($certificates[0].certificateDetails)
+        }
+    }
+
+    $certificateLookup = @{}
+    foreach ($certificate in $certificates) {
+        if ($null -eq $certificate) { continue }
+
+        $name = Get-FirstPropertyValue -Object $certificate -PropertyNames @('name', 'certificateName', 'hostName', 'hostname')
+        if (-not $name) { continue }
+
+        $key = $name.ToString().ToLowerInvariant()
+        if (-not $certificateLookup.ContainsKey($key)) {
+            $certificateLookup[$key] = @()
+        }
+
+        $certificateLookup[$key] += $certificate
+    }
+
+    if ($certificateLookup.Count -eq 0) {
+        Write-Host "! No certificate records matched the expected format. Results will mark certificates as not found." -ForegroundColor Yellow
+    }
+
+    $certificateRows = foreach ($device in $devices) {
+        $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+        $hostnameKey = if ($hostname) { $hostname.ToLowerInvariant() } else { "" }
+
+        $matchedCertificate = $null
+        if ($hostnameKey -and $certificateLookup.ContainsKey($hostnameKey)) {
+            $matchedCertificate = $certificateLookup[$hostnameKey] | Select-Object -First 1
+        }
+
+        $certificateName = if ($matchedCertificate) {
+            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('name', 'certificateName', 'hostName', 'hostname')
+        } else {
+            $hostname
+        }
+
+        $statusValue = if ($matchedCertificate) {
+            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('status', 'certificateStatus', 'state', 'lifecycleState')
+        } else {
+            $null
+        }
+
+        $startValue = if ($matchedCertificate) {
+            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('validFrom', 'notBefore', 'startTime', 'startDate', 'validityStartTime')
+        } else {
+            $null
+        }
+
+        $endValue = if ($matchedCertificate) {
+            Get-FirstPropertyValue -Object $matchedCertificate -PropertyNames @('validTo', 'notAfter', 'endTime', 'endDate', 'validityEndTime')
+        } else {
+            $null
+        }
+
+        $startDate = ConvertTo-ReadableTimestamp $startValue
+        $endDate = ConvertTo-ReadableTimestamp $endValue
+
+        [PSCustomObject]@{
+            Hostname = $hostname
+            CertificateName = if ($certificateName) { $certificateName } else { "Unknown" }
+            CertificateStatus = if ($statusValue) { $statusValue } elseif ($matchedCertificate) { "Unknown" } else { "Not Found" }
+            StartDate = if ($startDate) { $startDate } else { "N/A" }
+            EndDate = if ($endDate) { $endDate } else { "N/A" }
+        }
+    }
+
+    Export-Report -Rows $certificateRows -BaseName "CertificateStatus" -RecordLabel "certificate records" | Out-Null
+}
+
 # Main script execution
 Show-Banner
 
@@ -3006,28 +3250,38 @@ $selectedOptions = @()
 do {
     Show-Menu
     $selection = Read-Host "Select option"
-    
+    if ($null -ne $selection) {
+        $selection = $selection.Trim()
+    }
+
+    $normalizedSelection = if ($selection) { $selection.ToUpper() } else { "" }
+
     if ($selection -eq "0") {
         break
     }
-    
-    if ($selection -eq "99") {
+    elseif ($selection -eq "99") {
         Select-Devices -headers $apiHeaders -dnaCenter $dnaCenter
         continue
     }
-    
+
     # Handle new advanced operations immediately (don't queue)
-    if ($selection -eq "21") {
+    elseif ($selection -eq "21") {
         Invoke-CommandRunner -headers $apiHeaders -dnaCenter $dnaCenter
         continue
     }
-    
-    if ($selection -eq "22") {
+    elseif ($selection -eq "22") {
         Invoke-PathTrace -headers $apiHeaders -dnaCenter $dnaCenter
         continue
     }
-    
-    if ($selection -match '^\d+$') {
+    elseif ($normalizedSelection -eq "C") {
+        if ($selectedOptions -notcontains "C") {
+            $selectedOptions += "C"
+            Write-Host "✓ Added certificate status report to queue" -ForegroundColor Green
+        } else {
+            Write-Host "! Certificate status report already in queue" -ForegroundColor Yellow
+        }
+    }
+    elseif ($selection -match '^\d+$') {
         $selNum = [int]$selection
         if ($selNum -ge 1 -and $selNum -le 20) {
             if ($selectedOptions -notcontains $selection) {
@@ -3039,7 +3293,8 @@ do {
         } else {
             Write-Host "✗ Invalid selection" -ForegroundColor Red
         }
-    } else {
+    }
+    else {
         Write-Host "✗ Invalid selection" -ForegroundColor Red
     }
     
@@ -3065,8 +3320,13 @@ if ($selectedOptions.Count -gt 0) {
     Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
     
     foreach ($option in $selectedOptions) {
-        Write-Host "`n--- Report $option ---" -ForegroundColor Cyan
-        
+        $reportLabel = switch ($option) {
+            "C" { "Certificate Status" }
+            default { "Report $option" }
+        }
+
+        Write-Host "`n--- $reportLabel ---" -ForegroundColor Cyan
+
         switch ($option) {
             "1"  { Get-NetworkDevicesBasic -headers $apiHeaders -dnaCenter $dnaCenter }
             "2"  { Get-NetworkDevicesDetailed -headers $apiHeaders -dnaCenter $dnaCenter }
@@ -3088,6 +3348,7 @@ if ($selectedOptions.Count -gt 0) {
             "18" { Get-CDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "19" { Get-LLDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "20" { Get-AccessPoints -headers $apiHeaders -dnaCenter $dnaCenter }
+            "C"  { Get-CertificateStatus -headers $apiHeaders -dnaCenter $dnaCenter }
         }
     }
     
