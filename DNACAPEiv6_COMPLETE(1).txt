@@ -1211,115 +1211,6 @@ function Parse-CertificateCliOutput {
     return $records
 }
 
-function Format-CertificateNameValue {
-    param(
-        [string]$Value
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "N/A"
-    }
-
-    $trimmed = $Value.Trim()
-    $cleaned = ($trimmed -replace '^(?i)(name|subject)\s*:\s*', '').Trim()
-    if ([string]::IsNullOrWhiteSpace($cleaned)) {
-        $cleaned = $trimmed
-    }
-
-    $patterns = @(
-        '(?<name>A\d{3}-B\d{2}-[A-Za-z]{2}-\d{2})',
-        '(?<name>A\d{4}-B\d{2}-[A-Za-z]{2}-\d{2})',
-        '(?<name>A\d{3}-B\d{2}-[A-Za-z]{2}-\d{3})'
-    )
-
-    foreach ($pattern in $patterns) {
-        $match = [regex]::Match($cleaned, $pattern)
-        if ($match.Success) {
-            return $match.Groups['name'].Value.ToUpper()
-        }
-    }
-
-    $fallbackMatch = [regex]::Match($cleaned, '(?<name>A\d+-B\d+-[A-Za-z]{2}-\d+)')
-    if ($fallbackMatch.Success) {
-        return $fallbackMatch.Groups['name'].Value.ToUpper()
-    }
-
-    return $cleaned.ToUpper()
-}
-
-function Format-CertificateCAValue {
-    param(
-        [string]$Value
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "N/A"
-    }
-
-    $trimmed = $Value.Trim().ToUpper()
-    $match = [regex]::Match($trimmed, 'CA[\s_-]?(?<digits>\d{1,})')
-    if ($match.Success) {
-        $digits = $match.Groups['digits'].Value
-        if ($digits.Length -lt 2) {
-            $digits = $digits.PadLeft(2, '0')
-        }
-        return "CA_{0}" -f $digits
-    }
-
-    return $trimmed
-}
-
-function Format-CertificateDateValue {
-    param(
-        [string]$Value
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "N/A"
-    }
-
-    $trimmed = $Value.Trim()
-    $cleaned = ($trimmed -replace '(?i)(not\s+valid\s+(before|after)|start\s+date|end\s+date|valid\s+from|valid\s+to)\s*:?', '').Trim()
-    if ([string]::IsNullOrWhiteSpace($cleaned)) {
-        $cleaned = $trimmed
-    }
-
-    $normalized = ($cleaned -replace '\s+', ' ').Trim()
-
-    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-    $formats = @(
-        "ddd MMM d HH:mm:ss yyyy",
-        "ddd MMM d HH:mm:ss 'UTC' yyyy",
-        "MMM d HH:mm:ss yyyy",
-        "MMM d yyyy HH:mm:ss",
-        "MMM d yyyy HH:mm:ss 'UTC'",
-        "yyyy MMM d HH:mm:ss",
-        "MM/dd/yyyy HH:mm:ss",
-        "MM/dd/yyyy",
-        "yyyy-MM-dd HH:mm:ss",
-        "yyyy-MM-ddTHH:mm:ssK"
-    )
-
-    foreach ($format in $formats) {
-        $parsedExact = [datetime]::MinValue
-        if ([datetime]::TryParseExact($normalized, $format, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$parsedExact)) {
-            return $parsedExact.ToString("yyyy-MM-dd HH:mm:ss")
-        }
-    }
-
-    $parsed = [datetime]::MinValue
-    if ([datetime]::TryParse($normalized, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$parsed)) {
-        return $parsed.ToString("yyyy-MM-dd HH:mm:ss")
-    }
-
-    $parsedDefault = [datetime]::MinValue
-    if ([datetime]::TryParse($normalized, [ref]$parsedDefault)) {
-        return $parsedDefault.ToString("yyyy-MM-dd HH:mm:ss")
-    }
-
-    return $normalized
-}
-
 function Get-TunnelInterfacesFromCli {
     param(
         [string[]]$Lines
@@ -3785,32 +3676,25 @@ function Get-CertificateCliReport {
             $selectedRecord = $certRecords[0]
         }
 
-        $u00LineValue = if ($selectedRecord -and $selectedRecord.U00Line) { $selectedRecord.U00Line } else { $null }
-        $caLineValue = if ($selectedRecord -and $selectedRecord.CALine) { $selectedRecord.CALine } else { $null }
-        $startLineValue = if ($selectedRecord -and $selectedRecord.StartLine) { $selectedRecord.StartLine } else { $null }
-        $endLineValue = if ($selectedRecord -and $selectedRecord.EndLine) { $selectedRecord.EndLine } else { $null }
-
-        $formattedName = Format-CertificateNameValue -Value $u00LineValue
-        $formattedCa = Format-CertificateCAValue -Value $caLineValue
-        $formattedStart = Format-CertificateDateValue -Value $startLineValue
-        $formattedEnd = Format-CertificateDateValue -Value $endLineValue
-
-        $deviceFamily = if ($device.family) { $device.family } elseif ($device.platformId) { $device.platformId } else { "N/A" }
+        $u00LineValue = if ($selectedRecord -and $selectedRecord.U00Line) { $selectedRecord.U00Line } else { "N/A" }
+        $caLineValue = if ($selectedRecord -and $selectedRecord.CALine) { $selectedRecord.CALine } else { "N/A" }
+        $startLineValue = if ($selectedRecord -and $selectedRecord.StartLine) { $selectedRecord.StartLine } else { "N/A" }
+        $endLineValue = if ($selectedRecord -and $selectedRecord.EndLine) { $selectedRecord.EndLine } else { "N/A" }
 
         $row = [ordered]@{
             Hostname        = $hostname
             ManagementIP    = $managementIp
             Reachability    = $reachability
             UpTime          = $upTime
-            DeviceFamily    = $deviceFamily
-            CertificateName = $formattedName
-            CertificateCA   = $formattedCa
-            StartDate       = $formattedStart
-            EndDate         = $formattedEnd
+            CertificateName = $u00LineValue
+            CertificateCA   = $caLineValue
+            StartDate       = $startLineValue
+            EndDate         = $endLineValue
         }
 
         if ($tunnelRecords.Count -gt 0) {
-            for ($tIndex = 0; $tIndex -lt $tunnelRecords.Count; $tIndex++) {
+            $maxTunnelColumns = [Math]::Min(5, $tunnelRecords.Count)
+            for ($tIndex = 0; $tIndex -lt $maxTunnelColumns; $tIndex++) {
                 $tunnel = $tunnelRecords[$tIndex]
                 $slot = $tIndex + 1
                 $statusValue = if ($tunnel.Status -and $tunnel.Protocol) {
@@ -3828,7 +3712,7 @@ function Get-CertificateCliReport {
 
                 $row["Tunnel${slot}"] = if ($tunnel.Interface) { $tunnel.Interface } else { "N/A" }
                 $row["Tunnel${slot}IP"] = if ($tunnel.IpAddress) { $tunnel.IpAddress } else { "N/A" }
-                $row["Tunnel${slot}Status"] = if ($statusValue) { $statusValue } else { "N/A" }
+                $row["Tunnel${slot}Status"] = $statusValue
             }
         }
         else {
