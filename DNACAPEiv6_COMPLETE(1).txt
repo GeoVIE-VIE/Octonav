@@ -1090,21 +1090,6 @@ function Parse-CertificateCliOutput {
         return $records
     }
 
-    function Get-LineValue {
-        param([string]$Text)
-
-        if ([string]::IsNullOrWhiteSpace($Text)) {
-            return $null
-        }
-
-        $trimmed = $Text.Trim()
-        if ($trimmed -match ':(.+)$') {
-            return ($Matches[1]).Trim()
-        }
-
-        return $trimmed
-    }
-
     $lineCount = $Lines.Count
 
     for ($index = 0; $index -lt $lineCount; $index++) {
@@ -1129,34 +1114,32 @@ function Parse-CertificateCliOutput {
         if (-not $matched) { continue }
 
         $matchLine = $line.Trim()
-        $certificateName = $matchLine
-        if ($matchLine -match '(?i)cn\s*=\s*([^,]+)') {
-            $certificateName = ($Matches[1]).Trim()
-        }
 
-        $contextLines = @($matchLine)
         $caLines = @()
-
         for ($offset = 1; $offset -le 8; $offset++) {
             $targetIndex = $index + $offset
             if ($targetIndex -ge $lineCount) { break }
             $contextValue = $Lines[$targetIndex]
             if ([string]::IsNullOrWhiteSpace($contextValue)) { continue }
-            $trimmedContext = $contextValue.Trim()
-            $caLines += $trimmedContext
-            $contextLines += $trimmedContext
+            $caLines += $contextValue.Trim()
         }
 
-        $startDate = $null
-        $endDate = $null
+        $caEntry = $null
+        foreach ($caLine in $caLines) {
+            if ($caLine -match '(?i)\bCA-') {
+                $caEntry = $caLine
+                break
+            }
+        }
+
+        $startDateLine = $null
+        $endDateLine = $null
 
         $startIndex = $index + 9
         if ($startIndex -lt $lineCount) {
             $startLine = $Lines[$startIndex]
             if (-not [string]::IsNullOrWhiteSpace($startLine)) {
-                $trimmedStart = $startLine.Trim()
-                $contextLines += $trimmedStart
-                $startDate = Get-LineValue -Text $trimmedStart
+                $startDateLine = $startLine.Trim()
             }
         }
 
@@ -1164,19 +1147,15 @@ function Parse-CertificateCliOutput {
         if ($endIndex -lt $lineCount) {
             $endLine = $Lines[$endIndex]
             if (-not [string]::IsNullOrWhiteSpace($endLine)) {
-                $trimmedEnd = $endLine.Trim()
-                $contextLines += $trimmedEnd
-                $endDate = Get-LineValue -Text $trimmedEnd
+                $endDateLine = $endLine.Trim()
             }
         }
 
         $records += [pscustomobject]@{
-            CertificateName = $certificateName
-            MatchLine       = $matchLine
-            StartDate       = $startDate
-            EndDate         = $endDate
-            CAContext       = $caLines
-            SourceLines     = $contextLines
+            U00Line   = $matchLine
+            CALine    = $caEntry
+            StartLine = $startDateLine
+            EndLine   = $endDateLine
         }
     }
 
@@ -3608,18 +3587,6 @@ function Get-CertificateCliReport {
             Write-Host "    ! No certificate entries matched filters on $hostname" -ForegroundColor Yellow
         }
 
-        if ($certRecords.Count -eq 0) {
-            $sourceLines = if ($certLines.Count -gt 0) { $certLines } else { @() }
-            $certRecords = @([pscustomobject]@{
-                CertificateName = "No matching certificate"
-                MatchLine       = $null
-                StartDate       = $null
-                EndDate         = $null
-                CAContext       = @()
-                SourceLines     = $sourceLines
-            })
-        }
-
         $tunnelResult = $null
         if ($device.id -and $tunnelLookup.ContainsKey($device.id)) {
             $tunnelResult = $tunnelLookup[$device.id]
@@ -3637,74 +3604,70 @@ function Get-CertificateCliReport {
             Write-Host $message -ForegroundColor Yellow
         }
 
-        $tunnelSummary = if ($tunnelRecords.Count -gt 0) { ($tunnelRecords | ForEach-Object { $_.Raw }) -join '; ' } else { "None" }
-        $filtersApplied = $filters -join ', '
-
-        foreach ($record in $certRecords) {
-            $sourceInfo = if ($record.SourceLines -and $record.SourceLines.Count -gt 0) {
-                $record.SourceLines -join ' | '
-            } else {
-                "N/A"
-            }
-
-            $caInfo = if ($record.CAContext -and $record.CAContext.Count -gt 0) {
-                $record.CAContext -join ' | '
-            } else {
-                "N/A"
-            }
-
-            $certificateLine = if ($record.MatchLine) { $record.MatchLine } else { "N/A" }
-            $certificateName = if ($record.CertificateName) { $record.CertificateName } else { "N/A" }
-            $startDateValue = if ($record.StartDate) { $record.StartDate } else { "N/A" }
-            $endDateValue = if ($record.EndDate) { $record.EndDate } else { "N/A" }
-
-            $row = [ordered]@{
-                Hostname              = $hostname
-                ManagementIP          = $managementIp
-                Reachability          = $reachability
-                UpTime                = $upTime
-                CertificateLine       = $certificateLine
-                CertificateName       = $certificateName
-                CertificateCA         = $caInfo
-                CertificateStartDate  = $startDateValue
-                CertificateEndDate    = $endDateValue
-                CertificateSourceData = $sourceInfo
-                FiltersApplied        = $filtersApplied
-                TunnelInterfaces      = $tunnelSummary
-            }
-
-            $maxTunnelColumns = if ($tunnelRecords.Count -gt 0) { [Math]::Min(5, $tunnelRecords.Count) } else { 0 }
-
-            if ($maxTunnelColumns -eq 0) {
-                $row["Tunnel1"] = "None"
-                $row["Tunnel1IP"] = "N/A"
-                $row["Tunnel1Status"] = "N/A"
-            }
-            else {
-                for ($tIndex = 0; $tIndex -lt $maxTunnelColumns; $tIndex++) {
-                    $tunnel = $tunnelRecords[$tIndex]
-                    $slot = $tIndex + 1
-                    $statusValue = if ($tunnel.Status -and $tunnel.Protocol) {
-                        "$($tunnel.Status) / $($tunnel.Protocol)"
-                    }
-                    elseif ($tunnel.Status) {
-                        $tunnel.Status
-                    }
-                    elseif ($tunnel.Protocol) {
-                        $tunnel.Protocol
-                    }
-                    else {
-                        "N/A"
-                    }
-
-                    $row["Tunnel${slot}"] = if ($tunnel.Interface) { $tunnel.Interface } else { "N/A" }
-                    $row["Tunnel${slot}IP"] = if ($tunnel.IpAddress) { $tunnel.IpAddress } else { "N/A" }
-                    $row["Tunnel${slot}Status"] = $statusValue
-                }
-            }
-
-            $reportRows += [PSCustomObject]$row
+        if ($certRecords.Count -eq 0) {
+            $certRecords = @([pscustomobject]@{
+                U00Line   = $null
+                CALine    = $null
+                StartLine = $null
+                EndLine   = $null
+            })
         }
+
+        $selectedRecord = $null
+        $recordsWithU00 = @($certRecords | Where-Object { $_.U00Line })
+        if ($recordsWithU00.Count -gt 0) {
+            $selectedRecord = $recordsWithU00[0]
+        }
+        elseif ($certRecords.Count -gt 0) {
+            $selectedRecord = $certRecords[0]
+        }
+
+        $u00LineValue = if ($selectedRecord -and $selectedRecord.U00Line) { $selectedRecord.U00Line } else { "N/A" }
+        $caLineValue = if ($selectedRecord -and $selectedRecord.CALine) { $selectedRecord.CALine } else { "N/A" }
+        $startLineValue = if ($selectedRecord -and $selectedRecord.StartLine) { $selectedRecord.StartLine } else { "N/A" }
+        $endLineValue = if ($selectedRecord -and $selectedRecord.EndLine) { $selectedRecord.EndLine } else { "N/A" }
+
+        $row = [ordered]@{
+            Hostname     = $hostname
+            ManagementIP = $managementIp
+            Reachability = $reachability
+            UpTime       = $upTime
+            CALine       = $caLineValue
+            U00Line      = $u00LineValue
+            StartDate    = $startLineValue
+            EndDate      = $endLineValue
+        }
+
+        if ($tunnelRecords.Count -gt 0) {
+            $maxTunnelColumns = [Math]::Min(5, $tunnelRecords.Count)
+            for ($tIndex = 0; $tIndex -lt $maxTunnelColumns; $tIndex++) {
+                $tunnel = $tunnelRecords[$tIndex]
+                $slot = $tIndex + 1
+                $statusValue = if ($tunnel.Status -and $tunnel.Protocol) {
+                    "{0}/{1}" -f $tunnel.Status, $tunnel.Protocol
+                }
+                elseif ($tunnel.Status) {
+                    $tunnel.Status
+                }
+                elseif ($tunnel.Protocol) {
+                    $tunnel.Protocol
+                }
+                else {
+                    "N/A"
+                }
+
+                $row["Tunnel${slot}"] = if ($tunnel.Interface) { $tunnel.Interface } else { "N/A" }
+                $row["Tunnel${slot}IP"] = if ($tunnel.IpAddress) { $tunnel.IpAddress } else { "N/A" }
+                $row["Tunnel${slot}Status"] = $statusValue
+            }
+        }
+        else {
+            $row["Tunnel1"] = "N/A"
+            $row["Tunnel1IP"] = "N/A"
+            $row["Tunnel1Status"] = "N/A"
+        }
+
+        $reportRows += [PSCustomObject]$row
     }
 
     Export-Report -Rows $reportRows -BaseName "CertificateCliReport" -RecordLabel "certificate entries" | Out-Null
