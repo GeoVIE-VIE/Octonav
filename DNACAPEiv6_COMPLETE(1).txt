@@ -197,15 +197,19 @@ function Invoke-DnaJsonRequest {
     }
 
     $response = Invoke-WebRequest @params
-    if ($response -and $response.Content) {
-        try {
-            return $response.Content | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-            throw "Failed to parse JSON response from $Uri: $($_.Exception.Message)"
-        }
+    if (-not $response) { return $null }
+
+    # Handle HTTP 204 (No Content) or blank payloads gracefully
+    if ($response.StatusCode -eq 204 -or [string]::IsNullOrWhiteSpace($response.Content)) {
+        return $null
     }
 
-    return $null
+    try {
+        return $response.Content | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Warning ("Failed to parse JSON response from {0}: {1}" -f $Uri, $_.Exception.Message)
+        return $null
+    }
 }
 
 # Helper: Convert DNA Center timestamps to readable local time strings
