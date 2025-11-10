@@ -3725,7 +3725,12 @@ function Get-CertificateCliReport {
         $reportLookup[$hostname] = [PSCustomObject]$row
     }
 
-    $reportRows = foreach ($host in $hostnameOrder) { $reportLookup[$host] }
+    $reportRows = @()
+    foreach ($hostnameKey in $hostnameOrder) {
+        if ($reportLookup.ContainsKey($hostnameKey)) {
+            $reportRows += $reportLookup[$hostnameKey]
+        }
+    }
 
     Export-Report -Rows $reportRows -BaseName "CertificateCliReport" -RecordLabel "certificate entries" | Out-Null
 }
