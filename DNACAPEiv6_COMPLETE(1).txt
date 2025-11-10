@@ -61,6 +61,12 @@ if (-not (Test-Path $outputDir)) {
 $global:selectedDevices = @()
 $global:allDevices = @()
 
+# Cache structures for device last contact lookups
+$script:DeviceLastContactCache = @{}
+$script:DeviceLastContactDetailFailures = @{}
+$script:DeviceLastContactIndex = @{}
+$script:DeviceLastContactIndexInitialized = $false
+
 # ASCII Art Banner
 function Show-Banner {
     Clear-Host
@@ -162,6 +168,46 @@ function Wait-ForTask {
     return $taskResponse.response
 }
 
+# Helper: invoke DNA Center APIs with a controllable timeout and JSON response parsing
+function Invoke-DnaJsonRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [string]$Method = "Get",
+        [hashtable]$Headers,
+        [object]$Body,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $params = @{
+        Uri        = $Uri
+        Method     = $Method
+        Headers    = $Headers
+        TimeoutSec = $TimeoutSeconds
+        ErrorAction = 'Stop'
+    }
+
+    $invokeWebRequest = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+    if ($invokeWebRequest -and $invokeWebRequest.Parameters.ContainsKey('UseBasicParsing')) {
+        $params['UseBasicParsing'] = $true
+    }
+
+    if ($PSBoundParameters.ContainsKey('Body') -and $Body) {
+        $params['Body'] = $Body
+    }
+
+    $response = Invoke-WebRequest @params
+    if ($response -and $response.Content) {
+        try {
+            return $response.Content | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "Failed to parse JSON response from $Uri: $($_.Exception.Message)"
+        }
+    }
+
+    return $null
+}
+
 # Helper: Convert DNA Center timestamps to readable local time strings
 function Convert-DeviceTimestampToLocalString {
     param(
@@ -216,6 +262,136 @@ function Convert-DeviceTimestampToLocalString {
     }
 }
 
+function Find-DeviceTimestampField {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Source,
+        [string[]]$FieldPriority
+    )
+
+    if (-not $Source) { return $null }
+    if (-not $FieldPriority -or $FieldPriority.Count -eq 0) { return $null }
+
+    foreach ($field in $FieldPriority) {
+        if ($Source.PSObject.Properties[$field] -and $Source.$field) {
+            $converted = Convert-DeviceTimestampToLocalString -Timestamp $Source.$field -RequireParsable
+            if ($converted) {
+                return $converted
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-DeviceIdentifierCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Device
+    )
+
+    $candidates = @()
+    foreach ($field in @('id', 'instanceUuid', 'deviceUuid', 'deviceId', 'macAddress', 'serialNumber', 'hostname', 'hostName', 'deviceName', 'managementIpAddress')) {
+        if ($Device.PSObject.Properties[$field] -and $Device.$field) {
+            $rawValue = $Device.$field
+            if ($rawValue -is [System.Collections.IEnumerable] -and -not ($rawValue -is [string])) {
+                foreach ($item in $rawValue) {
+                    $value = $item.ToString()
+                    if ($value -and -not ($candidates -contains $value)) {
+                        $candidates += $value
+                    }
+                }
+            } else {
+                $value = $rawValue.ToString()
+                if ($value -and -not ($candidates -contains $value)) {
+                    $candidates += $value
+                }
+            }
+        }
+    }
+
+    return $candidates
+}
+
+function Initialize-DeviceLastContactIndex {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter
+    )
+
+    if ($script:DeviceLastContactIndexInitialized) { return }
+
+    $script:DeviceLastContactIndex = @{}
+
+    if (-not ($Headers -and $DnaCenter)) {
+        $script:DeviceLastContactIndexInitialized = $true
+        return
+    }
+
+    try {
+        $timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $healthUrl = "$DnaCenter/dna/intent/api/v1/device-health?timestamp=$timestampMs"
+        $healthResponse = Invoke-DnaJsonRequest -Uri $healthUrl -Method Get -Headers $Headers -TimeoutSeconds 30
+
+        $records = @()
+        if ($healthResponse) {
+            if ($healthResponse.response) { $records += $healthResponse.response }
+            if ($healthResponse.devices) { $records += $healthResponse.devices }
+            if ($healthResponse.data) { $records += $healthResponse.data }
+            if ($healthResponse.items) { $records += $healthResponse.items }
+        }
+
+        foreach ($record in $records) {
+            $timestamp = Find-DeviceTimestampField -Source $record -FieldPriority @(
+                'lastContactTime',
+                'lastContact',
+                'contactTime',
+                'lastResponseTime',
+                'lastSeenTime',
+                'lastSeen',
+                'lastSuccessfulSyncTime',
+                'lastSuccessfulPingTime',
+                'lastSyncTime',
+                'lastUpdateTime',
+                'lastUpdated',
+                'time'
+            )
+
+            if (-not $timestamp) { continue }
+
+            $keys = @()
+            foreach ($field in @('deviceUuid', 'id', 'deviceId', 'instanceUuid', 'macAddress', 'serialNumber', 'hostName', 'deviceName', 'managementIpAddress')) {
+                if ($record.PSObject.Properties[$field] -and $record.$field) {
+                    $rawKey = $record.$field
+                    if ($rawKey -is [System.Collections.IEnumerable] -and -not ($rawKey -is [string])) {
+                        foreach ($item in $rawKey) {
+                            $keyValue = $item.ToString()
+                            if ($keyValue -and -not ($keys -contains $keyValue)) {
+                                $keys += $keyValue
+                            }
+                        }
+                    } else {
+                        $keyValue = $rawKey.ToString()
+                        if ($keyValue -and -not ($keys -contains $keyValue)) {
+                            $keys += $keyValue
+                        }
+                    }
+                }
+            }
+
+            foreach ($key in $keys) {
+                if (-not $script:DeviceLastContactIndex.ContainsKey($key)) {
+                    $script:DeviceLastContactIndex[$key] = $timestamp
+                }
+            }
+        }
+    } catch {
+        Write-Verbose ("Device health lookup failed: {0}" -f $_.Exception.Message)
+    } finally {
+        $script:DeviceLastContactIndexInitialized = $true
+    }
+}
+
 function Get-DeviceLastContactTimestamp {
     param(
         [Parameter(Mandatory = $true)]
@@ -225,20 +401,27 @@ function Get-DeviceLastContactTimestamp {
     )
 
     $primaryFields = @(
-        "lastSuccessfulSyncTime",
-        "lastSuccessfulPingTime",
-        "lastSyncTime",
-        "lastCommunicationTime",
-        "lastStateChangeTime",
-        "lastSeenTime",
-        "lastSeen"
+        'lastSuccessfulSyncTime',
+        'lastSuccessfulPingTime',
+        'lastSyncTime',
+        'lastCommunicationTime',
+        'lastStateChangeTime',
+        'lastContactTime',
+        'lastContact',
+        'lastResponseTime',
+        'contactTime',
+        'lastSeenTime',
+        'lastSeen'
     )
 
-    foreach ($field in $primaryFields) {
-        if ($Device.PSObject.Properties[$field] -and $Device.$field) {
-            $converted = Convert-DeviceTimestampToLocalString -Timestamp $Device.$field -RequireParsable
-            if ($converted) {
-                return $converted
+    $directTimestamp = Find-DeviceTimestampField -Source $Device -FieldPriority $primaryFields
+    if ($directTimestamp) { return $directTimestamp }
+
+    Initialize-DeviceLastContactIndex -Headers $Headers -DnaCenter $DnaCenter
+    if ($script:DeviceLastContactIndex -and $script:DeviceLastContactIndex.Count -gt 0) {
+        foreach ($candidateId in Get-DeviceIdentifierCandidates -Device $Device) {
+            if ($script:DeviceLastContactIndex.ContainsKey($candidateId)) {
+                return $script:DeviceLastContactIndex[$candidateId]
             }
         }
     }
@@ -247,55 +430,70 @@ function Get-DeviceLastContactTimestamp {
         return $null
     }
 
+    if ($script:DeviceLastContactCache.ContainsKey($Device.id)) {
+        return $script:DeviceLastContactCache[$Device.id]
+    }
+
+    if ($script:DeviceLastContactDetailFailures.ContainsKey($Device.id)) {
+        return $null
+    }
+
     try {
         $timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $detailUrl = "$DnaCenter/dna/intent/api/v1/device-detail?timestamp=$timestampMs&searchBy=$($Device.id)&identifier=uuid"
-        $detailResponse = Invoke-RestMethod -Uri $detailUrl -Method Get -Headers $Headers
+        $detailResponse = Invoke-DnaJsonRequest -Uri $detailUrl -Method Get -Headers $Headers -TimeoutSeconds 20
 
+        $detailTimestamp = $null
         $detailCandidates = @()
         if ($detailResponse.deviceDetails) { $detailCandidates += $detailResponse.deviceDetails }
         if ($detailResponse.response) { $detailCandidates += $detailResponse.response }
 
         foreach ($candidate in $detailCandidates) {
-            foreach ($field in @(
-                "lastSuccessfulSyncTime",
-                "lastSuccessfulPingTime",
-                "lastSyncTime",
-                "lastStateChangeTime",
-                "lastSeenTime",
-                "lastSeen"
-            )) {
-                if ($candidate -and $candidate.PSObject.Properties[$field] -and $candidate.$field) {
-                    $converted = Convert-DeviceTimestampToLocalString -Timestamp $candidate.$field -RequireParsable
-                    if ($converted) {
-                        return $converted
-                    }
+            $detailTimestamp = Find-DeviceTimestampField -Source $candidate -FieldPriority @(
+                'lastContactTime',
+                'lastContact',
+                'contactTime',
+                'lastResponseTime',
+                'lastSeenTime',
+                'lastSeen',
+                'lastSuccessfulSyncTime',
+                'lastSuccessfulPingTime',
+                'lastSyncTime',
+                'lastStateChangeTime'
+            )
+
+            if (-not $detailTimestamp -and $candidate -and $candidate.PSObject.Properties['reachabilityDetails'] -and $candidate.reachabilityDetails) {
+                foreach ($detail in $candidate.reachabilityDetails) {
+                    $detailTimestamp = Find-DeviceTimestampField -Source $detail -FieldPriority @(
+                        'lastContactTime',
+                        'lastContact',
+                        'contactTime',
+                        'lastResponseTime',
+                        'lastSeenTime',
+                        'lastSeen',
+                        'lastSuccessfulSyncTime',
+                        'lastSuccessfulPingTime',
+                        'lastSyncTime',
+                        'lastStateChangeTime',
+                        'time'
+                    )
+
+                    if ($detailTimestamp) { break }
                 }
             }
 
-            if ($candidate -and $candidate.PSObject.Properties["reachabilityDetails"] -and $candidate.reachabilityDetails) {
-                foreach ($detail in $candidate.reachabilityDetails) {
-                    foreach ($field in @(
-                        "lastSuccessfulSyncTime",
-                        "lastSuccessfulPingTime",
-                        "lastSyncTime",
-                        "lastStateChangeTime",
-                        "time"
-                    )) {
-                        if ($detail -and $detail.PSObject.Properties[$field] -and $detail.$field) {
-                            $converted = Convert-DeviceTimestampToLocalString -Timestamp $detail.$field -RequireParsable
-                            if ($converted) {
-                                return $converted
-                            }
-                        }
-                    }
-                }
-            }
+            if ($detailTimestamp) { break }
+        }
+
+        if ($detailTimestamp) {
+            $script:DeviceLastContactCache[$Device.id] = $detailTimestamp
+            return $detailTimestamp
         }
     } catch {
         Write-Verbose ("Failed to retrieve detailed timestamp for {0}: {1}" -f $Device.hostname, $_.Exception.Message)
     }
 
+    $script:DeviceLastContactDetailFailures[$Device.id] = $true
     return $null
 }
 
@@ -408,53 +606,15 @@ function Load-AllDevices {
     Write-Host "Loading network devices..." -ForegroundColor Yellow
 
     try {
-        $pageSize = 500
-        $offset = 1
-        $pagesFetched = 0
-        $aggregatedDevices = [System.Collections.Generic.List[object]]::new()
-
-        while ($true) {
-            $uri = "$dnaCenter/dna/intent/api/v1/network-device?offset=$offset&limit=$pageSize"
-            $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
-
-            $pageDevices = @()
-            if ($response) {
-                if ($response.PSObject -and $response.PSObject.Properties['response']) {
-                    $pageDevices = $response.response
-                }
-                elseif ($response -is [System.Collections.IEnumerable] -and -not ($response -is [string])) {
-                    $pageDevices = $response
-                }
-            }
-
-            $retrievedCount = if ($pageDevices) { $pageDevices.Count } else { 0 }
-
-            if ($retrievedCount -le 0) {
-                if ($pagesFetched -eq 0) {
-                    Write-Host "✗ No devices returned from API" -ForegroundColor Red
-                }
-                break
-            }
-
-            foreach ($device in $pageDevices) {
-                $aggregatedDevices.Add($device)
-            }
-
-            $pagesFetched++
-            Write-Host "  → Retrieved $retrievedCount device(s) from page $pagesFetched" -ForegroundColor Cyan
-
-            if ($retrievedCount -lt $pageSize) {
-                break
-            }
-
-            $offset += $pageSize
-        }
-
-        if ($aggregatedDevices.Count -gt 0) {
-            $global:allDevices = $aggregatedDevices.ToArray()
-            $global:selectedDevices = @()
-            $pageSummary = if ($pagesFetched -gt 1) { " across $pagesFetched page(s)" } else { "" }
-            Write-Host "✓ Loaded $($global:allDevices.Count) devices$pageSummary" -ForegroundColor Green
+        $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/network-device" -Method Get -Headers $headers
+        
+        if ($response -and $response.response) {
+            $global:allDevices = $response.response
+            $script:DeviceLastContactCache = @{}
+            $script:DeviceLastContactDetailFailures = @{}
+            $script:DeviceLastContactIndex = @{}
+            $script:DeviceLastContactIndexInitialized = $false
+            Write-Host "✓ Loaded $($global:allDevices.Count) devices" -ForegroundColor Green
             Start-Sleep -Milliseconds 500
             return $true
         }
