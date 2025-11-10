@@ -1,4 +1,4 @@
-﻿# DNA Center API Interactive Menu Script with Device Filtering
+# DNA Center API Interactive Menu Script with Device Filtering
 # Author: In Memory of Zesty.PS1
 
 # Allow script to run
@@ -9,8 +9,8 @@ $ErrorActionPreference = "Continue"
 
 # DNA Center URLs - UPDATE THESE WITH YOUR ENVIRONMENT DETAILS
 $servers = @(
-    [pscustomobject]@{ Name = "Primary DNA Center"; Url = "Test2" },
-    [pscustomobject]@{ Name = "Secondary DNA Center"; Url = "Test1" }
+    [pscustomobject]@{ Name = "NRFK DNA Center"; Url = "test" },
+    [pscustomobject]@{ Name = "PRLH DNA Center"; Url = "test2" }
 )
 
 function Select-DnaCenterServer {
