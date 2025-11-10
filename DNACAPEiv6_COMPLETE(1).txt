@@ -216,6 +216,89 @@ function Convert-DeviceTimestampToLocalString {
     }
 }
 
+function Get-DeviceLastContactTimestamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Device,
+        [hashtable]$Headers,
+        [string]$DnaCenter
+    )
+
+    $primaryFields = @(
+        "lastSuccessfulSyncTime",
+        "lastSuccessfulPingTime",
+        "lastSyncTime",
+        "lastCommunicationTime",
+        "lastStateChangeTime",
+        "lastSeenTime",
+        "lastSeen"
+    )
+
+    foreach ($field in $primaryFields) {
+        if ($Device.PSObject.Properties[$field] -and $Device.$field) {
+            $converted = Convert-DeviceTimestampToLocalString -Timestamp $Device.$field -RequireParsable
+            if ($converted) {
+                return $converted
+            }
+        }
+    }
+
+    if (-not ($Headers -and $DnaCenter) -or -not $Device.id) {
+        return $null
+    }
+
+    try {
+        $timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $detailUrl = "$DnaCenter/dna/intent/api/v1/device-detail?timestamp=$timestampMs&searchBy=$($Device.id)&identifier=uuid"
+        $detailResponse = Invoke-RestMethod -Uri $detailUrl -Method Get -Headers $Headers
+
+        $detailCandidates = @()
+        if ($detailResponse.deviceDetails) { $detailCandidates += $detailResponse.deviceDetails }
+        if ($detailResponse.response) { $detailCandidates += $detailResponse.response }
+
+        foreach ($candidate in $detailCandidates) {
+            foreach ($field in @(
+                "lastSuccessfulSyncTime",
+                "lastSuccessfulPingTime",
+                "lastSyncTime",
+                "lastStateChangeTime",
+                "lastSeenTime",
+                "lastSeen"
+            )) {
+                if ($candidate -and $candidate.PSObject.Properties[$field] -and $candidate.$field) {
+                    $converted = Convert-DeviceTimestampToLocalString -Timestamp $candidate.$field -RequireParsable
+                    if ($converted) {
+                        return $converted
+                    }
+                }
+            }
+
+            if ($candidate -and $candidate.PSObject.Properties["reachabilityDetails"] -and $candidate.reachabilityDetails) {
+                foreach ($detail in $candidate.reachabilityDetails) {
+                    foreach ($field in @(
+                        "lastSuccessfulSyncTime",
+                        "lastSuccessfulPingTime",
+                        "lastSyncTime",
+                        "lastStateChangeTime",
+                        "time"
+                    )) {
+                        if ($detail -and $detail.PSObject.Properties[$field] -and $detail.$field) {
+                            $converted = Convert-DeviceTimestampToLocalString -Timestamp $detail.$field -RequireParsable
+                            if ($converted) {
+                                return $converted
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {
+        Write-Verbose ("Failed to retrieve detailed timestamp for {0}: {1}" -f $Device.hostname, $_.Exception.Message)
+    }
+
+    return $null
+}
+
 # Function to authenticate and get token
 function Get-DNACToken {
     param (
@@ -2246,27 +2329,7 @@ function Get-NetworkDevicesBasic {
 
     $deviceList = @()
     foreach ($device in $devices) {
-        $lastSeenDisplay = $null
-        $lastSeenProperties = @(
-            "lastSuccessfulPingTime",
-            "lastSuccessfulSyncTime",
-            "lastSyncTime",
-            "lastCommunicationTime",
-            "lastUpdated",
-            "lastUpdateTime",
-            "lastSeenTime",
-            "lastSeen"
-        )
-        foreach ($property in $lastSeenProperties) {
-            if ($device.PSObject.Properties[$property] -and $device.$property) {
-                $candidate = $device.$property
-                $converted = Convert-DeviceTimestampToLocalString -Timestamp $candidate -RequireParsable
-                if ($converted) {
-                    $lastSeenDisplay = $converted
-                    break
-                }
-            }
-        }
+        $lastSeenDisplay = Get-DeviceLastContactTimestamp -Device $device -Headers $headers -DnaCenter $dnaCenter
 
         $deviceList += [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
