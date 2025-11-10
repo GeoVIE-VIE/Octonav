@@ -1115,6 +1115,24 @@ function Parse-CertificateCliOutput {
 
         $matchLine = $line.Trim()
 
+        $certificateName = $matchLine
+        $nameMatch = [regex]::Match($matchLine, '(?i)\bname\s*:\s*(?<value>.+)')
+        if ($nameMatch.Success) {
+            $certificateName = $nameMatch.Groups['value'].Value.Trim()
+        }
+        else {
+            $cnMatch = [regex]::Match($matchLine, '(?i)\bCN\s*=\s*(?<value>[^,]+)')
+            if ($cnMatch.Success -and ($cnMatch.Groups['value'].Value -match '(?i)U00')) {
+                $certificateName = $cnMatch.Groups['value'].Value.Trim()
+            }
+            else {
+                $u00Match = [regex]::Match($matchLine, '(?<value>\S*U00\S*)')
+                if ($u00Match.Success) {
+                    $certificateName = $u00Match.Groups['value'].Value.Trim()
+                }
+            }
+        }
+
         $caLines = @()
         for ($offset = 1; $offset -le 8; $offset++) {
             $targetIndex = $index + $offset
@@ -1126,9 +1144,40 @@ function Parse-CertificateCliOutput {
 
         $caEntry = $null
         foreach ($caLine in $caLines) {
-            if ($caLine -match '(?i)\bCA-') {
-                $caEntry = $caLine
+            $trimmedCaLine = $caLine.Trim()
+
+            $issuerMatch = [regex]::Match($trimmedCaLine, '(?i)\bissuer\s*:\s*(?<value>.+)')
+            if ($issuerMatch.Success) {
+                $issuerValue = $issuerMatch.Groups['value'].Value.Trim()
+                $caToken = [regex]::Match($issuerValue, '(?i)CA[-_A-Za-z0-9]+')
+                if ($caToken.Success) {
+                    $caEntry = $caToken.Value.Trim()
+                    break
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($issuerValue)) {
+                    $caEntry = $issuerValue
+                    break
+                }
+            }
+
+            $caTokenDirect = [regex]::Match($trimmedCaLine, '(?i)CA[-_A-Za-z0-9]+')
+            if ($caTokenDirect.Success) {
+                $caEntry = $caTokenDirect.Value.Trim()
                 break
+            }
+
+            if (-not $caEntry -and -not [string]::IsNullOrWhiteSpace($trimmedCaLine)) {
+                $caEntry = $trimmedCaLine
+            }
+        }
+
+        if (-not $caEntry) {
+            foreach ($caLine in $caLines) {
+                if (-not [string]::IsNullOrWhiteSpace($caLine)) {
+                    $caEntry = $caLine.Trim()
+                    break
+                }
             }
         }
 
@@ -1152,7 +1201,7 @@ function Parse-CertificateCliOutput {
         }
 
         $records += [pscustomobject]@{
-            U00Line   = $matchLine
+            U00Line   = $certificateName
             CALine    = $caEntry
             StartLine = $startDateLine
             EndLine   = $endDateLine
@@ -3540,7 +3589,8 @@ function Get-CertificateCliReport {
     if (-not $devices) { return }
 
     $filters = @("U00")
-    $reportRows = @()
+    $reportLookup = @{}
+    $hostnameOrder = @()
 
     $certResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show crypto pki certificate" -TimeoutSeconds 420 -ActivityLabel "Certificates"
     $tunnelResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show ip interface brief" -TimeoutSeconds 300 -ActivityLabel "Interfaces"
@@ -3561,6 +3611,10 @@ function Get-CertificateCliReport {
 
     foreach ($device in $devices) {
         $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+        if ($reportLookup.ContainsKey($hostname)) {
+            Write-Host "    ! Duplicate hostname detected ($hostname). Skipping additional entry." -ForegroundColor Yellow
+            continue
+        }
         Write-Host "  Processing: $hostname" -ForegroundColor Gray
 
         $managementIp = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
@@ -3628,14 +3682,14 @@ function Get-CertificateCliReport {
         $endLineValue = if ($selectedRecord -and $selectedRecord.EndLine) { $selectedRecord.EndLine } else { "N/A" }
 
         $row = [ordered]@{
-            Hostname     = $hostname
-            ManagementIP = $managementIp
-            Reachability = $reachability
-            UpTime       = $upTime
-            CALine       = $caLineValue
-            U00Line      = $u00LineValue
-            StartDate    = $startLineValue
-            EndDate      = $endLineValue
+            Hostname        = $hostname
+            ManagementIP    = $managementIp
+            Reachability    = $reachability
+            UpTime          = $upTime
+            CertificateName = $u00LineValue
+            CertificateCA   = $caLineValue
+            StartDate       = $startLineValue
+            EndDate         = $endLineValue
         }
 
         if ($tunnelRecords.Count -gt 0) {
@@ -3667,8 +3721,11 @@ function Get-CertificateCliReport {
             $row["Tunnel1Status"] = "N/A"
         }
 
-        $reportRows += [PSCustomObject]$row
+        $hostnameOrder += $hostname
+        $reportLookup[$hostname] = [PSCustomObject]$row
     }
+
+    $reportRows = foreach ($host in $hostnameOrder) { $reportLookup[$host] }
 
     Export-Report -Rows $reportRows -BaseName "CertificateCliReport" -RecordLabel "certificate entries" | Out-Null
 }
