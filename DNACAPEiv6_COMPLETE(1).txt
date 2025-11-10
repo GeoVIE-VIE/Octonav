@@ -770,6 +770,40 @@ function ConvertTo-ReadableTimestamp {
     return $Value.ToString()
 }
 
+function Get-TaskFileId {
+    param(
+        [psobject]$TaskInfo
+    )
+
+    if (-not $TaskInfo) {
+        return $null
+    }
+
+    if ($TaskInfo.fileId) {
+        return $TaskInfo.fileId
+    }
+
+    if ($TaskInfo.additionalStatusURL -and $TaskInfo.additionalStatusURL -match '/file/([a-f0-9\-]+)') {
+        return $Matches[1]
+    }
+
+    if ($TaskInfo.progress) {
+        try {
+            $progressObj = $TaskInfo.progress | ConvertFrom-Json
+            if ($progressObj.fileId) {
+                return $progressObj.fileId
+            }
+        }
+        catch {
+            if ($TaskInfo.progress -match '"fileId"\s*:\s*"([^"]+)"') {
+                return $Matches[1]
+            }
+        }
+    }
+
+    return $null
+}
+
 function Invoke-DeviceCliCommand {
     param(
         [hashtable]$Headers,
@@ -811,27 +845,7 @@ function Invoke-DeviceCliCommand {
         return $null
     }
 
-    $fileId = $null
-    if ($taskInfo.fileId) {
-        $fileId = $taskInfo.fileId
-    }
-    elseif ($taskInfo.additionalStatusURL -and $taskInfo.additionalStatusURL -match '/file/([a-f0-9\-]+)') {
-        $fileId = $Matches[1]
-    }
-    elseif ($taskInfo.progress) {
-        try {
-            $progressObj = $taskInfo.progress | ConvertFrom-Json
-            if ($progressObj.fileId) {
-                $fileId = $progressObj.fileId
-            }
-        }
-        catch {
-            if ($taskInfo.progress -match '"fileId"\s*:\s*"([^"]+)"') {
-                $fileId = $Matches[1]
-            }
-        }
-    }
-
+    $fileId = Get-TaskFileId -TaskInfo $taskInfo
     if (-not $fileId) {
         Write-Host "✗ Unable to determine output file ID for '$Command' on $($Device.hostname)" -ForegroundColor Red
         return $null
@@ -856,6 +870,213 @@ function Invoke-DeviceCliCommand {
         RawOutput = $details.CleanOutput
         Lines     = $details.OutputLines
     }
+}
+
+function Invoke-DeviceCliCommandBatch {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [psobject[]]$Devices,
+        [string]$Command,
+        [int]$TimeoutSeconds = 300,
+        [string]$ActivityLabel = "CLI command"
+    )
+
+    $results = @()
+
+    if (-not $Devices -or $Devices.Count -eq 0) {
+        return $results
+    }
+
+    Write-Host ""
+    Write-Host "Submitting '$Command' to $($Devices.Count) device(s)..." -ForegroundColor Cyan
+
+    $taskRecords = @()
+    $submitCounter = 0
+    $totalSubmissions = $Devices.Count
+
+    foreach ($device in $Devices) {
+        if (-not $device -or -not $device.id) { continue }
+
+        $submitCounter++
+        $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+        Show-ProgressBar -Current $submitCounter -Total $totalSubmissions -Activity $hostname
+
+        $requestBody = @{
+            name        = "Cmd-$hostname-$(Get-Random)"
+            commands    = @($Command)
+            deviceUuids = @($device.id)
+        } | ConvertTo-Json -Depth 10
+
+        try {
+            $response = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/network-device-poller/cli/read-request" `
+                -Method Post `
+                -Headers $Headers `
+                -Body $requestBody `
+                -ContentType "application/json"
+
+            if ($response -and $response.response -and $response.response.taskId) {
+                $taskRecords += [pscustomobject]@{
+                    TaskId     = $response.response.taskId
+                    Hostname   = $hostname
+                    Device     = $device
+                    DeviceId   = $device.id
+                    DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    Command    = $Command
+                    Status     = "Submitted"
+                    FileId     = $null
+                    Output     = $null
+                    Filters    = @()
+                    Error      = $null
+                    SubmitTime = Get-Date
+                }
+            }
+            else {
+                $taskRecords += [pscustomobject]@{
+                    TaskId     = $null
+                    Hostname   = $hostname
+                    Device     = $device
+                    DeviceId   = $device.id
+                    DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    Command    = $Command
+                    Status     = "Submit Failed"
+                    FileId     = $null
+                    Output     = $null
+                    Filters    = @()
+                    Error      = "DNA Center did not return a task ID"
+                    SubmitTime = Get-Date
+                }
+            }
+        }
+        catch {
+            $errorMsg = $_.Exception.Message
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $errorMsg = $_.ErrorDetails.Message
+            }
+
+            $taskRecords += [pscustomobject]@{
+                TaskId     = $null
+                Hostname   = $hostname
+                Device     = $device
+                DeviceId   = $device.id
+                DeviceIP   = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                Command    = $Command
+                Status     = "Error"
+                FileId     = $null
+                Output     = $null
+                Filters    = @()
+                Error      = $errorMsg
+                SubmitTime = Get-Date
+            }
+        }
+
+        Start-Sleep -Milliseconds 100
+    }
+
+    Write-Host ""
+    Write-Host "✓ Submitted $submitCounter task(s)" -ForegroundColor Green
+
+    $pendingTasks = $taskRecords | Where-Object { $_.TaskId -and $_.Status -eq "Submitted" }
+
+    if ($pendingTasks.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Waiting for '$Command' tasks to finish..." -ForegroundColor Cyan
+
+        $startTime = Get-Date
+        $checkInterval = 3
+
+        while ($pendingTasks.Count -gt 0) {
+            $elapsed = ((Get-Date) - $startTime).TotalSeconds
+
+            if ($elapsed -gt $TimeoutSeconds) {
+                foreach ($task in $pendingTasks) {
+                    $task.Status = "Timed Out"
+                    $task.Error = "Task timed out after $TimeoutSeconds seconds"
+                }
+                break
+            }
+
+            foreach ($task in $pendingTasks) {
+                try {
+                    $taskResponse = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/task/$($task.TaskId)" `
+                        -Method Get `
+                        -Headers $Headers
+
+                    if ($taskResponse -and $taskResponse.response) {
+                        $taskInfo = $taskResponse.response
+
+                        if ($taskInfo.isError) {
+                            $task.Status = "Failed"
+                            $task.Error = if ($taskInfo.failureReason) { $taskInfo.failureReason } else { "Task reported an error" }
+                        }
+                        elseif ($taskInfo.endTime) {
+                            $task.Status = "Completed"
+                            $task.FileId = Get-TaskFileId -TaskInfo $taskInfo
+                        }
+                    }
+                }
+                catch {
+                    # Continue polling remaining tasks
+                }
+            }
+
+            $pendingTasks = $taskRecords | Where-Object { $_.Status -eq "Submitted" }
+
+            $completedCount = ($taskRecords | Where-Object { $_.Status -in @("Completed", "Failed", "Error", "Timed Out") }).Count
+            Show-ProgressBar -Current $completedCount -Total $taskRecords.Count -Activity $ActivityLabel
+
+            if ($pendingTasks.Count -gt 0) {
+                Start-Sleep -Seconds $checkInterval
+            }
+        }
+
+        Write-Host ""
+    }
+
+    $downloadable = $taskRecords | Where-Object { $_.Status -eq "Completed" -and $_.FileId }
+
+    if ($downloadable.Count -gt 0) {
+        Write-Host "Downloading '$Command' results..." -ForegroundColor Cyan
+        $downloadCounter = 0
+
+        foreach ($task in $downloadable) {
+            $downloadCounter++
+            Show-ProgressBar -Current $downloadCounter -Total $downloadable.Count -Activity $task.Hostname
+
+            try {
+                $fileResponse = Invoke-RestMethod -Uri "$DnaCenter/dna/intent/api/v1/file/$($task.FileId)" -Method Get -Headers $Headers
+                $task.Status = "Downloaded"
+                $task.Output = $fileResponse
+            }
+            catch {
+                $task.Status = "Download Failed"
+                $task.Error = "Failed to download CLI output: $($_.Exception.Message)"
+            }
+        }
+
+        Write-Host ""
+    }
+
+    foreach ($task in $taskRecords) {
+        $details = Get-TaskOutputDetails -Task $task
+        $task | Add-Member -NotePropertyName "CleanOutput" -NotePropertyValue $details.CleanOutput -Force
+        $task | Add-Member -NotePropertyName "OutputLines" -NotePropertyValue $details.OutputLines -Force
+    }
+
+    foreach ($task in $taskRecords) {
+        $results += [pscustomobject]@{
+            Device    = $task.Device
+            DeviceId  = $task.DeviceId
+            Hostname  = $task.Hostname
+            Command   = $task.Command
+            Status    = $task.Status
+            Error     = $task.Error
+            Lines     = if ($task.OutputLines) { $task.OutputLines } else { @() }
+            RawOutput = if ($task.CleanOutput) { $task.CleanOutput } else { "" }
+        }
+    }
+
+    return $results
 }
 
 function Parse-CertificateCliOutput {
@@ -3283,6 +3504,23 @@ function Get-CertificateCliReport {
     $filters = @("U00", "2024", "2025", "2028")
     $reportRows = @()
 
+    $certResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show crypto pki certificate" -TimeoutSeconds 420 -ActivityLabel "Certificates"
+    $tunnelResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show ip interface brief" -TimeoutSeconds 300 -ActivityLabel "Interfaces"
+
+    $certLookup = @{}
+    foreach ($result in $certResults) {
+        if ($result.DeviceId -and -not $certLookup.ContainsKey($result.DeviceId)) {
+            $certLookup[$result.DeviceId] = $result
+        }
+    }
+
+    $tunnelLookup = @{}
+    foreach ($result in $tunnelResults) {
+        if ($result.DeviceId -and -not $tunnelLookup.ContainsKey($result.DeviceId)) {
+            $tunnelLookup[$result.DeviceId] = $result
+        }
+    }
+
     foreach ($device in $devices) {
         $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
         Write-Host "  Processing: $hostname" -ForegroundColor Gray
@@ -3291,34 +3529,51 @@ function Get-CertificateCliReport {
         $reachability = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "Unknown" }
         $upTime = if ($device.upTime) { $device.upTime } else { "N/A" }
 
-        $cryptoResult = Invoke-DeviceCliCommand -Headers $headers -DnaCenter $dnaCenter -Device $device -Command "show crypto pki certificate"
-        $certRecords = if ($cryptoResult -and $cryptoResult.Lines) {
-            Parse-CertificateCliOutput -Lines $cryptoResult.Lines -Filters $filters
-        } else {
-            @()
+        $certResult = $null
+        if ($device.id -and $certLookup.ContainsKey($device.id)) {
+            $certResult = $certLookup[$device.id]
         }
 
-        if (-not $cryptoResult) {
-            Write-Host "    ! CLI output for certificates unavailable on $hostname" -ForegroundColor Yellow
+        $certLines = if ($certResult -and $certResult.Lines) { $certResult.Lines } else { @() }
+        $certRecords = Parse-CertificateCliOutput -Lines $certLines -Filters $filters
+        $certSuccess = $certResult -and $certResult.Status -in @("Downloaded", "Completed")
+
+        if (-not $certSuccess) {
+            $message = "    ! CLI output for certificates unavailable on $hostname"
+            if ($certResult -and $certResult.Error) {
+                $message += ": $($certResult.Error)"
+            }
+            Write-Host $message -ForegroundColor Yellow
         }
         elseif ($certRecords.Count -eq 0) {
             Write-Host "    ! No certificate entries matched filters on $hostname" -ForegroundColor Yellow
         }
 
         if ($certRecords.Count -eq 0) {
+            $sourceLines = if ($certLines.Count -gt 0) { $certLines } else { @() }
             $certRecords = @([pscustomobject]@{
                 CertificateName = "No matching certificate"
                 StartDate       = $null
                 EndDate         = $null
-                SourceLines     = if ($cryptoResult -and $cryptoResult.Lines) { $cryptoResult.Lines } else { @() }
+                SourceLines     = $sourceLines
             })
         }
 
-        $tunnelResult = Invoke-DeviceCliCommand -Headers $headers -DnaCenter $dnaCenter -Device $device -Command "show ip interface brief"
-        $tunnelLines = if ($tunnelResult) { Get-TunnelInterfacesFromCli -Lines $tunnelResult.Lines } else { @() }
+        $tunnelResult = $null
+        if ($device.id -and $tunnelLookup.ContainsKey($device.id)) {
+            $tunnelResult = $tunnelLookup[$device.id]
+        }
 
-        if (-not $tunnelResult) {
-            Write-Host "    ! CLI output for tunnels unavailable on $hostname" -ForegroundColor Yellow
+        $tunnelLinesRaw = if ($tunnelResult -and $tunnelResult.Lines) { $tunnelResult.Lines } else { @() }
+        $tunnelLines = if ($tunnelLinesRaw.Count -gt 0) { Get-TunnelInterfacesFromCli -Lines $tunnelLinesRaw } else { @() }
+        $tunnelSuccess = $tunnelResult -and $tunnelResult.Status -in @("Downloaded", "Completed")
+
+        if (-not $tunnelSuccess) {
+            $message = "    ! CLI output for tunnels unavailable on $hostname"
+            if ($tunnelResult -and $tunnelResult.Error) {
+                $message += ": $($tunnelResult.Error)"
+            }
+            Write-Host $message -ForegroundColor Yellow
         }
 
         $tunnelSummary = if ($tunnelLines.Count -gt 0) { $tunnelLines -join '; ' } else { "None" }
