@@ -7,8 +7,49 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 # Handle errors gracefully
 $ErrorActionPreference = "Continue"
 
-# DNA Center URL - UPDATE THIS
-$dnaCenter = "sanitized"
+# DNA Center URLs - UPDATE THESE WITH YOUR ENVIRONMENT DETAILS
+$servers = @(
+    [pscustomobject]@{ Name = "Primary DNA Center"; Url = "https://primary-dnacenter.example.com" },
+    [pscustomobject]@{ Name = "Secondary DNA Center"; Url = "https://secondary-dnacenter.example.com" }
+)
+
+function Select-DnaCenterServer {
+    param (
+        [Parameter(Mandatory)]
+        [array]$Servers
+    )
+
+    if (-not $Servers -or $Servers.Count -eq 0) {
+        throw "No DNA Center servers defined. Please populate `$servers with at least one entry."
+    }
+
+    if ($Servers.Count -eq 1) {
+        Write-Host "Using DNA Center server: $($Servers[0].Name) ($($Servers[0].Url))" -ForegroundColor Cyan
+        return $Servers[0].Url
+    }
+
+    Write-Host "Select the DNA Center server you want to use:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Servers.Count; $i++) {
+        Write-Host ("  {0}. {1} ({2})" -f ($i + 1), $Servers[$i].Name, $Servers[$i].Url) -ForegroundColor Yellow
+    }
+
+    while ($true) {
+        $selection = 0
+        $input = Read-Host "Enter the number of the server you want to use"
+
+        if ([int]::TryParse($input.Trim(), [ref]$selection)) {
+            if ($selection -ge 1 -and $selection -le $Servers.Count) {
+                $chosen = $Servers[$selection - 1]
+                Write-Host "Selected DNA Center server: $($chosen.Name) ($($chosen.Url))" -ForegroundColor Green
+                return $chosen.Url
+            }
+        }
+
+        Write-Host "Invalid choice. Please enter a number between 1 and $($Servers.Count)." -ForegroundColor Red
+    }
+}
+
+$dnaCenter = Select-DnaCenterServer -Servers $servers
 
 # Output directory for CSV files
 $outputDir = "C:\DNACenter_Reports"
@@ -577,13 +618,13 @@ function Invoke-CommandRunner {
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor DarkGray
     Write-Host "  Command: show ip interface brief" -ForegroundColor DarkGray
-    Write-Host "  Filter for this command? (yes/no): yes" -ForegroundColor DarkGray
+    Write-Host "  Filter for this command? (y/yes = filter): yes" -ForegroundColor DarkGray
     Write-Host "  Filter 1: up" -ForegroundColor DarkGray
     Write-Host "  Filter 2: Gigabit" -ForegroundColor DarkGray
     Write-Host "  Filter 3: 10.1.1." -ForegroundColor DarkGray
     Write-Host "  Filter 4: DONE" -ForegroundColor DarkGray
     Write-Host "  Next command: show version" -ForegroundColor DarkGray
-    Write-Host "  Filter for this command? (yes/no): no" -ForegroundColor DarkGray
+    Write-Host "  Filter for this command? (y/yes = filter): no" -ForegroundColor DarkGray
     Write-Host "  DONE (to finish entering commands)" -ForegroundColor DarkGray
     Write-Host ""
 
@@ -613,9 +654,10 @@ function Invoke-CommandRunner {
 
             # Ask if user wants to filter THIS specific command
             $commandFilters = @()
-            $filterChoice = Read-Host "Filter output for this command? (yes/no)"
+            $filterChoice = Read-Host "Filter output for this command? (y/yes to add filters, anything else skips)"
+            $filterChoiceNormalized = if ($null -ne $filterChoice) { $filterChoice.Trim().ToLower() } else { "" }
 
-            if ($filterChoice -eq "yes") {
+            if ($filterChoiceNormalized -in @("y", "yes")) {
                 Write-Host ""
                 Write-Host "Enter filter patterns for '$cleanCommand' (one per line, type DONE when finished):" -ForegroundColor Yellow
                 Write-Host "  • Enter text to match in output lines" -ForegroundColor Gray
@@ -672,8 +714,9 @@ function Invoke-CommandRunner {
     Write-Host "On $($devices.Count) device(s)" -ForegroundColor Cyan
     Write-Host ""
 
-    $confirm = Read-Host "Proceed? (yes/no)"
-    if ($confirm -ne "yes") {
+    $confirm = Read-Host "Proceed? (y/yes to continue, anything else cancels)"
+    $confirmNormalized = if ($null -ne $confirm) { $confirm.Trim().ToLower() } else { "" }
+    if ($confirmNormalized -notin @("y", "yes")) {
         Write-Host "✗ Operation cancelled" -ForegroundColor Yellow
         Read-Host "`nPress Enter to continue"
         return
