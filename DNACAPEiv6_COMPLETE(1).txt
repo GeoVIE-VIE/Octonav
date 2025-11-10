@@ -555,7 +555,7 @@ function Export-Report {
     }
 
     if ($rowBuffer.Count -eq 0) {
-        Write-Host "! No $RecordLabel found. Skipping export." -ForegroundColor Yellow
+        Write-Host ("! No {0} found. Skipping export." -f $RecordLabel) -ForegroundColor Yellow
         return $null
     }
 
@@ -568,8 +568,8 @@ function Export-Report {
 
     $rowBuffer | Export-Csv -Path $csvPath -NoTypeInformation
 
-    Write-Host "✓ Exported to: $csvPath" -ForegroundColor Green
-    Write-Host "✓ Total $RecordLabel: $($rowBuffer.Count)" -ForegroundColor Green
+    Write-Host ("✓ Exported to: {0}" -f $csvPath) -ForegroundColor Green
+    Write-Host ("✓ Total {0}: {1}" -f $RecordLabel, $rowBuffer.Count) -ForegroundColor Green
 
     return $csvPath
 }
