@@ -158,8 +158,58 @@ function Wait-ForTask {
             return $null
         }
     }
-    
+
     return $taskResponse.response
+}
+
+# Helper: Convert DNA Center timestamps to readable local time strings
+function Convert-DeviceTimestampToLocalString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Timestamp
+    )
+
+    if (-not $Timestamp) { return $null }
+
+    try {
+        $value = $Timestamp
+
+        if ($value -is [string]) {
+            $value = $value.Trim()
+            if (-not $value) { return $null }
+
+            $parsedDate = $null
+            if ([DateTime]::TryParse($value, [ref]$parsedDate)) {
+                return $parsedDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            }
+
+            if ($value -notmatch '^[0-9]+$') {
+                return $Timestamp
+            }
+
+            $value = [int64]$value
+        }
+
+        if ($value -is [double]) {
+            $value = [int64][Math]::Round($value)
+        }
+
+        if ($value -is [int64] -or $value -is [int]) {
+            if ($value -gt 9999999999) {
+                return [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$value).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            } else {
+                return [DateTimeOffset]::FromUnixTimeSeconds([int64]$value).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            }
+        }
+
+        if ($value -is [DateTime]) {
+            return $value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        }
+
+        return $Timestamp
+    } catch {
+        return $Timestamp
+    }
 }
 
 # Function to authenticate and get token
@@ -2187,12 +2237,23 @@ function Get-NetworkDevicesBasic {
     param($headers, $dnaCenter)
 
     Write-Host "`nFetching network devices (basic info)..." -ForegroundColor Yellow
+    
+    $devices = Get-FilteredDevices
 
-    $devices = Get-ActiveDevices
-    if (-not $devices) { return }
+    $deviceList = @()
+    foreach ($device in $devices) {
+        $lastSeenRaw = $null
+        $lastSeenProperties = @("lastSeenTime", "lastSeen", "lastUpdateTime", "lastUpdated", "lastCommunicationTime")
+        foreach ($property in $lastSeenProperties) {
+            if ($device.PSObject.Properties[$property] -and $device.$property) {
+                $lastSeenRaw = $device.$property
+                break
+            }
+        }
 
-    $deviceList = foreach ($device in $devices) {
-        [PSCustomObject]@{
+        $lastSeenDisplay = if ($lastSeenRaw) { Convert-DeviceTimestampToLocalString -Timestamp $lastSeenRaw } else { $null }
+
+        $deviceList += [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
             IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
             SerialNumber = if ($device.serialNumber) { $device.serialNumber } else { "N/A" }
@@ -2203,6 +2264,7 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
+            LastSeen = if ($lastSeenDisplay) { $lastSeenDisplay } else { "N/A" }
         }
     }
 
