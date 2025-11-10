@@ -166,7 +166,8 @@ function Wait-ForTask {
 function Convert-DeviceTimestampToLocalString {
     param(
         [Parameter(Mandatory = $true)]
-        [object]$Timestamp
+        [object]$Timestamp,
+        [switch]$RequireParsable
     )
 
     if (-not $Timestamp) { return $null }
@@ -184,6 +185,7 @@ function Convert-DeviceTimestampToLocalString {
             }
 
             if ($value -notmatch '^[0-9]+$') {
+                if ($RequireParsable) { return $null }
                 return $Timestamp
             }
 
@@ -206,8 +208,10 @@ function Convert-DeviceTimestampToLocalString {
             return $value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
         }
 
+        if ($RequireParsable) { return $null }
         return $Timestamp
     } catch {
+        if ($RequireParsable) { return $null }
         return $Timestamp
     }
 }
@@ -2242,16 +2246,27 @@ function Get-NetworkDevicesBasic {
 
     $deviceList = @()
     foreach ($device in $devices) {
-        $lastSeenRaw = $null
-        $lastSeenProperties = @("lastSeenTime", "lastSeen", "lastUpdateTime", "lastUpdated", "lastCommunicationTime")
+        $lastSeenDisplay = $null
+        $lastSeenProperties = @(
+            "lastSuccessfulPingTime",
+            "lastSuccessfulSyncTime",
+            "lastSyncTime",
+            "lastCommunicationTime",
+            "lastUpdated",
+            "lastUpdateTime",
+            "lastSeenTime",
+            "lastSeen"
+        )
         foreach ($property in $lastSeenProperties) {
             if ($device.PSObject.Properties[$property] -and $device.$property) {
-                $lastSeenRaw = $device.$property
-                break
+                $candidate = $device.$property
+                $converted = Convert-DeviceTimestampToLocalString -Timestamp $candidate -RequireParsable
+                if ($converted) {
+                    $lastSeenDisplay = $converted
+                    break
+                }
             }
         }
-
-        $lastSeenDisplay = if ($lastSeenRaw) { Convert-DeviceTimestampToLocalString -Timestamp $lastSeenRaw } else { $null }
 
         $deviceList += [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
