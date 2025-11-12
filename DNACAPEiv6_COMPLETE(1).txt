@@ -545,7 +545,6 @@ function Show-Menu {
     Write-Host "    18. CDP Neighbors" -ForegroundColor White
     Write-Host "    19. LLDP Neighbors" -ForegroundColor White
     Write-Host "    20. Access Points" -ForegroundColor White
-    Write-Host "    23. Certificate CLI Report (Custom)" -ForegroundColor White
     Write-Host ""
     Write-Host "     0. Exit" -ForegroundColor Red
     Write-Host ""
@@ -768,6 +767,67 @@ function ConvertTo-ReadableTimestamp {
     }
 
     return $Value.ToString()
+}
+
+function Get-LastPingReachableTime {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [string]$DeviceId
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        return "N/A"
+    }
+    
+    try {
+        # Try to get device enrichment details which contains event history
+        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
+        $enrichmentHeaders = $Headers.Clone()
+        $enrichmentHeaders["entity_type"] = "network-device"
+        $enrichmentHeaders["entity_value"] = $DeviceId
+        
+        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $enrichmentHeaders
+        
+        if ($enrichmentResponse) {
+            # Look for device_availability:ping_reachable events
+            $events = $null
+            if ($enrichmentResponse.PSObject.Properties['response'] -and $enrichmentResponse.response) {
+                $events = $enrichmentResponse.response
+            } elseif ($enrichmentResponse -is [array]) {
+                $events = $enrichmentResponse
+            }
+            
+            if ($events) {
+                # Search for the most recent ping_reachable event
+                $pingReachableEvents = @()
+                foreach ($event in $events) {
+                    if ($event.eventType -like "*ping_reachable*" -or 
+                        $event.name -like "*ping_reachable*" -or
+                        $event.details -like "*ping_reachable*") {
+                        $pingReachableEvents += $event
+                    }
+                }
+                
+                if ($pingReachableEvents.Count -gt 0) {
+                    # Sort by timestamp and get the most recent
+                    $sortedEvents = $pingReachableEvents | Sort-Object -Property timestamp -Descending
+                    $latestEvent = $sortedEvents[0]
+                    
+                    if ($latestEvent.timestamp) {
+                        return ConvertTo-ReadableTimestamp -Value $latestEvent.timestamp
+                    }
+                }
+            }
+        }
+        
+        # Fallback: return null to use lastUpdated from device
+        return $null
+        
+    } catch {
+        # Silently fail and return null - will use fallback
+        return $null
+    }
 }
 
 function Get-TaskFileId {
@@ -1073,179 +1133,6 @@ function Invoke-DeviceCliCommandBatch {
             Error     = $task.Error
             Lines     = if ($task.OutputLines) { $task.OutputLines } else { @() }
             RawOutput = if ($task.CleanOutput) { $task.CleanOutput } else { "" }
-        }
-    }
-
-    return $results
-}
-
-function Parse-CertificateCliOutput {
-    param(
-        [string[]]$Lines,
-        [string[]]$Filters
-    )
-
-    $records = @()
-    if (-not $Lines -or $Lines.Count -eq 0) {
-        return $records
-    }
-
-    $lineCount = $Lines.Count
-
-    for ($index = 0; $index -lt $lineCount; $index++) {
-        $line = $Lines[$index]
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-
-        $matched = $false
-
-        if ($Filters -and $Filters.Count -gt 0) {
-            foreach ($filter in $Filters) {
-                if ([string]::IsNullOrWhiteSpace($filter)) { continue }
-                if ($line -like "*$filter*") {
-                    $matched = $true
-                    break
-                }
-            }
-        }
-        else {
-            $matched = $true
-        }
-
-        if (-not $matched) { continue }
-
-        $matchLine = $line.Trim()
-
-        $certificateName = $matchLine
-        $nameMatch = [regex]::Match($matchLine, '(?i)\bname\s*:\s*(?<value>.+)')
-        if ($nameMatch.Success) {
-            $certificateName = $nameMatch.Groups['value'].Value.Trim()
-        }
-        else {
-            $cnMatch = [regex]::Match($matchLine, '(?i)\bCN\s*=\s*(?<value>[^,]+)')
-            if ($cnMatch.Success -and ($cnMatch.Groups['value'].Value -match '(?i)U00')) {
-                $certificateName = $cnMatch.Groups['value'].Value.Trim()
-            }
-            else {
-                $u00Match = [regex]::Match($matchLine, '(?<value>\S*U00\S*)')
-                if ($u00Match.Success) {
-                    $certificateName = $u00Match.Groups['value'].Value.Trim()
-                }
-            }
-        }
-
-        $caLines = @()
-        for ($offset = 1; $offset -le 8; $offset++) {
-            $targetIndex = $index + $offset
-            if ($targetIndex -ge $lineCount) { break }
-            $contextValue = $Lines[$targetIndex]
-            if ([string]::IsNullOrWhiteSpace($contextValue)) { continue }
-            $caLines += $contextValue.Trim()
-        }
-
-        $caEntry = $null
-        foreach ($caLine in $caLines) {
-            $trimmedCaLine = $caLine.Trim()
-
-            $issuerMatch = [regex]::Match($trimmedCaLine, '(?i)\bissuer\s*:\s*(?<value>.+)')
-            if ($issuerMatch.Success) {
-                $issuerValue = $issuerMatch.Groups['value'].Value.Trim()
-                $caToken = [regex]::Match($issuerValue, '(?i)CA[-_A-Za-z0-9]+')
-                if ($caToken.Success) {
-                    $caEntry = $caToken.Value.Trim()
-                    break
-                }
-
-                if (-not [string]::IsNullOrWhiteSpace($issuerValue)) {
-                    $caEntry = $issuerValue
-                    break
-                }
-            }
-
-            $caTokenDirect = [regex]::Match($trimmedCaLine, '(?i)CA[-_A-Za-z0-9]+')
-            if ($caTokenDirect.Success) {
-                $caEntry = $caTokenDirect.Value.Trim()
-                break
-            }
-
-            if (-not $caEntry -and -not [string]::IsNullOrWhiteSpace($trimmedCaLine)) {
-                $caEntry = $trimmedCaLine
-            }
-        }
-
-        if (-not $caEntry) {
-            foreach ($caLine in $caLines) {
-                if (-not [string]::IsNullOrWhiteSpace($caLine)) {
-                    $caEntry = $caLine.Trim()
-                    break
-                }
-            }
-        }
-
-        $startDateLine = $null
-        $endDateLine = $null
-
-        $startIndex = $index + 9
-        if ($startIndex -lt $lineCount) {
-            $startLine = $Lines[$startIndex]
-            if (-not [string]::IsNullOrWhiteSpace($startLine)) {
-                $startDateLine = $startLine.Trim()
-            }
-        }
-
-        $endIndex = $index + 10
-        if ($endIndex -lt $lineCount) {
-            $endLine = $Lines[$endIndex]
-            if (-not [string]::IsNullOrWhiteSpace($endLine)) {
-                $endDateLine = $endLine.Trim()
-            }
-        }
-
-        $records += [pscustomobject]@{
-            U00Line   = $certificateName
-            CALine    = $caEntry
-            StartLine = $startDateLine
-            EndLine   = $endDateLine
-        }
-    }
-
-    return $records
-}
-
-function Get-TunnelInterfacesFromCli {
-    param(
-        [string[]]$Lines
-    )
-
-    $results = @()
-
-    if (-not $Lines) {
-        return $results
-    }
-
-    foreach ($line in $Lines) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        if ($line -notmatch '(?i)\bTun') { continue }
-
-        $trimmed = $line.Trim()
-        $match = [regex]::Match($trimmed, '^(?<interface>\S+)\s+(?<ip>\S+)\s+\S+\s+\S+\s+(?<status>\S+)\s+(?<protocol>\S+)')
-
-        if ($match.Success) {
-            $results += [pscustomobject]@{
-                Interface = $match.Groups['interface'].Value
-                IpAddress = $match.Groups['ip'].Value
-                Status    = $match.Groups['status'].Value
-                Protocol  = $match.Groups['protocol'].Value
-                Raw       = $trimmed
-            }
-        }
-        else {
-            $results += [pscustomobject]@{
-                Interface = $trimmed
-                IpAddress = $null
-                Status    = $null
-                Protocol  = $null
-                Raw       = $trimmed
-            }
         }
     }
 
@@ -2778,25 +2665,26 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
-        $lastOnlineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
-            'lastSeenTime',
-            'lastSeen',
-            'lastUpTime',
-            'lastConnectedTime',
-            'lastSuccessfulConnectionTime',
-            'lastSyncTime'
-        )
-
-        $lastOfflineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
-            'lastDownTime',
-            'lastDisconnectTime',
-            'lastStateChangeTime',
-            'lastBootTime',
-            'lastContactTime'
-        )
-
-        $lastOnline = ConvertTo-ReadableTimestamp $lastOnlineValue
-        $lastOffline = ConvertTo-ReadableTimestamp $lastOfflineValue
+        # Try to get the last ping_reachable time
+        $lastPingReachable = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        
+        # If we couldn't get ping_reachable time, use lastUpdated as fallback
+        if (-not $lastPingReachable) {
+            $lastOnlineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+                'lastUpdated',
+                'lastSeenTime',
+                'lastSeen',
+                'lastUpTime',
+                'lastConnectedTime',
+                'lastSuccessfulConnectionTime',
+                'lastSyncTime'
+            )
+            $lastPingReachable = ConvertTo-ReadableTimestamp $lastOnlineValue
+        }
+        
+        if (-not $lastPingReachable) {
+            $lastPingReachable = "N/A"
+        }
 
         [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
@@ -2809,8 +2697,7 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-            LastOnlineTime = if ($lastOnline) { $lastOnline } else { "N/A" }
-            LastOfflineTime = if ($lastOffline) { $lastOffline } else { "N/A" }
+            LastPingReachable = $lastPingReachable
         }
     }
 
@@ -3577,164 +3464,6 @@ function Get-AccessPoints {
     }
 }
 
-# =====================================================
-# FUNCTION 21: Certificate CLI Report (Custom)
-# =====================================================
-function Get-CertificateCliReport {
-    param($headers, $dnaCenter)
-
-    Write-Host "`nRunning certificate CLI report..." -ForegroundColor Yellow
-
-    $devices = Get-ActiveDevices
-    if (-not $devices) { return }
-
-    $filters = @("U00")
-    $reportLookup = @{}
-    $hostnameOrder = @()
-
-    $certResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show crypto pki certificate" -TimeoutSeconds 420 -ActivityLabel "Certificates"
-    $tunnelResults = Invoke-DeviceCliCommandBatch -Headers $headers -DnaCenter $dnaCenter -Devices $devices -Command "show ip interface brief" -TimeoutSeconds 300 -ActivityLabel "Interfaces"
-
-    $certLookup = @{}
-    foreach ($result in $certResults) {
-        if ($result.DeviceId -and -not $certLookup.ContainsKey($result.DeviceId)) {
-            $certLookup[$result.DeviceId] = $result
-        }
-    }
-
-    $tunnelLookup = @{}
-    foreach ($result in $tunnelResults) {
-        if ($result.DeviceId -and -not $tunnelLookup.ContainsKey($result.DeviceId)) {
-            $tunnelLookup[$result.DeviceId] = $result
-        }
-    }
-
-    foreach ($device in $devices) {
-        $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
-        if ($reportLookup.ContainsKey($hostname)) {
-            Write-Host "    ! Duplicate hostname detected ($hostname). Skipping additional entry." -ForegroundColor Yellow
-            continue
-        }
-        Write-Host "  Processing: $hostname" -ForegroundColor Gray
-
-        $managementIp = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
-        $reachability = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "Unknown" }
-        $upTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-
-        $certResult = $null
-        if ($device.id -and $certLookup.ContainsKey($device.id)) {
-            $certResult = $certLookup[$device.id]
-        }
-
-        $certLines = if ($certResult -and $certResult.Lines) { $certResult.Lines } else { @() }
-        $certRecords = Parse-CertificateCliOutput -Lines $certLines -Filters $filters
-        $certSuccess = $certResult -and $certResult.Status -in @("Downloaded", "Completed")
-
-        if (-not $certSuccess) {
-            $message = "    ! CLI output for certificates unavailable on $hostname"
-            if ($certResult -and $certResult.Error) {
-                $message += ": $($certResult.Error)"
-            }
-            Write-Host $message -ForegroundColor Yellow
-        }
-        elseif ($certRecords.Count -eq 0) {
-            Write-Host "    ! No certificate entries matched filters on $hostname" -ForegroundColor Yellow
-        }
-
-        $tunnelResult = $null
-        if ($device.id -and $tunnelLookup.ContainsKey($device.id)) {
-            $tunnelResult = $tunnelLookup[$device.id]
-        }
-
-        $tunnelLinesRaw = if ($tunnelResult -and $tunnelResult.Lines) { $tunnelResult.Lines } else { @() }
-        $tunnelRecords = if ($tunnelLinesRaw.Count -gt 0) { @(Get-TunnelInterfacesFromCli -Lines $tunnelLinesRaw) } else { @() }
-        $tunnelSuccess = $tunnelResult -and $tunnelResult.Status -in @("Downloaded", "Completed")
-
-        if (-not $tunnelSuccess) {
-            $message = "    ! CLI output for tunnels unavailable on $hostname"
-            if ($tunnelResult -and $tunnelResult.Error) {
-                $message += ": $($tunnelResult.Error)"
-            }
-            Write-Host $message -ForegroundColor Yellow
-        }
-
-        if ($certRecords.Count -eq 0) {
-            $certRecords = @([pscustomobject]@{
-                U00Line   = $null
-                CALine    = $null
-                StartLine = $null
-                EndLine   = $null
-            })
-        }
-
-        $selectedRecord = $null
-        $recordsWithU00 = @($certRecords | Where-Object { $_.U00Line })
-        if ($recordsWithU00.Count -gt 0) {
-            $selectedRecord = $recordsWithU00[0]
-        }
-        elseif ($certRecords.Count -gt 0) {
-            $selectedRecord = $certRecords[0]
-        }
-
-        $u00LineValue = if ($selectedRecord -and $selectedRecord.U00Line) { $selectedRecord.U00Line } else { "N/A" }
-        $caLineValue = if ($selectedRecord -and $selectedRecord.CALine) { $selectedRecord.CALine } else { "N/A" }
-        $startLineValue = if ($selectedRecord -and $selectedRecord.StartLine) { $selectedRecord.StartLine } else { "N/A" }
-        $endLineValue = if ($selectedRecord -and $selectedRecord.EndLine) { $selectedRecord.EndLine } else { "N/A" }
-
-        $row = [ordered]@{
-            Hostname        = $hostname
-            ManagementIP    = $managementIp
-            Reachability    = $reachability
-            UpTime          = $upTime
-            CertificateName = $u00LineValue
-            CertificateCA   = $caLineValue
-            StartDate       = $startLineValue
-            EndDate         = $endLineValue
-        }
-
-        if ($tunnelRecords.Count -gt 0) {
-            $maxTunnelColumns = [Math]::Min(5, $tunnelRecords.Count)
-            for ($tIndex = 0; $tIndex -lt $maxTunnelColumns; $tIndex++) {
-                $tunnel = $tunnelRecords[$tIndex]
-                $slot = $tIndex + 1
-                $statusValue = if ($tunnel.Status -and $tunnel.Protocol) {
-                    "{0}/{1}" -f $tunnel.Status, $tunnel.Protocol
-                }
-                elseif ($tunnel.Status) {
-                    $tunnel.Status
-                }
-                elseif ($tunnel.Protocol) {
-                    $tunnel.Protocol
-                }
-                else {
-                    "N/A"
-                }
-
-                $row["Tunnel${slot}"] = if ($tunnel.Interface) { $tunnel.Interface } else { "N/A" }
-                $row["Tunnel${slot}IP"] = if ($tunnel.IpAddress) { $tunnel.IpAddress } else { "N/A" }
-                $row["Tunnel${slot}Status"] = $statusValue
-            }
-        }
-        else {
-            $row["Tunnel1"] = "N/A"
-            $row["Tunnel1IP"] = "N/A"
-            $row["Tunnel1Status"] = "N/A"
-        }
-
-        $hostnameOrder += $hostname
-        $reportLookup[$hostname] = [PSCustomObject]$row
-    }
-
-    $reportRows = @()
-    foreach ($hostnameKey in $hostnameOrder) {
-        if ($reportLookup.ContainsKey($hostnameKey)) {
-            $reportRows += $reportLookup[$hostnameKey]
-        }
-    }
-
-    Export-Report -Rows $reportRows -BaseName "CertificateCliReport" -RecordLabel "certificate entries" | Out-Null
-}
-
 # Main script execution
 Show-Banner
 
@@ -3795,7 +3524,7 @@ do {
     }
     elseif ($selection -match '^\d+$') {
         $selNum = [int]$selection
-        if ($selNum -ge 1 -and $selNum -le 23) {
+        if ($selNum -ge 1 -and $selNum -le 20) {
             if ($selectedOptions -notcontains $selection) {
                 $selectedOptions += $selection
                 Write-Host "✓ Added option $selection to queue" -ForegroundColor Green
@@ -3833,7 +3562,6 @@ if ($selectedOptions.Count -gt 0) {
     
     foreach ($option in $selectedOptions) {
         $reportLabel = switch ($option) {
-            "23" { "Certificate CLI Report" }
             default { "Report $option" }
         }
 
@@ -3860,7 +3588,6 @@ if ($selectedOptions.Count -gt 0) {
             "18" { Get-CDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "19" { Get-LLDPNeighbors -headers $apiHeaders -dnaCenter $dnaCenter }
             "20" { Get-AccessPoints -headers $apiHeaders -dnaCenter $dnaCenter }
-            "23" { Get-CertificateCliReport -headers $apiHeaders -dnaCenter $dnaCenter }
         }
     }
     
