@@ -9,8 +9,8 @@ $ErrorActionPreference = "Continue"
 
 # DNA Center URLs - UPDATE THESE WITH YOUR ENVIRONMENT DETAILS
 $servers = @(
-    [pscustomobject]@{ Name = "NRFK DNA Center"; Url = "test" },
-    [pscustomobject]@{ Name = "PRLH DNA Center"; Url = "test2" }
+    [pscustomobject]@{ Name = "Tst DNA Center"; Url = "test" },
+    [pscustomobject]@{ Name = "Tst DNA Center"; Url = "test2" }
 )
 
 function Select-DnaCenterServer {
