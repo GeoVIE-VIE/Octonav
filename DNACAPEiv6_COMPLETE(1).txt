@@ -538,7 +538,8 @@ function Show-Menu {
     Write-Host "    10. Device Reachability Status" -ForegroundColor White
     Write-Host "    11. VLANs" -ForegroundColor White
     Write-Host "    12. Software/Image Information" -ForegroundColor White
-    Write-Host "    13. Issues/Events" -ForegroundColor White
+    Write-Host "    13. Issues/Events (Enhanced with timestamps)" -ForegroundColor White
+    Write-Host "    13B. Device Availability Events (Time-Based)" -ForegroundColor White
     Write-Host "    14. Templates" -ForegroundColor White
     Write-Host "    15. Physical Topology" -ForegroundColor White
     Write-Host "    16. Device Module Information" -ForegroundColor White
@@ -3256,34 +3257,181 @@ function Get-SoftwareImageInfo {
 # FUNCTION 13: Issues/Events
 # =====================================================
 function Get-IssuesEvents {
-    param($headers, $dnaCenter)
+    param(
+        $headers, 
+        $dnaCenter,
+        [switch]$UseEnrichment = $true
+    )
     
     Write-Host "`nFetching issues and events..." -ForegroundColor Yellow
+    if ($UseEnrichment) {
+        Write-Host "  → Using Issue Enrichment API for accurate timestamps" -ForegroundColor Cyan
+    }
     
     try {
         $response = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/issues" -Method Get -Headers $headers
         
         $issueList = @()
         if ($response -and $response.response) {
+            $totalIssues = $response.response.Count
+            Write-Host "  → Found $totalIssues issue(s)" -ForegroundColor Cyan
+            $current = 0
+            
             foreach ($issue in $response.response) {
+                $current++
+                
+                # Show progress for every 10 issues or if using enrichment
+                if ($UseEnrichment -or ($current % 10 -eq 0) -or ($current -eq $totalIssues)) {
+                    Write-Host "`r  Processing issue $current of $totalIssues..." -NoNewline -ForegroundColor Gray
+                }
+                
+                # Initialize timestamps
+                $issueTimestamp = "N/A"
+                $issueTimestampReadable = "N/A"
+                $lastOccurenceTime = if ($issue.lastOccurenceTime) { $issue.lastOccurenceTime } else { "N/A" }
+                $lastOccurenceReadable = "N/A"
+                
+                # Convert last occurrence time to readable format
+                if ($issue.lastOccurenceTime) {
+                    try {
+                        $lastOccurenceReadable = [DateTimeOffset]::FromUnixTimeMilliseconds($issue.lastOccurenceTime).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    } catch {
+                        $lastOccurenceReadable = "Invalid timestamp"
+                    }
+                }
+                
+                # Get enrichment details if enabled
+                if ($UseEnrichment -and $issue.issueId) {
+                    try {
+                        $enrichmentHeaders = $headers.Clone()
+                        $enrichmentHeaders["entity_type"] = "issue_id"
+                        $enrichmentHeaders["entity_value"] = $issue.issueId
+                        
+                        $enrichment = Invoke-RestMethod -Uri "$dnaCenter/dna/intent/api/v1/issue-enrichment-details" -Method Get -Headers $enrichmentHeaders
+                        
+                        # Extract timestamp from enrichment if available
+                        if ($enrichment -and $enrichment.issueDetails -and $enrichment.issueDetails.issue) {
+                            $enrichmentIssue = $enrichment.issueDetails.issue[0]
+                            
+                            if ($enrichmentIssue.issueTimestamp) {
+                                $issueTimestamp = $enrichmentIssue.issueTimestamp
+                                try {
+                                    $issueTimestampReadable = [DateTimeOffset]::FromUnixTimeMilliseconds($enrichmentIssue.issueTimestamp).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")
+                                } catch {
+                                    $issueTimestampReadable = "Invalid timestamp"
+                                }
+                            }
+                        }
+                        
+                        # Rate limiting - respect 20 requests per minute limit
+                        Start-Sleep -Milliseconds 100
+                    }
+                    catch {
+                        Write-Host "`n  ⚠ Warning: Failed to get enrichment for issue $($issue.issueId): $($_.Exception.Message)" -ForegroundColor Yellow
+                        # Continue with base issue data
+                    }
+                }
+                
                 $issueList += [PSCustomObject]@{
                     IssueId = if ($issue.issueId) { $issue.issueId } else { "N/A" }
                     Name = if ($issue.name) { $issue.name } else { "N/A" }
                     DeviceId = if ($issue.deviceId) { $issue.deviceId } else { "N/A" }
+                    DeviceRole = if ($issue.deviceRole) { $issue.deviceRole } else { "N/A" }
+                    ClientMac = if ($issue.clientMac) { $issue.clientMac } else { "N/A" }
                     Severity = if ($issue.severity) { $issue.severity } else { "N/A" }
                     Priority = if ($issue.priority) { $issue.priority } else { "N/A" }
                     Status = if ($issue.status) { $issue.status } else { "N/A" }
                     Category = if ($issue.category) { $issue.category } else { "N/A" }
-                    LastOccurenceTime = if ($issue.lastOccurenceTime) { $issue.lastOccurenceTime } else { "N/A" }
+                    AiDriven = if ($issue.aiDriven) { $issue.aiDriven } else { "N/A" }
+                    IssueTimestamp_Epoch = $issueTimestamp
+                    IssueTimestamp_Readable = $issueTimestampReadable
+                    LastOccurenceTime_Epoch = $lastOccurenceTime
+                    LastOccurenceTime_Readable = $lastOccurenceReadable
+                    OccurrenceCount = if ($issue.issue_occurence_count) { $issue.issue_occurence_count } else { 0 }
+                    SiteId = if ($issue.siteId) { $issue.siteId } else { "N/A" }
                     Description = if ($issue.description) { $issue.description } else { "N/A" }
                 }
             }
+            Write-Host ""  # New line after progress
         }
         
         Export-Report -Rows $issueList -BaseName "Issues" -RecordLabel "issues" | Out-Null
     }
     catch {
         Write-Host "✗ Failed to retrieve issues: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# =====================================================
+# FUNCTION 13B: Device Availability Events (Time-Based)
+# =====================================================
+function Get-DeviceAvailabilityEvents {
+    param(
+        $headers, 
+        $dnaCenter,
+        [Parameter(Mandatory=$false)]
+        [datetime]$StartTime = (Get-Date).AddHours(-24),
+        [Parameter(Mandatory=$false)]
+        [datetime]$EndTime = (Get-Date)
+    )
+    
+    Write-Host "`nFetching device availability events..." -ForegroundColor Yellow
+    Write-Host "  → Time window: $($StartTime.ToString('yyyy-MM-dd HH:mm')) to $($EndTime.ToString('yyyy-MM-dd HH:mm'))" -ForegroundColor Cyan
+    
+    try {
+        # Convert to epoch milliseconds
+        $startEpoch = [Math]::Floor((Get-Date $StartTime).ToUniversalTime().Subtract((Get-Date "1970-01-01")).TotalMilliseconds)
+        $endEpoch = [Math]::Floor((Get-Date $EndTime).ToUniversalTime().Subtract((Get-Date "1970-01-01")).TotalMilliseconds)
+        
+        # Query issues with time window
+        $uri = "$dnaCenter/dna/intent/api/v1/issues?startTime=$startEpoch&endTime=$endEpoch"
+        $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
+        
+        $eventList = @()
+        if ($response -and $response.response) {
+            $totalIssues = $response.response.Count
+            Write-Host "  → Found $totalIssues total issue(s) in time window" -ForegroundColor Cyan
+            
+            foreach ($issue in $response.response) {
+                # Filter for availability issues
+                if ($issue.category -eq "Availability" -or $issue.name -like "*unreachable*" -or $issue.name -like "*reachable*") {
+                    
+                    # Convert epoch to datetime
+                    $lastOccurrence = "N/A"
+                    if ($issue.lastOccurenceTime) {
+                        try {
+                            $lastOccurrence = [DateTimeOffset]::FromUnixTimeMilliseconds($issue.lastOccurenceTime).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")
+                        } catch {
+                            $lastOccurrence = "Invalid timestamp"
+                        }
+                    }
+                    
+                    $eventList += [PSCustomObject]@{
+                        IssueId = if ($issue.issueId) { $issue.issueId } else { "N/A" }
+                        EventName = if ($issue.name) { $issue.name } else { "N/A" }
+                        DeviceId = if ($issue.deviceId) { $issue.deviceId } else { "N/A" }
+                        DeviceRole = if ($issue.deviceRole) { $issue.deviceRole } else { "N/A" }
+                        Status = if ($issue.status) { $issue.status } else { "N/A" }
+                        Priority = if ($issue.priority) { $issue.priority } else { "N/A" }
+                        Category = if ($issue.category) { $issue.category } else { "N/A" }
+                        Severity = if ($issue.severity) { $issue.severity } else { "N/A" }
+                        LastOccurrenceTime = $lastOccurrence
+                        LastOccurrenceEpoch = if ($issue.lastOccurenceTime) { $issue.lastOccurenceTime } else { "N/A" }
+                        OccurrenceCount = if ($issue.issue_occurence_count) { $issue.issue_occurence_count } else { 0 }
+                        SiteId = if ($issue.siteId) { $issue.siteId } else { "N/A" }
+                        AiDriven = if ($issue.aiDriven) { $issue.aiDriven } else { "N/A" }
+                        Description = if ($issue.description) { $issue.description } else { "N/A" }
+                    }
+                }
+            }
+            
+            Write-Host "  → Filtered to $($eventList.Count) availability event(s)" -ForegroundColor Cyan
+        }
+        
+        Export-Report -Rows $eventList -BaseName "DeviceAvailability_Events" -RecordLabel "availability events" | Out-Null
+    }
+    catch {
+        Write-Host "✗ Failed to retrieve availability events: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
@@ -3620,6 +3768,74 @@ do {
     }
     elseif ($selection -eq "22") {
         Invoke-PathTrace -headers $apiHeaders -dnaCenter $dnaCenter
+        continue
+    }
+    elseif ($selection -eq "13B" -or $selection -eq "13b") {
+        # Device Availability Events with custom time window
+        Write-Host "`nDevice Availability Events (Time-Based Query)" -ForegroundColor Cyan
+        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "Select time window:" -ForegroundColor Yellow
+        Write-Host "  1. Last 1 hour" -ForegroundColor White
+        Write-Host "  2. Last 6 hours" -ForegroundColor White
+        Write-Host "  3. Last 24 hours (default)" -ForegroundColor White
+        Write-Host "  4. Last 7 days" -ForegroundColor White
+        Write-Host "  5. Custom range" -ForegroundColor White
+        Write-Host ""
+        $timeChoice = Read-Host "Select option (default: 3)"
+        
+        if ([string]::IsNullOrWhiteSpace($timeChoice)) {
+            $timeChoice = "3"
+        }
+        
+        switch ($timeChoice) {
+            "1" {
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime (Get-Date).AddHours(-1) -EndTime (Get-Date)
+            }
+            "2" {
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime (Get-Date).AddHours(-6) -EndTime (Get-Date)
+            }
+            "3" {
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime (Get-Date).AddHours(-24) -EndTime (Get-Date)
+            }
+            "4" {
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime (Get-Date).AddDays(-7) -EndTime (Get-Date)
+            }
+            "5" {
+                Write-Host ""
+                Write-Host "Enter start date/time (format: yyyy-MM-dd HH:mm or press Enter for 24 hours ago):" -ForegroundColor Yellow
+                $startInput = Read-Host
+                $startTime = if ([string]::IsNullOrWhiteSpace($startInput)) {
+                    (Get-Date).AddHours(-24)
+                } else {
+                    try {
+                        [datetime]::ParseExact($startInput, "yyyy-MM-dd HH:mm", $null)
+                    } catch {
+                        Write-Host "! Invalid date format, using 24 hours ago" -ForegroundColor Yellow
+                        (Get-Date).AddHours(-24)
+                    }
+                }
+                
+                Write-Host "Enter end date/time (format: yyyy-MM-dd HH:mm or press Enter for now):" -ForegroundColor Yellow
+                $endInput = Read-Host
+                $endTime = if ([string]::IsNullOrWhiteSpace($endInput)) {
+                    Get-Date
+                } else {
+                    try {
+                        [datetime]::ParseExact($endInput, "yyyy-MM-dd HH:mm", $null)
+                    } catch {
+                        Write-Host "! Invalid date format, using current time" -ForegroundColor Yellow
+                        Get-Date
+                    }
+                }
+                
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime $startTime -EndTime $endTime
+            }
+            default {
+                Write-Host "! Invalid choice, using last 24 hours" -ForegroundColor Yellow
+                Get-DeviceAvailabilityEvents -headers $apiHeaders -dnaCenter $dnaCenter -StartTime (Get-Date).AddHours(-24) -EndTime (Get-Date)
+            }
+        }
         continue
     }
     elseif ($selection -match '^\d+$') {
