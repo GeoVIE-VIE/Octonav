@@ -1,6 +1,10 @@
 # DNA Center API Interactive Menu Script with Device Filtering
 # Author: In Memory of Zesty.PS1
 
+# For more information, see the Event Management documentation at:
+# https://developer.cisco.com/docs/dna-center/event-management/
+#
+
 # Allow script to run
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
@@ -792,13 +796,13 @@ function Get-EventSeriesLastTimestamp {
     }
 
     if ($EventName) {
-        $queryParts += "eventName=$([System.Uri]::EscapeDataString($EventName))"
+        $queryParts += "name=$([System.Uri]::EscapeDataString($EventName))"
     }
 
     $queryParts += "deviceId=$([System.Uri]::EscapeDataString($DeviceId))"
     $queryParts += "limit=1"
     $queryParts += "offset=0"
-    $queryParts += "sortBy=eventTimestamp"
+    $queryParts += "sortBy=timestamp"
     $queryParts += "order=desc"
 
     if ($AdditionalQuery) {
@@ -817,7 +821,7 @@ function Get-EventSeriesLastTimestamp {
     $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
 
     try {
-        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers
+        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers -ErrorAction SilentlyContinue
     }
     catch {
         return $null
@@ -931,22 +935,51 @@ function Get-LastDeviceAvailabilityEventTime {
         [hashtable]$Headers,
         [string]$DnaCenter,
         [string]$DeviceId,
-        [string]$EventName
+        [string]$EventType  # FIXED: Changed from EventName to EventType - accepts "unreachable" or "reachable"
     )
 
-    if ([string]::IsNullOrWhiteSpace($EventName)) {
+    if ([string]::IsNullOrWhiteSpace($EventType)) {
         return $null
     }
 
-    # Attempt lookup using the provided event name. Additional event identifiers can be
-    # supplied here if they become available in the future.
-    $queryHints = @{ tags = 'ASSURANCE' }
-
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $EventName -AdditionalQuery $queryHints
-
-    if (-not $timestamp) {
-        $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $EventName -AdditionalQuery $null
+    # FIXED: Multi-tier approach to find availability events
+    # According to Cisco DNA Center documentation, device unreachable events use:
+    # - Event Category: "Availability"
+    # - Event Names: patterns like "switch_unreachable", "router_unreachable", etc.
+    # - Tags: "ASSURANCE"
+    
+    # Approach 1: Try with category filter for Availability events
+    $queryHints1 = @{ 
+        tags = 'ASSURANCE'
+        category = 'Availability'
     }
+    
+    $eventNamePattern = if ($EventType -eq "unreachable") {
+        "unreachable"
+    } else {
+        "reachable"
+    }
+    
+    # Try searching for events with the name pattern
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $eventNamePattern -AdditionalQuery $queryHints1
+    
+    if ($timestamp) {
+        return $timestamp
+    }
+
+    # Approach 2: Try without name filter, just category
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $null -AdditionalQuery $queryHints1
+    
+    if ($timestamp) {
+        return $timestamp
+    }
+
+    # Approach 3: Try with just tags
+    $queryHints2 = @{ 
+        tags = 'ASSURANCE'
+    }
+    
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $eventNamePattern -AdditionalQuery $queryHints2
 
     return $timestamp
 }
@@ -2915,7 +2948,8 @@ function Get-NetworkDevicesBasic {
 
     $deviceList = foreach ($device in $devices) {
         # Determine the last time the device was reported as unreachable
-        $lastUnreachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_unreachable"
+        Write-Host "  Processing unreachable events for: $($device.hostname)" -ForegroundColor Gray
+        $lastUnreachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventType "unreachable"
 
         if (-not $lastUnreachableTime) {
             $lastUnreachableTime = Get-LastDisconnectTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
@@ -2962,7 +2996,8 @@ function Get-NetworkDevicesBasic {
         }
 
         # Determine the last time the device was reported as reachable
-        $lastReachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_reachable"
+        Write-Host "  Processing reachable events for: $($device.hostname)" -ForegroundColor Gray
+        $lastReachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventType "reachable"
 
         if (-not $lastReachableTime) {
             $lastReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
