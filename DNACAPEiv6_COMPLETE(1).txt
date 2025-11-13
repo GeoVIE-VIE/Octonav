@@ -770,165 +770,9 @@ function ConvertTo-ReadableTimestamp {
     return $Value.ToString()
 }
 
-function Get-EventSeriesLastTimestamp {
-    param(
-        [hashtable]$Headers,
-        [string]$DnaCenter,
-        [string]$DeviceId,
-        [string]$EventId,
-        [string]$EventName,
-        [hashtable]$AdditionalQuery
-    )
-
-    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
-        return $null
-    }
-
-    $baseUrl = "$DnaCenter/dna/data/api/v1/event/event-series"
-
-    $queryParts = @()
-
-    if ($EventId) {
-        $queryParts += "eventId=$([System.Uri]::EscapeDataString($EventId))"
-    }
-
-    if ($EventName) {
-        $queryParts += "eventName=$([System.Uri]::EscapeDataString($EventName))"
-    }
-
-    $queryParts += "deviceId=$([System.Uri]::EscapeDataString($DeviceId))"
-    $queryParts += "limit=1"
-    $queryParts += "offset=0"
-    $queryParts += "sortBy=eventTimestamp"
-    $queryParts += "order=desc"
-
-    if ($AdditionalQuery) {
-        foreach ($entry in $AdditionalQuery.GetEnumerator()) {
-            $key = $entry.Key
-            $value = $entry.Value
-
-            if ([string]::IsNullOrWhiteSpace([string]$key)) { continue }
-            if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { continue }
-
-            $queryParts += "{0}={1}" -f [System.Uri]::EscapeDataString([string]$key), [System.Uri]::EscapeDataString([string]$value)
-        }
-    }
-
-    $queryString = $queryParts -join '&'
-    $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
-
-    try {
-        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers
-    }
-    catch {
-        return $null
-    }
-
-    $records = @()
-    if ($response) {
-        if ($response.PSObject.Properties['response']) {
-            $records = @($response.response)
-        }
-        elseif ($response.PSObject.Properties['data']) {
-            $records = @($response.data)
-        }
-        elseif ($response.PSObject.Properties['eventSeries']) {
-            $records = @($response.eventSeries)
-        }
-        elseif ($response.PSObject.Properties['eventSeriesDTOList']) {
-            $records = @($response.eventSeriesDTOList)
-        }
-        elseif ($response.PSObject.Properties['items']) {
-            $records = @($response.items)
-        }
-        elseif ($response -is [array]) {
-            $records = @($response)
-        }
-        else {
-            $records = @($response)
-        }
-    }
-
-    foreach ($record in $records) {
-        if (-not $record) { continue }
-
-        $timestampValue = $null
-
-        if ($record.PSObject.Properties['eventTimestamp']) {
-            $timestampValue = $record.eventTimestamp
-        }
-        elseif ($record.PSObject.Properties['timestamp']) {
-            $timestampValue = $record.timestamp
-        }
-        elseif ($record.PSObject.Properties['eventTime']) {
-            $timestampValue = $record.eventTime
-        }
-        elseif ($record.PSObject.Properties['details']) {
-            $details = $record.details
-            if ($details) {
-                if ($details.PSObject.Properties['eventTimestamp']) {
-                    $timestampValue = $details.eventTimestamp
-                }
-                elseif ($details.PSObject.Properties['timestamp']) {
-                    $timestampValue = $details.timestamp
-                }
-                elseif ($details.PSObject.Properties['eventTime']) {
-                    $timestampValue = $details.eventTime
-                }
-            }
-        }
-
-        if (-not $timestampValue) {
-            $nestedCollections = @()
-
-            if ($record.PSObject.Properties['eventSeries']) {
-                $nestedCollections += @($record.eventSeries)
-            }
-
-            if ($record.PSObject.Properties['events']) {
-                $nestedCollections += @($record.events)
-            }
-
-            if ($record.PSObject.Properties['series']) {
-                $nestedCollections += @($record.series)
-            }
-
-            if ($record.PSObject.Properties['records']) {
-                $nestedCollections += @($record.records)
-            }
-
-            foreach ($collection in $nestedCollections) {
-                foreach ($entry in @($collection)) {
-                    if (-not $entry) { continue }
-
-                    if ($entry.PSObject.Properties['eventTimestamp']) {
-                        $timestampValue = $entry.eventTimestamp
-                        break
-                    }
-                    elseif ($entry.PSObject.Properties['timestamp']) {
-                        $timestampValue = $entry.timestamp
-                        break
-                    }
-                    elseif ($entry.PSObject.Properties['eventTime']) {
-                        $timestampValue = $entry.eventTime
-                        break
-                    }
-                }
-
-                if ($timestampValue) { break }
-            }
-        }
-
-        if ($timestampValue) {
-            return ConvertTo-ReadableTimestamp -Value $timestampValue
-        }
-    }
-
-    return $null
-}
-
-# NEW IMPROVED FUNCTIONS FOR COLUMNS K & L
-# These use the Issues API and device enrichment to get ACTUAL unreachable/reachable states
+# ============================================================================
+# REPLACEMENT FUNCTIONS FOR V2 - Uses Issues API instead of Event-Series API
+# ============================================================================
 
 function Get-LastUnreachableTime {
     param(
@@ -981,60 +825,12 @@ function Get-LastUnreachableTime {
         return $lastUnreachableTime
     }
     
-    # Approach 3: Use device enrichment details
-    try {
-        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
-        $body = @{
-            entity_type = "network_device_id"
-            entity_value = $deviceId
-        } | ConvertTo-Json
-        
-        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
-        
-        if ($enrichmentResponse) {
-            # Check for device details with unreachable status
-            $records = @()
-            if ($enrichmentResponse.PSObject.Properties['response']) {
-                $records = @($enrichmentResponse.response)
-            }
-            
-            foreach ($record in $records) {
-                if ($record.deviceDetails) {
-                    $details = $record.deviceDetails
-                    
-                    # Check reachability status history
-                    if ($details.reachabilityStatus -eq "Unreachable" -or $details.collectionStatus -eq "Unreachable") {
-                        if ($details.lastUpdateTime) {
-                            $lastUnreachableTime = ConvertTo-ReadableTimestamp -Value $details.lastUpdateTime
-                        }
-                    }
-                }
-            }
-        }
-    }
-    catch {
-        # Silent fail
-    }
-    
-    if ($lastUnreachableTime) {
-        return $lastUnreachableTime
-    }
-    
-    # Approach 4: If currently unreachable, try to find when it went down
-    if ($Device.reachabilityStatus -eq "Unreachable") {
-        # Check if there's an errorDescription or lastDisconnectTime
-        if ($Device.errorDescription -and $Device.lastUpdated) {
-            return ConvertTo-ReadableTimestamp -Value $Device.lastUpdated
-        }
-    }
-    
-    # Approach 5: Check device history/properties
+    # Approach 3: Check device properties
     $unreachableProps = @(
         'lastDownTime',
         'lastDisconnectedTime',
         'lastDisconnectTime',
-        'lastFailureTime',
-        'lastUnreachableTime'
+        'lastFailureTime'
     )
     
     foreach ($prop in $unreachableProps) {
@@ -1046,9 +842,9 @@ function Get-LastUnreachableTime {
         }
     }
     
-    # If device is currently unreachable but we can't find when, return N/A
+    # If device is currently unreachable but we can't find when
     if ($Device.reachabilityStatus -eq "Unreachable") {
-        return "Currently Unreachable - Time Unknown"
+        return "Currently Unreachable"
     }
     
     return "N/A"
@@ -1075,13 +871,13 @@ function Get-LastReachableTime {
         }
     }
     
-    # Approach 2: Query Issues API for resolved unreachable issues (means it became reachable)
+    # Approach 2: Query Issues API for resolved unreachable issues
     try {
         $issuesUrl = "$DnaCenter/dna/intent/api/v1/issues?deviceId=$([System.Uri]::EscapeDataString($deviceId))&status=RESOLVED&category=Availability"
         $issuesResponse = Invoke-RestMethod -Uri $issuesUrl -Method Get -Headers $Headers -ErrorAction SilentlyContinue
         
         if ($issuesResponse -and $issuesResponse.response) {
-            # Look for resolved unreachable issues (resolution time = when it became reachable)
+            # Look for resolved unreachable issues
             $resolvedIssues = $issuesResponse.response | Where-Object { 
                 ($_.name -match "unreachable" -or 
                  $_.issueDescription -match "unreachable" -or
@@ -1102,45 +898,7 @@ function Get-LastReachableTime {
         return $lastReachableTime
     }
     
-    # Approach 3: Use device enrichment details
-    try {
-        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
-        $body = @{
-            entity_type = "network_device_id"
-            entity_value = $deviceId
-        } | ConvertTo-Json
-        
-        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
-        
-        if ($enrichmentResponse) {
-            $records = @()
-            if ($enrichmentResponse.PSObject.Properties['response']) {
-                $records = @($enrichmentResponse.response)
-            }
-            
-            foreach ($record in $records) {
-                if ($record.deviceDetails) {
-                    $details = $record.deviceDetails
-                    
-                    # Check reachability status
-                    if ($details.reachabilityStatus -eq "Reachable" -or $details.collectionStatus -eq "Managed") {
-                        if ($details.lastUpdateTime) {
-                            $lastReachableTime = ConvertTo-ReadableTimestamp -Value $details.lastUpdateTime
-                        }
-                    }
-                }
-            }
-        }
-    }
-    catch {
-        # Silent fail
-    }
-    
-    if ($lastReachableTime) {
-        return $lastReachableTime
-    }
-    
-    # Approach 4: Check device properties for last successful connection
+    # Approach 3: Check device properties
     $reachableProps = @(
         'lastUpdated',
         'lastSeenTime',
@@ -1148,8 +906,7 @@ function Get-LastReachableTime {
         'lastConnectedTime',
         'lastSuccessfulConnectionTime',
         'lastUpTime',
-        'lastSyncTime',
-        'lastReachableTime'
+        'lastSyncTime'
     )
     
     foreach ($prop in $reachableProps) {
@@ -1161,7 +918,7 @@ function Get-LastReachableTime {
         }
     }
     
-    # If we got here and device is currently unreachable, return N/A
+    # If device is currently unreachable, return N/A
     if ($Device.reachabilityStatus -eq "Unreachable") {
         return "N/A"
     }
@@ -1169,7 +926,6 @@ function Get-LastReachableTime {
     return "N/A"
 }
 
-# UPDATED FUNCTION 1 - Get-NetworkDevicesBasic
 function Get-NetworkDevicesBasic {
     param($headers, $dnaCenter)
 
@@ -1221,7 +977,6 @@ function Get-NetworkDevicesBasic {
     
     Export-Report -Rows $deviceList -BaseName "NetworkDevices_Basic" -RecordLabel "devices" | Out-Null
 }
-
 function Get-TaskFileId {
     param(
         [psobject]$TaskInfo
@@ -3048,7 +2803,6 @@ function Invoke-PathTrace {
 # Include all your existing report functions here (1-20)
 # I'll include just a few as examples - you already have these from before
 
-}
 
 # =====================================================
 # FUNCTION 2: Network Devices (Detailed)
