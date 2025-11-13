@@ -1,9 +1,6 @@
 # DNA Center API Interactive Menu Script with Device Filtering
 # Author: In Memory of Zesty.PS1
 
-# For more information, see the Event Management documentation at:
-# https://developer.cisco.com/docs/dna-center/event-management/
-#
 
 # Allow script to run
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
@@ -796,13 +793,13 @@ function Get-EventSeriesLastTimestamp {
     }
 
     if ($EventName) {
-        $queryParts += "name=$([System.Uri]::EscapeDataString($EventName))"
+        $queryParts += "eventName=$([System.Uri]::EscapeDataString($EventName))"
     }
 
     $queryParts += "deviceId=$([System.Uri]::EscapeDataString($DeviceId))"
     $queryParts += "limit=1"
     $queryParts += "offset=0"
-    $queryParts += "sortBy=timestamp"
+    $queryParts += "sortBy=eventTimestamp"
     $queryParts += "order=desc"
 
     if ($AdditionalQuery) {
@@ -821,7 +818,7 @@ function Get-EventSeriesLastTimestamp {
     $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
 
     try {
-        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers -ErrorAction SilentlyContinue
+        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers
     }
     catch {
         return $null
@@ -930,186 +927,299 @@ function Get-EventSeriesLastTimestamp {
     return $null
 }
 
-function Get-LastDeviceAvailabilityEventTime {
+# NEW IMPROVED FUNCTIONS FOR COLUMNS K & L
+# These use the Issues API and device enrichment to get ACTUAL unreachable/reachable states
+
+function Get-LastUnreachableTime {
     param(
         [hashtable]$Headers,
         [string]$DnaCenter,
-        [string]$DeviceId,
-        [string]$EventType  # FIXED: Changed from EventName to EventType - accepts "unreachable" or "reachable"
-    )
-
-    if ([string]::IsNullOrWhiteSpace($EventType)) {
-        return $null
-    }
-
-    # FIXED: Multi-tier approach to find availability events
-    # According to Cisco DNA Center documentation, device unreachable events use:
-    # - Event Category: "Availability"
-    # - Event Names: patterns like "switch_unreachable", "router_unreachable", etc.
-    # - Tags: "ASSURANCE"
-    
-    # Approach 1: Try with category filter for Availability events
-    $queryHints1 = @{ 
-        tags = 'ASSURANCE'
-        category = 'Availability'
-    }
-    
-    $eventNamePattern = if ($EventType -eq "unreachable") {
-        "unreachable"
-    } else {
-        "reachable"
-    }
-    
-    # Try searching for events with the name pattern
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $eventNamePattern -AdditionalQuery $queryHints1
-    
-    if ($timestamp) {
-        return $timestamp
-    }
-
-    # Approach 2: Try without name filter, just category
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $null -AdditionalQuery $queryHints1
-    
-    if ($timestamp) {
-        return $timestamp
-    }
-
-    # Approach 3: Try with just tags
-    $queryHints2 = @{ 
-        tags = 'ASSURANCE'
-    }
-    
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $eventNamePattern -AdditionalQuery $queryHints2
-
-    return $timestamp
-}
-
-function Get-LastDisconnectTime {
-    param(
-        [hashtable]$Headers,
-        [string]$DnaCenter,
-        [string]$DeviceId
-    )
-
-    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
-        return $null
-    }
-
-    $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/network-device/$DeviceId/enrichment-details"
-
-    try {
-        $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers
-
-        if (-not $response) {
-            return $null
-        }
-
-        $records = @()
-        if ($response.PSObject.Properties['response']) {
-            $records = @($response.response)
-        } elseif ($response -is [array]) {
-            $records = @($response)
-        } else {
-            $records = @($response)
-        }
-
-        foreach ($record in $records) {
-            if (-not $record) { continue }
-
-            $deviceDetails = $null
-            if ($record.PSObject.Properties['deviceDetails']) {
-                $deviceDetails = $record.deviceDetails
-            } elseif ($record.PSObject.Properties['deviceDetail']) {
-                $deviceDetails = $record.deviceDetail
-            } elseif ($record.PSObject.Properties['details']) {
-                $deviceDetails = $record.details
-            }
-
-            if (-not $deviceDetails) { continue }
-
-            $lastDisconnect = $null
-            if ($deviceDetails.PSObject.Properties['lastDisconnectTime']) {
-                $lastDisconnect = $deviceDetails.lastDisconnectTime
-            }
-
-            if (-not $lastDisconnect -and $deviceDetails.PSObject.Properties['detailAttributes']) {
-                $attributes = $deviceDetails.detailAttributes
-                if ($attributes -and $attributes.PSObject.Properties['lastDisconnectTime']) {
-                    $lastDisconnect = $attributes.lastDisconnectTime
-                }
-            }
-
-            if ($lastDisconnect) {
-                return ConvertTo-ReadableTimestamp -Value $lastDisconnect
-            }
-        }
-
-        return $null
-    }
-    catch {
-        return $null
-    }
-}
-
-function Get-LastPingReachableTime {
-    param(
-        [hashtable]$Headers,
-        [string]$DnaCenter,
-        [string]$DeviceId
+        [object]$Device
     )
     
-    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+    if (-not $Device -or -not $Device.id) {
         return "N/A"
     }
     
+    $deviceId = $Device.id
+    $lastUnreachableTime = $null
+    
+    # Approach 1: Check current reachability status
+    # If device is currently unreachable, use lastUpdated as the unreachable time
+    if ($Device.reachabilityStatus -eq "Unreachable") {
+        if ($Device.lastUpdated) {
+            return ConvertTo-ReadableTimestamp -Value $Device.lastUpdated
+        }
+    }
+    
+    # Approach 2: Query Issues API for device unreachable issues
     try {
-        # Try to get device enrichment details which contains event history
-        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
-        $enrichmentHeaders = $Headers.Clone()
-        $enrichmentHeaders["entity_type"] = "network-device"
-        $enrichmentHeaders["entity_value"] = $DeviceId
+        $issuesUrl = "$DnaCenter/dna/intent/api/v1/issues?deviceId=$([System.Uri]::EscapeDataString($deviceId))&category=Availability"
+        $issuesResponse = Invoke-RestMethod -Uri $issuesUrl -Method Get -Headers $Headers -ErrorAction SilentlyContinue
         
-        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $enrichmentHeaders
+        if ($issuesResponse -and $issuesResponse.response) {
+            # Look for unreachable issues
+            $unreachableIssues = $issuesResponse.response | Where-Object { 
+                $_.name -match "unreachable" -or 
+                $_.issueDescription -match "unreachable" -or
+                $_.issueName -match "unreachable"
+            } | Sort-Object -Property lastOccurredTime -Descending | Select-Object -First 1
+            
+            if ($unreachableIssues -and $unreachableIssues.lastOccurredTime) {
+                $lastUnreachableTime = ConvertTo-ReadableTimestamp -Value $unreachableIssues.lastOccurredTime
+            }
+            elseif ($unreachableIssues -and $unreachableIssues.issueTimestamp) {
+                $lastUnreachableTime = ConvertTo-ReadableTimestamp -Value $unreachableIssues.issueTimestamp
+            }
+        }
+    }
+    catch {
+        # Silent fail - try next approach
+    }
+    
+    if ($lastUnreachableTime) {
+        return $lastUnreachableTime
+    }
+    
+    # Approach 3: Use device enrichment details
+    try {
+        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
+        $body = @{
+            entity_type = "network_device_id"
+            entity_value = $deviceId
+        } | ConvertTo-Json
+        
+        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
         
         if ($enrichmentResponse) {
-            # Look for device_availability:ping_reachable events
-            $events = $null
-            if ($enrichmentResponse.PSObject.Properties['response'] -and $enrichmentResponse.response) {
-                $events = $enrichmentResponse.response
-            } elseif ($enrichmentResponse -is [array]) {
-                $events = $enrichmentResponse
+            # Check for device details with unreachable status
+            $records = @()
+            if ($enrichmentResponse.PSObject.Properties['response']) {
+                $records = @($enrichmentResponse.response)
             }
             
-            if ($events) {
-                # Search for the most recent ping_reachable event
-                $pingReachableEvents = @()
-                foreach ($event in $events) {
-                    if ($event.eventType -like "*ping_reachable*" -or 
-                        $event.name -like "*ping_reachable*" -or
-                        $event.details -like "*ping_reachable*") {
-                        $pingReachableEvents += $event
-                    }
-                }
-                
-                if ($pingReachableEvents.Count -gt 0) {
-                    # Sort by timestamp and get the most recent
-                    $sortedEvents = $pingReachableEvents | Sort-Object -Property timestamp -Descending
-                    $latestEvent = $sortedEvents[0]
+            foreach ($record in $records) {
+                if ($record.deviceDetails) {
+                    $details = $record.deviceDetails
                     
-                    if ($latestEvent.timestamp) {
-                        return ConvertTo-ReadableTimestamp -Value $latestEvent.timestamp
+                    # Check reachability status history
+                    if ($details.reachabilityStatus -eq "Unreachable" -or $details.collectionStatus -eq "Unreachable") {
+                        if ($details.lastUpdateTime) {
+                            $lastUnreachableTime = ConvertTo-ReadableTimestamp -Value $details.lastUpdateTime
+                        }
                     }
                 }
             }
         }
-        
-        # Fallback: return null to use lastUpdated from device
-        return $null
-        
-    } catch {
-        # Silently fail and return null - will use fallback
-        return $null
     }
+    catch {
+        # Silent fail
+    }
+    
+    if ($lastUnreachableTime) {
+        return $lastUnreachableTime
+    }
+    
+    # Approach 4: If currently unreachable, try to find when it went down
+    if ($Device.reachabilityStatus -eq "Unreachable") {
+        # Check if there's an errorDescription or lastDisconnectTime
+        if ($Device.errorDescription -and $Device.lastUpdated) {
+            return ConvertTo-ReadableTimestamp -Value $Device.lastUpdated
+        }
+    }
+    
+    # Approach 5: Check device history/properties
+    $unreachableProps = @(
+        'lastDownTime',
+        'lastDisconnectedTime',
+        'lastDisconnectTime',
+        'lastFailureTime',
+        'lastUnreachableTime'
+    )
+    
+    foreach ($prop in $unreachableProps) {
+        if ($Device.PSObject.Properties[$prop] -and $Device.$prop) {
+            $converted = ConvertTo-ReadableTimestamp -Value $Device.$prop
+            if ($converted -and $converted -ne "N/A") {
+                return $converted
+            }
+        }
+    }
+    
+    # If device is currently unreachable but we can't find when, return N/A
+    if ($Device.reachabilityStatus -eq "Unreachable") {
+        return "Currently Unreachable - Time Unknown"
+    }
+    
+    return "N/A"
+}
+
+function Get-LastReachableTime {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [object]$Device
+    )
+    
+    if (-not $Device -or -not $Device.id) {
+        return "N/A"
+    }
+    
+    $deviceId = $Device.id
+    $lastReachableTime = $null
+    
+    # Approach 1: If device is currently reachable, use lastUpdated
+    if ($Device.reachabilityStatus -eq "Reachable") {
+        if ($Device.lastUpdated) {
+            return ConvertTo-ReadableTimestamp -Value $Device.lastUpdated
+        }
+    }
+    
+    # Approach 2: Query Issues API for resolved unreachable issues (means it became reachable)
+    try {
+        $issuesUrl = "$DnaCenter/dna/intent/api/v1/issues?deviceId=$([System.Uri]::EscapeDataString($deviceId))&status=RESOLVED&category=Availability"
+        $issuesResponse = Invoke-RestMethod -Uri $issuesUrl -Method Get -Headers $Headers -ErrorAction SilentlyContinue
+        
+        if ($issuesResponse -and $issuesResponse.response) {
+            # Look for resolved unreachable issues (resolution time = when it became reachable)
+            $resolvedIssues = $issuesResponse.response | Where-Object { 
+                ($_.name -match "unreachable" -or 
+                 $_.issueDescription -match "unreachable" -or
+                 $_.issueName -match "unreachable") -and
+                $_.status -eq "RESOLVED"
+            } | Sort-Object -Property lastOccurredTime -Descending | Select-Object -First 1
+            
+            if ($resolvedIssues -and $resolvedIssues.lastOccurredTime) {
+                $lastReachableTime = ConvertTo-ReadableTimestamp -Value $resolvedIssues.lastOccurredTime
+            }
+        }
+    }
+    catch {
+        # Silent fail - try next approach
+    }
+    
+    if ($lastReachableTime) {
+        return $lastReachableTime
+    }
+    
+    # Approach 3: Use device enrichment details
+    try {
+        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
+        $body = @{
+            entity_type = "network_device_id"
+            entity_value = $deviceId
+        } | ConvertTo-Json
+        
+        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+        
+        if ($enrichmentResponse) {
+            $records = @()
+            if ($enrichmentResponse.PSObject.Properties['response']) {
+                $records = @($enrichmentResponse.response)
+            }
+            
+            foreach ($record in $records) {
+                if ($record.deviceDetails) {
+                    $details = $record.deviceDetails
+                    
+                    # Check reachability status
+                    if ($details.reachabilityStatus -eq "Reachable" -or $details.collectionStatus -eq "Managed") {
+                        if ($details.lastUpdateTime) {
+                            $lastReachableTime = ConvertTo-ReadableTimestamp -Value $details.lastUpdateTime
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        # Silent fail
+    }
+    
+    if ($lastReachableTime) {
+        return $lastReachableTime
+    }
+    
+    # Approach 4: Check device properties for last successful connection
+    $reachableProps = @(
+        'lastUpdated',
+        'lastSeenTime',
+        'lastSeen',
+        'lastConnectedTime',
+        'lastSuccessfulConnectionTime',
+        'lastUpTime',
+        'lastSyncTime',
+        'lastReachableTime'
+    )
+    
+    foreach ($prop in $reachableProps) {
+        if ($Device.PSObject.Properties[$prop] -and $Device.$prop) {
+            $converted = ConvertTo-ReadableTimestamp -Value $Device.$prop
+            if ($converted -and $converted -ne "N/A") {
+                return $converted
+            }
+        }
+    }
+    
+    # If we got here and device is currently unreachable, return N/A
+    if ($Device.reachabilityStatus -eq "Unreachable") {
+        return "N/A"
+    }
+    
+    return "N/A"
+}
+
+# UPDATED FUNCTION 1 - Get-NetworkDevicesBasic
+function Get-NetworkDevicesBasic {
+    param($headers, $dnaCenter)
+
+    Write-Host "`nFetching network devices (basic info)..." -ForegroundColor Yellow
+
+    $devices = Get-ActiveDevices
+    if (-not $devices) { return }
+
+    Write-Host "Analyzing device availability history..." -ForegroundColor Yellow
+    Write-Host "This may take a moment for large device counts..." -ForegroundColor Gray
+    Write-Host ""
+
+    $counter = 0
+    $total = $devices.Count
+    
+    $deviceList = foreach ($device in $devices) {
+        $counter++
+        $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+        
+        # Show progress every 5 devices
+        if ($counter % 5 -eq 0 -or $counter -eq 1) {
+            Write-Host "  Processing device $counter of $total : $hostname" -ForegroundColor Gray
+        }
+        
+        # Get last unreachable time (Column K)
+        $lastUnreachableTime = Get-LastUnreachableTime -Headers $headers -DnaCenter $dnaCenter -Device $device
+        
+        # Get last reachable time (Column L)
+        $lastReachableTime = Get-LastReachableTime -Headers $headers -DnaCenter $dnaCenter -Device $device
+
+        [PSCustomObject]@{
+            Hostname = $hostname
+            IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+            SerialNumber = if ($device.serialNumber) { $device.serialNumber } else { "N/A" }
+            Platform = if ($device.platformId) { $device.platformId } else { "N/A" }
+            SoftwareVersion = if ($device.softwareVersion) { $device.softwareVersion } else { "N/A" }
+            Role = if ($device.role) { $device.role } else { "N/A" }
+            ReachabilityStatus = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "N/A" }
+            Family = if ($device.family) { $device.family } else { "N/A" }
+            Type = if ($device.type) { $device.type } else { "N/A" }
+            UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
+            LastUnreachableEventTime = $lastUnreachableTime
+            LastReachableEventTime = $lastReachableTime
+        }
+    }
+
+    Write-Host ""
+    Write-Host "✓ Processed $total devices" -ForegroundColor Green
+    
+    Export-Report -Rows $deviceList -BaseName "NetworkDevices_Basic" -RecordLabel "devices" | Out-Null
 }
 
 function Get-TaskFileId {
@@ -2938,111 +3048,6 @@ function Invoke-PathTrace {
 # Include all your existing report functions here (1-20)
 # I'll include just a few as examples - you already have these from before
 
-function Get-NetworkDevicesBasic {
-    param($headers, $dnaCenter)
-
-    Write-Host "`nFetching network devices (basic info)..." -ForegroundColor Yellow
-
-    $devices = Get-ActiveDevices
-    if (-not $devices) { return }
-
-    $deviceList = foreach ($device in $devices) {
-        # Determine the last time the device was reported as unreachable
-        Write-Host "  Processing unreachable events for: $($device.hostname)" -ForegroundColor Gray
-        $lastUnreachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventType "unreachable"
-
-        if (-not $lastUnreachableTime) {
-            $lastUnreachableTime = Get-LastDisconnectTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
-        }
-
-        if (-not $lastUnreachableTime) {
-            $lastOfflineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
-                'lastDownTime',
-                'lastDisconnectedTime',
-                'lastConnectionTime',
-                'lastDisconnectionTime',
-                'lastBootTime'
-            )
-
-            if ($lastOfflineValue) {
-                $convertedOfflineValue = ConvertTo-ReadableTimestamp $lastOfflineValue
-                if ($convertedOfflineValue) {
-                    $lastUnreachableTime = $convertedOfflineValue
-                }
-            }
-        }
-
-        if (-not $lastUnreachableTime) {
-            $lastOfflineFallback = Get-FirstPropertyValue -Object $device -PropertyNames @(
-                'lastUpdated',
-                'lastSeenTime',
-                'lastSeen',
-                'lastUpTime',
-                'lastConnectedTime',
-                'lastSuccessfulConnectionTime',
-                'lastSyncTime'
-            )
-
-            if ($lastOfflineFallback) {
-                $convertedFallback = ConvertTo-ReadableTimestamp $lastOfflineFallback
-                if ($convertedFallback) {
-                    $lastUnreachableTime = $convertedFallback
-                }
-            }
-        }
-
-        if (-not $lastUnreachableTime) {
-            $lastUnreachableTime = "N/A"
-        }
-
-        # Determine the last time the device was reported as reachable
-        Write-Host "  Processing reachable events for: $($device.hostname)" -ForegroundColor Gray
-        $lastReachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventType "reachable"
-
-        if (-not $lastReachableTime) {
-            $lastReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
-        }
-
-        if (-not $lastReachableTime) {
-            $lastReachableValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
-                'lastUpdated',
-                'lastSeenTime',
-                'lastSeen',
-                'lastUpTime',
-                'lastConnectedTime',
-                'lastSuccessfulConnectionTime',
-                'lastSyncTime'
-            )
-
-            if ($lastReachableValue) {
-                $convertedReachable = ConvertTo-ReadableTimestamp $lastReachableValue
-                if ($convertedReachable) {
-                    $lastReachableTime = $convertedReachable
-                }
-            }
-        }
-
-        if (-not $lastReachableTime) {
-            $lastReachableTime = "N/A"
-        }
-
-        [PSCustomObject]@{
-            Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
-            IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
-            SerialNumber = if ($device.serialNumber) { $device.serialNumber } else { "N/A" }
-            Platform = if ($device.platformId) { $device.platformId } else { "N/A" }
-            SoftwareVersion = if ($device.softwareVersion) { $device.softwareVersion } else { "N/A" }
-            Role = if ($device.role) { $device.role } else { "N/A" }
-            ReachabilityStatus = if ($device.reachabilityStatus) { $device.reachabilityStatus } else { "N/A" }
-            Family = if ($device.family) { $device.family } else { "N/A" }
-            Type = if ($device.type) { $device.type } else { "N/A" }
-            UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-            LastUnreachableEventTime = $lastUnreachableTime
-            LastReachableEventTime = $lastReachableTime
-        }
-    }
-
-    Export-Report -Rows $deviceList -BaseName "NetworkDevices_Basic" -RecordLabel "devices" | Out-Null
 }
 
 # =====================================================
