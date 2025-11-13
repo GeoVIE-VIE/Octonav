@@ -769,6 +769,73 @@ function ConvertTo-ReadableTimestamp {
     return $Value.ToString()
 }
 
+function Get-LastDisconnectTime {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [string]$DeviceId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        return $null
+    }
+
+    $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/network-device/$DeviceId/enrichment-details"
+
+    try {
+        $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers
+
+        if (-not $response) {
+            return $null
+        }
+
+        $records = @()
+        if ($response.PSObject.Properties['response']) {
+            $records = @($response.response)
+        } elseif ($response -is [array]) {
+            $records = @($response)
+        } else {
+            $records = @($response)
+        }
+
+        foreach ($record in $records) {
+            if (-not $record) { continue }
+
+            $deviceDetails = $null
+            if ($record.PSObject.Properties['deviceDetails']) {
+                $deviceDetails = $record.deviceDetails
+            } elseif ($record.PSObject.Properties['deviceDetail']) {
+                $deviceDetails = $record.deviceDetail
+            } elseif ($record.PSObject.Properties['details']) {
+                $deviceDetails = $record.details
+            }
+
+            if (-not $deviceDetails) { continue }
+
+            $lastDisconnect = $null
+            if ($deviceDetails.PSObject.Properties['lastDisconnectTime']) {
+                $lastDisconnect = $deviceDetails.lastDisconnectTime
+            }
+
+            if (-not $lastDisconnect -and $deviceDetails.PSObject.Properties['detailAttributes']) {
+                $attributes = $deviceDetails.detailAttributes
+                if ($attributes -and $attributes.PSObject.Properties['lastDisconnectTime']) {
+                    $lastDisconnect = $attributes.lastDisconnectTime
+                }
+            }
+
+            if ($lastDisconnect) {
+                return ConvertTo-ReadableTimestamp -Value $lastDisconnect
+            }
+        }
+
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-LastPingReachableTime {
     param(
         [hashtable]$Headers,
@@ -2665,11 +2732,16 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
-        # Try to get the last ping_reachable time
-        $lastPingReachable = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
-        
-        # If we couldn't get ping_reachable time, use lastUpdated as fallback
-        if (-not $lastPingReachable) {
+        # Try to get the last recorded disconnect time from enrichment details
+        $lastDisconnectTime = Get-LastDisconnectTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+
+        # Fallback to ping_reachable events if disconnect time is unavailable
+        if (-not $lastDisconnectTime) {
+            $lastDisconnectTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        }
+
+        # Final fallback to device timestamps if enrichment data is missing
+        if (-not $lastDisconnectTime) {
             $lastOnlineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
                 'lastUpdated',
                 'lastSeenTime',
@@ -2679,11 +2751,11 @@ function Get-NetworkDevicesBasic {
                 'lastSuccessfulConnectionTime',
                 'lastSyncTime'
             )
-            $lastPingReachable = ConvertTo-ReadableTimestamp $lastOnlineValue
+            $lastDisconnectTime = ConvertTo-ReadableTimestamp $lastOnlineValue
         }
-        
-        if (-not $lastPingReachable) {
-            $lastPingReachable = "N/A"
+
+        if (-not $lastDisconnectTime) {
+            $lastDisconnectTime = "N/A"
         }
 
         [PSCustomObject]@{
@@ -2697,7 +2769,7 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-            LastPingReachable = $lastPingReachable
+            LastDisconnectTime = $lastDisconnectTime
         }
     }
 
