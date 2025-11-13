@@ -769,6 +769,255 @@ function ConvertTo-ReadableTimestamp {
     return $Value.ToString()
 }
 
+function Get-EventSeriesLastTimestamp {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [string]$DeviceId,
+        [string]$EventId,
+        [string]$EventName,
+        [hashtable]$AdditionalQuery
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        return $null
+    }
+
+    $baseUrl = "$DnaCenter/dna/data/api/v1/event/event-series"
+
+    $queryParts = @()
+
+    if ($EventId) {
+        $queryParts += "eventId=$([System.Uri]::EscapeDataString($EventId))"
+    }
+
+    if ($EventName) {
+        $queryParts += "eventName=$([System.Uri]::EscapeDataString($EventName))"
+    }
+
+    $queryParts += "deviceId=$([System.Uri]::EscapeDataString($DeviceId))"
+    $queryParts += "limit=1"
+    $queryParts += "offset=0"
+    $queryParts += "sortBy=eventTimestamp"
+    $queryParts += "order=desc"
+
+    if ($AdditionalQuery) {
+        foreach ($entry in $AdditionalQuery.GetEnumerator()) {
+            $key = $entry.Key
+            $value = $entry.Value
+
+            if ([string]::IsNullOrWhiteSpace([string]$key)) { continue }
+            if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { continue }
+
+            $queryParts += "{0}={1}" -f [System.Uri]::EscapeDataString([string]$key), [System.Uri]::EscapeDataString([string]$value)
+        }
+    }
+
+    $queryString = $queryParts -join '&'
+    $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
+
+    try {
+        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $Headers
+    }
+    catch {
+        return $null
+    }
+
+    $records = @()
+    if ($response) {
+        if ($response.PSObject.Properties['response']) {
+            $records = @($response.response)
+        }
+        elseif ($response.PSObject.Properties['data']) {
+            $records = @($response.data)
+        }
+        elseif ($response.PSObject.Properties['eventSeries']) {
+            $records = @($response.eventSeries)
+        }
+        elseif ($response.PSObject.Properties['eventSeriesDTOList']) {
+            $records = @($response.eventSeriesDTOList)
+        }
+        elseif ($response.PSObject.Properties['items']) {
+            $records = @($response.items)
+        }
+        elseif ($response -is [array]) {
+            $records = @($response)
+        }
+        else {
+            $records = @($response)
+        }
+    }
+
+    foreach ($record in $records) {
+        if (-not $record) { continue }
+
+        $timestampValue = $null
+
+        if ($record.PSObject.Properties['eventTimestamp']) {
+            $timestampValue = $record.eventTimestamp
+        }
+        elseif ($record.PSObject.Properties['timestamp']) {
+            $timestampValue = $record.timestamp
+        }
+        elseif ($record.PSObject.Properties['eventTime']) {
+            $timestampValue = $record.eventTime
+        }
+        elseif ($record.PSObject.Properties['details']) {
+            $details = $record.details
+            if ($details) {
+                if ($details.PSObject.Properties['eventTimestamp']) {
+                    $timestampValue = $details.eventTimestamp
+                }
+                elseif ($details.PSObject.Properties['timestamp']) {
+                    $timestampValue = $details.timestamp
+                }
+                elseif ($details.PSObject.Properties['eventTime']) {
+                    $timestampValue = $details.eventTime
+                }
+            }
+        }
+
+        if (-not $timestampValue) {
+            $nestedCollections = @()
+
+            if ($record.PSObject.Properties['eventSeries']) {
+                $nestedCollections += @($record.eventSeries)
+            }
+
+            if ($record.PSObject.Properties['events']) {
+                $nestedCollections += @($record.events)
+            }
+
+            if ($record.PSObject.Properties['series']) {
+                $nestedCollections += @($record.series)
+            }
+
+            if ($record.PSObject.Properties['records']) {
+                $nestedCollections += @($record.records)
+            }
+
+            foreach ($collection in $nestedCollections) {
+                foreach ($entry in @($collection)) {
+                    if (-not $entry) { continue }
+
+                    if ($entry.PSObject.Properties['eventTimestamp']) {
+                        $timestampValue = $entry.eventTimestamp
+                        break
+                    }
+                    elseif ($entry.PSObject.Properties['timestamp']) {
+                        $timestampValue = $entry.timestamp
+                        break
+                    }
+                    elseif ($entry.PSObject.Properties['eventTime']) {
+                        $timestampValue = $entry.eventTime
+                        break
+                    }
+                }
+
+                if ($timestampValue) { break }
+            }
+        }
+
+        if ($timestampValue) {
+            return ConvertTo-ReadableTimestamp -Value $timestampValue
+        }
+    }
+
+    return $null
+}
+
+function Get-LastDeviceAvailabilityEventTime {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [string]$DeviceId,
+        [string]$EventName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($EventName)) {
+        return $null
+    }
+
+    # Attempt lookup using the provided event name. Additional event identifiers can be
+    # supplied here if they become available in the future.
+    $queryHints = @{ tags = 'ASSURANCE' }
+
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $EventName -AdditionalQuery $queryHints
+
+    if (-not $timestamp) {
+        $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventId $null -EventName $EventName -AdditionalQuery $null
+    }
+
+    return $timestamp
+}
+
+function Get-LastDisconnectTime {
+    param(
+        [hashtable]$Headers,
+        [string]$DnaCenter,
+        [string]$DeviceId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        return $null
+    }
+
+    $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/network-device/$DeviceId/enrichment-details"
+
+    try {
+        $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $Headers
+
+        if (-not $response) {
+            return $null
+        }
+
+        $records = @()
+        if ($response.PSObject.Properties['response']) {
+            $records = @($response.response)
+        } elseif ($response -is [array]) {
+            $records = @($response)
+        } else {
+            $records = @($response)
+        }
+
+        foreach ($record in $records) {
+            if (-not $record) { continue }
+
+            $deviceDetails = $null
+            if ($record.PSObject.Properties['deviceDetails']) {
+                $deviceDetails = $record.deviceDetails
+            } elseif ($record.PSObject.Properties['deviceDetail']) {
+                $deviceDetails = $record.deviceDetail
+            } elseif ($record.PSObject.Properties['details']) {
+                $deviceDetails = $record.details
+            }
+
+            if (-not $deviceDetails) { continue }
+
+            $lastDisconnect = $null
+            if ($deviceDetails.PSObject.Properties['lastDisconnectTime']) {
+                $lastDisconnect = $deviceDetails.lastDisconnectTime
+            }
+
+            if (-not $lastDisconnect -and $deviceDetails.PSObject.Properties['detailAttributes']) {
+                $attributes = $deviceDetails.detailAttributes
+                if ($attributes -and $attributes.PSObject.Properties['lastDisconnectTime']) {
+                    $lastDisconnect = $attributes.lastDisconnectTime
+                }
+            }
+
+            if ($lastDisconnect) {
+                return ConvertTo-ReadableTimestamp -Value $lastDisconnect
+            }
+        }
+
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-LastPingReachableTime {
     param(
         [hashtable]$Headers,
@@ -2665,12 +2914,32 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
-        # Try to get the last ping_reachable time
-        $lastPingReachable = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
-        
-        # If we couldn't get ping_reachable time, use lastUpdated as fallback
-        if (-not $lastPingReachable) {
-            $lastOnlineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+        # Determine the last time the device was reported as unreachable
+        $lastUnreachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_unreachable"
+
+        if (-not $lastUnreachableTime) {
+            $lastUnreachableTime = Get-LastDisconnectTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        }
+
+        if (-not $lastUnreachableTime) {
+            $lastOfflineValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+                'lastDownTime',
+                'lastDisconnectedTime',
+                'lastConnectionTime',
+                'lastDisconnectionTime',
+                'lastBootTime'
+            )
+
+            if ($lastOfflineValue) {
+                $convertedOfflineValue = ConvertTo-ReadableTimestamp $lastOfflineValue
+                if ($convertedOfflineValue) {
+                    $lastUnreachableTime = $convertedOfflineValue
+                }
+            }
+        }
+
+        if (-not $lastUnreachableTime) {
+            $lastOfflineFallback = Get-FirstPropertyValue -Object $device -PropertyNames @(
                 'lastUpdated',
                 'lastSeenTime',
                 'lastSeen',
@@ -2679,11 +2948,47 @@ function Get-NetworkDevicesBasic {
                 'lastSuccessfulConnectionTime',
                 'lastSyncTime'
             )
-            $lastPingReachable = ConvertTo-ReadableTimestamp $lastOnlineValue
+
+            if ($lastOfflineFallback) {
+                $convertedFallback = ConvertTo-ReadableTimestamp $lastOfflineFallback
+                if ($convertedFallback) {
+                    $lastUnreachableTime = $convertedFallback
+                }
+            }
         }
-        
-        if (-not $lastPingReachable) {
-            $lastPingReachable = "N/A"
+
+        if (-not $lastUnreachableTime) {
+            $lastUnreachableTime = "N/A"
+        }
+
+        # Determine the last time the device was reported as reachable
+        $lastReachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_reachable"
+
+        if (-not $lastReachableTime) {
+            $lastReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        }
+
+        if (-not $lastReachableTime) {
+            $lastReachableValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+                'lastUpdated',
+                'lastSeenTime',
+                'lastSeen',
+                'lastUpTime',
+                'lastConnectedTime',
+                'lastSuccessfulConnectionTime',
+                'lastSyncTime'
+            )
+
+            if ($lastReachableValue) {
+                $convertedReachable = ConvertTo-ReadableTimestamp $lastReachableValue
+                if ($convertedReachable) {
+                    $lastReachableTime = $convertedReachable
+                }
+            }
+        }
+
+        if (-not $lastReachableTime) {
+            $lastReachableTime = "N/A"
         }
 
         [PSCustomObject]@{
@@ -2697,7 +3002,8 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-            LastPingReachable = $lastPingReachable
+            LastUnreachableEventTime = $lastUnreachableTime
+            LastReachableEventTime = $lastReachableTime
         }
     }
 
