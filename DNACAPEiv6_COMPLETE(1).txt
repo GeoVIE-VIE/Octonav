@@ -1024,59 +1024,27 @@ function Get-LastPingReachableTime {
         [string]$DnaCenter,
         [string]$DeviceId
     )
-    
+
     if ([string]::IsNullOrWhiteSpace($DeviceId)) {
         return "N/A"
     }
-    
-    try {
-        # Try to get device enrichment details which contains event history
-        $enrichmentUrl = "$DnaCenter/dna/intent/api/v1/device-enrichment-details"
-        $enrichmentHeaders = $Headers.Clone()
-        $enrichmentHeaders["entity_type"] = "network-device"
-        $enrichmentHeaders["entity_value"] = $DeviceId
-        
-        $enrichmentResponse = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $enrichmentHeaders
-        
-        if ($enrichmentResponse) {
-            # Look for device_availability:ping_reachable events
-            $events = $null
-            if ($enrichmentResponse.PSObject.Properties['response'] -and $enrichmentResponse.response) {
-                $events = $enrichmentResponse.response
-            } elseif ($enrichmentResponse -is [array]) {
-                $events = $enrichmentResponse
-            }
-            
-            if ($events) {
-                # Search for the most recent ping_reachable event
-                $pingReachableEvents = @()
-                foreach ($event in $events) {
-                    if ($event.eventType -like "*ping_reachable*" -or 
-                        $event.name -like "*ping_reachable*" -or
-                        $event.details -like "*ping_reachable*") {
-                        $pingReachableEvents += $event
-                    }
-                }
-                
-                if ($pingReachableEvents.Count -gt 0) {
-                    # Sort by timestamp and get the most recent
-                    $sortedEvents = $pingReachableEvents | Sort-Object -Property timestamp -Descending
-                    $latestEvent = $sortedEvents[0]
-                    
-                    if ($latestEvent.timestamp) {
-                        return ConvertTo-ReadableTimestamp -Value $latestEvent.timestamp
-                    }
-                }
-            }
-        }
-        
-        # Fallback: return null to use lastUpdated from device
-        return $null
-        
-    } catch {
-        # Silently fail and return null - will use fallback
-        return $null
+
+    # Use the event series API to find the last device_availability:ping_reachable event
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventName "device_availability:ping_reachable"
+
+    if ($timestamp) {
+        return $timestamp
     }
+
+    # Fallback to device_availability:reachable if ping_reachable not found
+    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventName "device_availability:reachable"
+
+    if ($timestamp) {
+        return $timestamp
+    }
+
+    # Final fallback to lastUpdated if no events found
+    return "N/A"
 }
 
 function Get-TaskFileId {
@@ -2914,7 +2882,30 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
-        # Determine the last time the device was reported as unreachable
+        # Get the last time the device was ping_reachable (column K)
+        $lastPingReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        
+        # If no ping_reachable event, try to get from device properties
+        if ($lastPingReachableTime -eq "N/A") {
+            $lastReachableValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
+                'lastUpdated',
+                'lastSeenTime',
+                'lastSeen',
+                'lastUpTime',
+                'lastConnectedTime',
+                'lastSuccessfulConnectionTime',
+                'lastSyncTime'
+            )
+
+            if ($lastReachableValue) {
+                $convertedReachable = ConvertTo-ReadableTimestamp $lastReachableValue
+                if ($convertedReachable) {
+                    $lastPingReachableTime = $convertedReachable
+                }
+            }
+        }
+
+        # Get the last time the device was unreachable (for reference)
         $lastUnreachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_unreachable"
 
         if (-not $lastUnreachableTime) {
@@ -2961,36 +2952,6 @@ function Get-NetworkDevicesBasic {
             $lastUnreachableTime = "N/A"
         }
 
-        # Determine the last time the device was reported as reachable
-        $lastReachableTime = Get-LastDeviceAvailabilityEventTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id -EventName "device_availability_reachable"
-
-        if (-not $lastReachableTime) {
-            $lastReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
-        }
-
-        if (-not $lastReachableTime) {
-            $lastReachableValue = Get-FirstPropertyValue -Object $device -PropertyNames @(
-                'lastUpdated',
-                'lastSeenTime',
-                'lastSeen',
-                'lastUpTime',
-                'lastConnectedTime',
-                'lastSuccessfulConnectionTime',
-                'lastSyncTime'
-            )
-
-            if ($lastReachableValue) {
-                $convertedReachable = ConvertTo-ReadableTimestamp $lastReachableValue
-                if ($convertedReachable) {
-                    $lastReachableTime = $convertedReachable
-                }
-            }
-        }
-
-        if (-not $lastReachableTime) {
-            $lastReachableTime = "N/A"
-        }
-
         [PSCustomObject]@{
             Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
             IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
@@ -3002,8 +2963,8 @@ function Get-NetworkDevicesBasic {
             Family = if ($device.family) { $device.family } else { "N/A" }
             Type = if ($device.type) { $device.type } else { "N/A" }
             UpTime = if ($device.upTime) { $device.upTime } else { "N/A" }
-            LastUnreachableEventTime = $lastUnreachableTime
-            LastReachableEventTime = $lastReachableTime
+            LastPingReachableTime = $lastPingReachableTime  # Column K - device_availability:ping_reachable
+            LastUnreachableEventTime = $lastUnreachableTime  # Column L - for reference
         }
     }
 
