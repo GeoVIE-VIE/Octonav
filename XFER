@@ -1,0 +1,386 @@
+#Requires -Version 5.1
+
+
+# Store original configuration
+$script:OriginalConfig = $null
+$script:TargetAdapter = $null
+$script:NewIPAddress = $null
+$script:NewGateway = $null
+$script:BatchProcess = $null
+
+# Cleanup function
+function Restore-NetworkDefaults {
+    Write-Host "`n[CLEANUP] Restoring network to default settings..." -ForegroundColor Yellow
+
+    try {
+        if ($script:BatchProcess -and !$script:BatchProcess.HasExited) {
+            Write-Host "[CLEANUP] Stopping RunStandAloneMT.bat process..." -ForegroundColor Yellow
+            Stop-Process -Id $script:BatchProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+
+        if ($script:TargetAdapter -and $script:OriginalConfig) {
+            $adapter = Get-NetAdapter -InterfaceIndex $script:TargetAdapter.ifIndex -ErrorAction SilentlyContinue
+
+            if ($adapter) {
+                # Remove static IP if we added one
+                if ($script:NewIPAddress) {
+                    Write-Host "[CLEANUP] Removing static IP configuration..." -ForegroundColor Yellow
+                    Remove-NetIPAddress -InterfaceIndex $script:TargetAdapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+                    Remove-NetRoute -InterfaceIndex $script:TargetAdapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+                }
+
+                # Restore to DHCP
+                Write-Host "[CLEANUP] Restoring DHCP configuration..." -ForegroundColor Yellow
+                Set-NetIPInterface -InterfaceIndex $script:TargetAdapter.ifIndex -Dhcp Enabled -ErrorAction SilentlyContinue
+                Set-DnsClientServerAddress -InterfaceIndex $script:TargetAdapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+
+                # Restore network category to original
+                $profile = Get-NetConnectionProfile -InterfaceIndex $script:TargetAdapter.ifIndex -ErrorAction SilentlyContinue
+                if ($profile -and $script:OriginalConfig.NetworkCategory) {
+                    Write-Host "[CLEANUP] Restoring network category to $($script:OriginalConfig.NetworkCategory)..." -ForegroundColor Yellow
+                    Set-NetConnectionProfile -InterfaceIndex $script:TargetAdapter.ifIndex -NetworkCategory $script:OriginalConfig.NetworkCategory -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        Write-Host "[CLEANUP] Cleanup complete!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[CLEANUP ERROR] $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# CTRL-C handler
+function Set-CtrlCHandler {
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+        Restore-NetworkDefaults
+    }
+
+    [Console]::TreatControlCAsInput = $false
+    $script:CtrlCPressed = $false
+}
+
+# Find unidentified network with APIPA
+function Find-UnidentifiedNetwork {
+    Write-Host "`n[SEARCH] Looking for unidentified public networks with APIPA addresses..." -ForegroundColor Cyan
+
+    # Get all network profiles that are Public
+    $publicProfiles = Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' }
+
+    foreach ($profile in $publicProfiles) {
+        # Get IP addresses for this interface
+        $ipAddresses = Get-NetIPAddress -InterfaceIndex $profile.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+
+        foreach ($ip in $ipAddresses) {
+            # Check if it's an APIPA address (169.254.x.x)
+            if ($ip.IPAddress -match '^169\.254\.') {
+                Write-Host "[FOUND] Network adapter: $($profile.InterfaceAlias)" -ForegroundColor Green
+                Write-Host "        Current IP: $($ip.IPAddress)" -ForegroundColor Green
+                Write-Host "        Network Category: $($profile.NetworkCategory)" -ForegroundColor Green
+                Write-Host "        Network Name: $($profile.Name)" -ForegroundColor Green
+
+                return @{
+                    Adapter = Get-NetAdapter -InterfaceIndex $profile.InterfaceIndex
+                    Profile = $profile
+                    IPAddress = $ip
+                }
+            }
+        }
+    }
+
+    # If no APIPA found, also check for any unidentified public networks
+    foreach ($profile in $publicProfiles) {
+        if ($profile.Name -match 'Unidentified' -or $profile.Name -match 'Network') {
+            $adapter = Get-NetAdapter -InterfaceIndex $profile.InterfaceIndex
+            $ipAddresses = Get-NetIPAddress -InterfaceIndex $profile.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+
+            Write-Host "[FOUND] Network adapter: $($profile.InterfaceAlias)" -ForegroundColor Green
+            Write-Host "        Current IP: $($ipAddresses.IPAddress -join ', ')" -ForegroundColor Green
+            Write-Host "        Network Category: $($profile.NetworkCategory)" -ForegroundColor Green
+            Write-Host "        Network Name: $($profile.Name)" -ForegroundColor Green
+
+            return @{
+                Adapter = $adapter
+                Profile = $profile
+                IPAddress = $ipAddresses | Select-Object -First 1
+            }
+        }
+    }
+
+    return $null
+}
+
+# Apply network configuration
+function Set-NetworkConfiguration {
+    param(
+        [Parameter(Mandatory=$true)]
+        $Adapter,
+        [Parameter(Mandatory=$true)]
+        [string]$IPAddress,
+        [Parameter(Mandatory=$true)]
+        [string]$Gateway,
+        [Parameter(Mandatory=$true)]
+        [int]$PrefixLength = 24
+    )
+
+    try {
+        Write-Host "`n[CONFIG] Applying network configuration..." -ForegroundColor Cyan
+
+        # Remove existing IP addresses
+        Remove-NetIPAddress -InterfaceIndex $Adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-NetRoute -InterfaceIndex $Adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+
+        # Set static IP
+        Write-Host "[CONFIG] Setting IP address: $IPAddress/$PrefixLength" -ForegroundColor Yellow
+        New-NetIPAddress -InterfaceIndex $Adapter.ifIndex -IPAddress $IPAddress -PrefixLength $PrefixLength -DefaultGateway $Gateway -ErrorAction Stop | Out-Null
+
+        # Disable DHCP
+        Set-NetIPInterface -InterfaceIndex $Adapter.ifIndex -Dhcp Disabled -ErrorAction Stop
+
+        Write-Host "[CONFIG] Configuration applied successfully!" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "[CONFIG ERROR] Failed to apply configuration: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Monitor interface and restore settings if it goes down/up
+function Start-InterfaceMonitoring {
+    param(
+        [Parameter(Mandatory=$true)]
+        $Adapter,
+        [Parameter(Mandatory=$true)]
+        [string]$IPAddress,
+        [Parameter(Mandatory=$true)]
+        [string]$Gateway,
+        [Parameter(Mandatory=$true)]
+        [int]$PrefixLength
+    )
+
+    $job = Start-Job -ScriptBlock {
+        param($InterfaceIndex, $IP, $GW, $Prefix)
+
+        $lastStatus = $null
+        while ($true) {
+            try {
+                $adapter = Get-NetAdapter -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue
+
+                if ($adapter) {
+                    if ($lastStatus -ne $adapter.Status) {
+                        if ($adapter.Status -eq 'Up' -and $lastStatus -eq 'Disconnected') {
+                            # Interface came back up, restore settings
+                            Start-Sleep -Seconds 2
+
+                            $currentIP = Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+
+                            if (-not $currentIP -or $currentIP.IPAddress -ne $IP) {
+                                Remove-NetIPAddress -InterfaceIndex $InterfaceIndex -Confirm:$false -ErrorAction SilentlyContinue
+                                Remove-NetRoute -InterfaceIndex $InterfaceIndex -Confirm:$false -ErrorAction SilentlyContinue
+                                New-NetIPAddress -InterfaceIndex $InterfaceIndex -IPAddress $IP -PrefixLength $Prefix -DefaultGateway $GW -ErrorAction SilentlyContinue | Out-Null
+                                Set-NetIPInterface -InterfaceIndex $InterfaceIndex -Dhcp Disabled -ErrorAction SilentlyContinue
+
+                                Write-Output "[MONITOR] Interface restored - IP: $IP, Gateway: $GW"
+                            }
+                        }
+                        $lastStatus = $adapter.Status
+                    }
+                }
+            }
+            catch {
+                # Silently continue
+            }
+
+            Start-Sleep -Seconds 3
+        }
+    } -ArgumentList $Adapter.ifIndex, $IPAddress, $Gateway, $PrefixLength
+
+    return $job
+}
+
+# Main script
+try {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Network Configuration Script" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    # Set CTRL-C handler
+    Set-CtrlCHandler
+
+    # Find unidentified network
+    $networkInfo = Find-UnidentifiedNetwork
+
+    if (-not $networkInfo) {
+        Write-Host "`n[ERROR] No unidentified public network found!" -ForegroundColor Red
+        Write-Host "[INFO] Looking for any public networks..." -ForegroundColor Yellow
+
+        $publicProfiles = Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' }
+        if ($publicProfiles) {
+            Write-Host "`nPublic networks found:" -ForegroundColor Yellow
+            foreach ($profile in $publicProfiles) {
+                Write-Host "  - $($profile.InterfaceAlias): $($profile.Name)" -ForegroundColor Yellow
+            }
+        }
+
+        Read-Host "`nPress Enter to exit"
+        exit 1
+    }
+
+    $script:TargetAdapter = $networkInfo.Adapter
+
+    # Store original configuration
+    $script:OriginalConfig = @{
+        NetworkCategory = $networkInfo.Profile.NetworkCategory
+        DHCP = (Get-NetIPInterface -InterfaceIndex $script:TargetAdapter.ifIndex -AddressFamily IPv4).Dhcp
+    }
+
+    # Change network category to Private
+    Write-Host "`n[CONFIG] Changing network category to Private..." -ForegroundColor Cyan
+    try {
+        Set-NetConnectionProfile -InterfaceIndex $script:TargetAdapter.ifIndex -NetworkCategory Private
+        Write-Host "[CONFIG] Network category changed to Private!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[WARNING] Could not change network category: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    # Prompt for IP address
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    $newIP = Read-Host "Enter the new IP address for the adapter"
+
+    # Validate IP
+    if (-not ($newIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')) {
+        Write-Host "[ERROR] Invalid IP address format!" -ForegroundColor Red
+        Restore-NetworkDefaults
+        Read-Host "`nPress Enter to exit"
+        exit 1
+    }
+
+    # Prompt for gateway
+    $newGateway = Read-Host "Enter the gateway address"
+
+    # Validate gateway
+    if (-not ($newGateway -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')) {
+        Write-Host "[ERROR] Invalid gateway address format!" -ForegroundColor Red
+        Restore-NetworkDefaults
+        Read-Host "`nPress Enter to exit"
+        exit 1
+    }
+
+    # Prompt for subnet mask (optional)
+    $prefixInput = Read-Host "Enter the prefix length (default: 24 for 255.255.255.0)"
+    if ([string]::IsNullOrWhiteSpace($prefixInput)) {
+        $prefixLength = 24
+    }
+    else {
+        $prefixLength = [int]$prefixInput
+    }
+
+    $script:NewIPAddress = $newIP
+    $script:NewGateway = $newGateway
+
+    # Apply configuration
+    $success = Set-NetworkConfiguration -Adapter $script:TargetAdapter -IPAddress $newIP -Gateway $newGateway -PrefixLength $prefixLength
+
+    if (-not $success) {
+        Write-Host "[ERROR] Failed to apply network configuration!" -ForegroundColor Red
+        Restore-NetworkDefaults
+        Read-Host "`nPress Enter to exit"
+        exit 1
+    }
+
+    # Start interface monitoring
+    Write-Host "`n[MONITOR] Starting interface monitoring..." -ForegroundColor Cyan
+    $monitorJob = Start-InterfaceMonitoring -Adapter $script:TargetAdapter -IPAddress $newIP -Gateway $newGateway -PrefixLength $prefixLength
+
+    # Check if RunStandAloneMT.bat exists
+    $batFile = Join-Path $PSScriptRoot "RunStandAloneMT.bat"
+    if (-not (Test-Path $batFile)) {
+        Write-Host "`n[WARNING] RunStandAloneMT.bat not found in script directory!" -ForegroundColor Yellow
+        Write-Host "[WARNING] Expected location: $batFile" -ForegroundColor Yellow
+
+        $response = Read-Host "Do you want to continue anyway? (Y/N)"
+        if ($response -ne 'Y' -and $response -ne 'y') {
+            Restore-NetworkDefaults
+            if ($monitorJob) { Stop-Job -Job $monitorJob -ErrorAction SilentlyContinue; Remove-Job -Job $monitorJob -ErrorAction SilentlyContinue }
+            Read-Host "`nPress Enter to exit"
+            exit 0
+        }
+    }
+    else {
+        # Run the batch file
+        Write-Host "`n[EXECUTE] Running RunStandAloneMT.bat..." -ForegroundColor Cyan
+
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "cmd.exe"
+        $psi.Arguments = "/c `"$batFile`""
+        $psi.WorkingDirectory = $PSScriptRoot
+        $psi.UseShellExecute = $true
+
+        $script:BatchProcess = [System.Diagnostics.Process]::Start($psi)
+        Write-Host "[EXECUTE] RunStandAloneMT.bat started (PID: $($script:BatchProcess.Id))" -ForegroundColor Green
+    }
+
+    # Monitor and display interface monitoring messages
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "  Monitoring Active" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Network is being monitored for changes." -ForegroundColor Yellow
+    Write-Host "Press CTRL-C to stop and restore defaults.`n" -ForegroundColor Yellow
+
+    # Keep script running and check for monitoring job output
+    $lastOutputCheck = Get-Date
+    while ($true) {
+        # Check for CTRL-C
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq 'C' -and $key.Modifiers -eq 'Control') {
+                Write-Host "`n[INTERRUPT] CTRL-C detected!" -ForegroundColor Yellow
+                break
+            }
+        }
+
+        # Check monitoring job output
+        if ((Get-Date) -gt $lastOutputCheck.AddSeconds(2)) {
+            $jobOutput = Receive-Job -Job $monitorJob -ErrorAction SilentlyContinue
+            if ($jobOutput) {
+                foreach ($line in $jobOutput) {
+                    Write-Host $line -ForegroundColor Magenta
+                }
+            }
+            $lastOutputCheck = Get-Date
+        }
+
+        # Check if batch process is still running
+        if ($script:BatchProcess -and $script:BatchProcess.HasExited) {
+            Write-Host "`n[INFO] RunStandAloneMT.bat has exited." -ForegroundColor Yellow
+            break
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+}
+catch {
+    Write-Host "`n[CRITICAL ERROR] $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor Red
+}
+finally {
+    # Cleanup
+    Write-Host "`n========================================" -ForegroundColor Cyan
+
+    if ($monitorJob) {
+        Write-Host "[MONITOR] Stopping interface monitoring..." -ForegroundColor Yellow
+        Stop-Job -Job $monitorJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $monitorJob -Force -ErrorAction SilentlyContinue
+    }
+
+    Restore-NetworkDefaults
+
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "  Script Complete" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    Read-Host "`nPress Enter to exit"
+}
