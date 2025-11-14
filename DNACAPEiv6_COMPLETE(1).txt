@@ -1022,28 +1022,99 @@ function Get-LastPingReachableTime {
     param(
         [hashtable]$Headers,
         [string]$DnaCenter,
-        [string]$DeviceId
+        [psobject]$Device
     )
 
-    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+    if (-not $Device) {
         return "N/A"
     }
 
-    # Use the event series API to find the last device_availability:ping_reachable event
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventName "device_availability:ping_reachable"
+    $lookupCandidates = @()
 
-    if ($timestamp) {
-        return $timestamp
+    if ($Device.PSObject.Properties['managementIpAddress']) {
+        $managementIp = [string]$Device.managementIpAddress
+        if (-not [string]::IsNullOrWhiteSpace($managementIp)) {
+            $lookupCandidates += @{ Name = 'managementIpAddress'; Value = $managementIp }
+        }
     }
 
-    # Fallback to device_availability:reachable if ping_reachable not found
-    $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $DeviceId -EventName "device_availability:reachable"
-
-    if ($timestamp) {
-        return $timestamp
+    if ($Device.PSObject.Properties['hostname']) {
+        $hostname = [string]$Device.hostname
+        if (-not [string]::IsNullOrWhiteSpace($hostname)) {
+            $lookupCandidates += @{ Name = 'hostname'; Value = $hostname }
+        }
     }
 
-    # Final fallback to lastUpdated if no events found
+    foreach ($candidate in $lookupCandidates) {
+        try {
+            $encodedValue = [uri]::EscapeDataString([string]$candidate.Value)
+            $uri = "{0}/dna/intent/api/v1/network-device?{1}={2}" -f $DnaCenter, $candidate.Name, $encodedValue
+            $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $Headers -ErrorAction Stop
+
+            $records = @()
+            if ($response -and $response.PSObject.Properties['response']) {
+                $payload = $response.response
+                if ($payload -is [System.Collections.IEnumerable] -and -not ($payload -is [string])) {
+                    $records = @($payload)
+                }
+                else {
+                    $records = @($payload)
+                }
+            }
+            elseif ($response) {
+                if ($response -is [System.Collections.IEnumerable] -and -not ($response -is [string])) {
+                    $records = @($response)
+                }
+                else {
+                    $records = @($response)
+                }
+            }
+
+            foreach ($record in @($records)) {
+                if ($null -eq $record) { continue }
+
+                $lastSeenValue = Get-FirstPropertyValue -Object $record -PropertyNames @(
+                    'lastSeen',
+                    'lastSeenTime',
+                    'lastReachableTime',
+                    'lastSuccessfulConnectionTime',
+                    'lastUpdated'
+                )
+
+                if ($null -ne $lastSeenValue) {
+                    $converted = ConvertTo-ReadableTimestamp $lastSeenValue
+                    if ($converted) {
+                        return $converted
+                    }
+
+                    return $lastSeenValue
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    $deviceId = $null
+    if ($Device.PSObject.Properties['id']) {
+        $deviceId = [string]$Device.id
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($deviceId)) {
+        $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $deviceId -EventName "device_availability:ping_reachable"
+
+        if ($timestamp) {
+            return $timestamp
+        }
+
+        $timestamp = Get-EventSeriesLastTimestamp -Headers $Headers -DnaCenter $DnaCenter -DeviceId $deviceId -EventName "device_availability:reachable"
+
+        if ($timestamp) {
+            return $timestamp
+        }
+    }
+
     return "N/A"
 }
 
@@ -2882,8 +2953,8 @@ function Get-NetworkDevicesBasic {
     if (-not $devices) { return }
 
     $deviceList = foreach ($device in $devices) {
-        # Get the last time the device was ping_reachable (column K)
-        $lastPingReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -DeviceId $device.id
+        # Get the last known reachable time (column K)
+        $lastPingReachableTime = Get-LastPingReachableTime -Headers $headers -DnaCenter $dnaCenter -Device $device
         
         # If no ping_reachable event, try to get from device properties
         if ($lastPingReachableTime -eq "N/A") {
