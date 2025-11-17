@@ -2,24 +2,14 @@
 
 ## 🚀 Quick Start
 
-### 1. Check if you have audit log access (determines performance)
-
-```powershell
-.\Test-DHCPAuditAccess.ps1
-```
-
-**Expected output:**
-- ✓ **Audit logs accessible** → BadAddress tracking will be FAST (seconds)
-- ✗ **No access** → Will use fallback method (minutes, but still faster than original)
-
-### 2. Run optimized DHCP statistics collection
+### Run optimized DHCP statistics collection
 
 ```powershell
 .\Merged-DHCPScopeStats-Optimized.ps1
 ```
 
 **What's improved:**
-- 🔥 10-100x faster BadAddress tracking (if audit logs available)
+- 🔥 4-6x faster BadAddress tracking using parallel queries
 - 🔒 TLS 1.2+ enforced
 - 🛡️ Secure output directory (ACLs restricted to current user)
 - ⚡ Maintains constant pool of 20 concurrent jobs
@@ -34,8 +24,9 @@
 | Method | 100 Scopes | Status |
 |--------|------------|--------|
 | **Original** (Sequential leases) | 10-15 min | ⚠️ Slow |
-| **Optimized** (Parallel leases) | 2-5 min | ✓ Better |
-| **Optimized** (Audit logs) | 5-10 sec | ⚡ **FASTEST** |
+| **Optimized** (Parallel leases) | 2-5 min | ⚡ **Much Better!** |
+
+**4-6x faster** than the original method!
 
 ---
 
@@ -63,10 +54,9 @@
 
 ### New Files
 1. **OptimizedDHCPFunctions.ps1** - Core optimization library
-2. **Test-DHCPAuditAccess.ps1** - Diagnostic tool
-3. **Merged-DHCPScopeStats-Optimized.ps1** - Enhanced DHCP stats script
-4. **SECURITY-OPTIMIZATION-GUIDE.md** - Detailed documentation
-5. **README-OPTIMIZATIONS.md** - This file
+2. **Merged-DHCPScopeStats-Optimized.ps1** - Enhanced DHCP stats script
+3. **SECURITY-OPTIMIZATION-GUIDE.md** - Detailed documentation
+4. **README-OPTIMIZATIONS.md** - This file
 
 ### Existing Files (Unchanged)
 - `Merged-DHCPScopeStats.ps1` - Original version (still works)
@@ -84,91 +74,57 @@ Result: Very slow, especially with many scopes
 ```
 
 ### The Solution
-Use **DHCP audit logs** instead:
+Use **parallel lease queries**:
 ```
-Read audit log files → Parse BAD_ADDRESS events → Count by scope
-Result: 10-100x faster!
-```
-
-### Automatic Fallback
-If audit logs aren't accessible:
-```
-Query leases in PARALLEL (10 at once) → Still faster than original
+Query 10 scopes in parallel → Much faster completion
+Result: 4-6x faster!
 ```
 
----
-
-## 🔍 How to Check Audit Log Access
-
-### Quick Test
-```powershell
-.\Test-DHCPAuditAccess.ps1
-```
-
-### What It Checks
-- Can you access `\\<dhcp-server>\admin$\System32\DHCP\`?
-- Are DHCP log files present?
-- How many log files are available?
-
-### Requirements for Audit Log Access
-**You need ONE of:**
-- Domain Admins group membership
-- DHCP Administrators group membership
-- Custom file share with read access (see guide)
-
-### If You Don't Have Access
-**No problem!** The script automatically uses parallel lease queries:
-- Still **4-6x faster** than original
-- No changes needed
-- Works with DHCP Users group membership
+**Key improvements:**
+- Processes 10 scopes simultaneously per DHCP server
+- Uses PowerShell jobs for parallel execution
+- Works on PowerShell 5.1 and 7+
+- No special permissions required (just DHCP Users group)
 
 ---
 
 ## ⚙️ Configuration Options
 
 ### Concurrent Job Limit
-Edit `Merged-DHCPScopeStats-Optimized.ps1` line 374:
+Edit `Merged-DHCPScopeStats-Optimized.ps1` line 310:
 ```powershell
 $MaxConcurrentJobs = 20  # Change to 10-50
 ```
 - **Lower (10-15):** Less resource usage
 - **Higher (30-50):** Faster, more memory/CPU
 
-### Audit Log Search Period
-Edit `OptimizedDHCPFunctions.ps1` line 69:
+### Parallel Lease Query Throttle
+Edit the script block around line 232:
 ```powershell
-[int]$DaysToSearch = 7  # Change to 1-30
+while ((Get-Job -State Running...).Count -ge 10) {  # Change to 5-20
 ```
-- **1 day:** Fastest, recent data only
-- **7 days:** Good balance (recommended)
-- **30 days:** Most comprehensive
+- **Lower (5):** Less aggressive, better for slow networks
+- **Higher (20):** More aggressive, faster completion
 
 ---
 
 ## 📈 Use Cases
 
-### Scenario 1: You Have Audit Log Access
+### Scenario 1: Standard Collection
 ```powershell
 .\Merged-DHCPScopeStats-Optimized.ps1
 # When prompted, enable BadAddress tracking
-# Expected time: Seconds per server ⚡
+# Expected time: 2-5 minutes for 100 scopes (vs 10-15 min original)
 ```
 
-### Scenario 2: No Audit Log Access
+### Scenario 2: Filtered Collection
 ```powershell
 .\Merged-DHCPScopeStats-Optimized.ps1
-# Script auto-detects and uses parallel queries
-# Expected time: 2-5 minutes per server (still good!)
+# Filter by scope names to reduce processing time
+# Only collect stats for specific sites/scopes
 ```
 
-### Scenario 3: Testing Multiple Servers
-```powershell
-.\Test-DHCPAuditAccess.ps1
-# Check which servers support fast method
-# Plan your collection strategy
-```
-
-### Scenario 4: Original Script Still Works
+### Scenario 3: Original Script Still Works
 ```powershell
 .\Merged-DHCPScopeStats.ps1
 # Use this if you have issues with optimized version
@@ -194,8 +150,9 @@ Enable-SecureProtocol | Out-Null
 Set-SecureOutputDirectory -Path $script:outputDir | Out-Null
 ```
 
-3. **Optional:** Replace BadAddress tracking in DHCP scriptblock
-   - See `SECURITY-OPTIMIZATION-GUIDE.md` for detailed instructions
+3. **Optional:** Replace BadAddress tracking in DHCP scriptblock (around line 1044)
+   - Replace sequential Get-DhcpServerv4Lease calls with parallel version
+   - See `Merged-DHCPScopeStats-Optimized.ps1` lines 212-253 for reference
 
 ---
 
@@ -204,18 +161,15 @@ Set-SecureOutputDirectory -Path $script:outputDir | Out-Null
 ### Verify Optimizations Work
 
 ```powershell
-# 1. Test audit log access
-.\Test-DHCPAuditAccess.ps1
-
-# 2. Run optimized script (with BadAddress tracking)
+# 1. Run optimized script (with BadAddress tracking)
 .\Merged-DHCPScopeStats-Optimized.ps1
 
-# 3. Check output
-# - Look for "Using audit logs (fast method)" vs "Using parallel lease queries"
-# - Verify completion time (should be much faster)
+# 2. Check output
+# - Look for "using parallel queries"
+# - Verify completion time (should be 4-6x faster)
 # - Check CSV output generated
 
-# 4. Verify security
+# 3. Verify security
 # Check TLS version
 [Net.ServicePointManager]::SecurityProtocol  # Should show Tls12 or Tls13
 
@@ -231,23 +185,20 @@ Get-Acl C:\DHCPReports_Secure | Format-List
 ### Q: Do I need to change anything in my existing scripts?
 **A:** No! The original scripts still work. Use the `-Optimized` version for better performance.
 
-### Q: What if I don't have audit log access?
-**A:** The script automatically falls back to parallel lease queries (still faster than original).
-
 ### Q: Will this work with PowerShell 5.1?
 **A:** Yes! Fully compatible with PowerShell 5.1 and 7+.
 
 ### Q: Can I use this in production?
 **A:** Yes, all security features are production-ready. Test in dev first as always.
 
-### Q: What about SSL certificate validation?
-**A:** Not implemented per your requirements. Add if needed for your environment.
-
 ### Q: How much faster is it really?
-**A:** With audit logs: **50-100x faster**. Without: **4-6x faster** (parallel queries).
+**A:** **4-6x faster** with parallel lease queries.
 
 ### Q: Is it safe to use with my existing setup?
 **A:** Yes, backward compatible. All new features are additive, not breaking changes.
+
+### Q: Do I need special permissions?
+**A:** No! Just the same DHCP permissions you already have (DHCP Users group).
 
 ---
 
@@ -257,15 +208,10 @@ Get-Acl C:\DHCPReports_Secure | Format-List
 - Ensure all files in same directory
 - Check file path in Import-Module statement
 
-### "Access denied to audit logs"
-- Expected if not in DHCP Admins group
-- Script automatically uses fallback method
-- See guide for alternative access options
-
 ### "BadAddress tracking still slow"
-- Check if audit logs are accessible
-- Verify network connectivity to DHCP server
-- May need to reduce DaysToSearch parameter
+- Check network connectivity to DHCP server
+- Verify you have sufficient permissions (DHCP Users group)
+- May need to reduce parallel throttle limit if network is slow
 
 ### "Output directory not secured"
 - Need admin rights for first-time directory creation
@@ -277,7 +223,6 @@ Get-Acl C:\DHCPReports_Secure | Format-List
 ## 📚 Documentation
 
 - **SECURITY-OPTIMIZATION-GUIDE.md** - Complete implementation guide
-- **Test-DHCPAuditAccess.ps1** - Run to check your environment
 - **OptimizedDHCPFunctions.ps1** - Function documentation (inline comments)
 
 ---
@@ -286,18 +231,18 @@ Get-Acl C:\DHCPReports_Secure | Format-List
 
 ### What You Get
 
-✅ **Performance:** 10-100x faster BadAddress tracking
+✅ **Performance:** 4-6x faster BadAddress tracking
 ✅ **Security:** TLS 1.2+, SecureString, restricted ACLs
 ✅ **Reliability:** Auto-retry, exponential backoff
-✅ **Compatibility:** Works with or without audit log access
+✅ **Compatibility:** Works on PowerShell 5.1+
 ✅ **Easy:** Drop-in replacement, minimal changes needed
+✅ **No special permissions:** Uses standard DHCP cmdlets
 
 ### Next Steps
 
-1. Run `.\Test-DHCPAuditAccess.ps1` to check your environment
-2. Use `.\Merged-DHCPScopeStats-Optimized.ps1` for collections
-3. Optionally integrate into GUI (see guide)
-4. Enjoy much faster DHCP statistics! 🚀
+1. Use `.\Merged-DHCPScopeStats-Optimized.ps1` for collections
+2. Optionally integrate into GUI (see guide)
+3. Enjoy much faster DHCP statistics! 🚀
 
 ---
 
