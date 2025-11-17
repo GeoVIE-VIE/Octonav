@@ -3599,6 +3599,7 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpTimer = New-Object System.Windows.Forms.Timer
         $script:dhcpTimer.Interval = 500  # Check every 500ms
         $script:dhcpTickCount = 0
+        $script:dhcpLogsDisplayed = 0  # Track how many logs we've already shown
 
         # Set progress bar to marquee style (continuous animation)
         $script:progressBar.Style = "Marquee"
@@ -3610,11 +3611,27 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpTimer.Add_Tick({
             $script:dhcpTickCount++
 
-            # Log progress every 10 ticks (5 seconds) to show the timer is running
-            if ($script:dhcpTickCount % 10 -eq 0) {
-                $elapsed = [int]($script:dhcpTickCount * 0.5)
-                Write-Log -Message "Still collecting... (${elapsed}s elapsed, monitoring for completion)" -Color "DarkGray" -LogBox $dhcpLogBox
-                Update-StatusBar -Status "Collecting DHCP statistics..." -ProgressValue -1 -ProgressText "${elapsed}s elapsed"
+            # Try to retrieve and display real-time logs from the background runspace
+            try {
+                $currentLogs = $script:dhcpRunspace.SessionStateProxy.GetVariable("LogBuffer")
+                if ($currentLogs -and $currentLogs.Count -gt $script:dhcpLogsDisplayed) {
+                    # Display new logs that have been added since last check
+                    for ($i = $script:dhcpLogsDisplayed; $i -lt $currentLogs.Count; $i++) {
+                        $logMsg = $currentLogs[$i]
+                        Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+
+                        # Parse progress from log messages like "[X/Y] Completed: servername"
+                        if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                            $serverCount = [int]$matches[1]
+                            $totalServers = [int]$matches[2]
+                            $percentage = [int](($serverCount / $totalServers) * 100)
+                            Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
+                        }
+                    }
+                    $script:dhcpLogsDisplayed = $currentLogs.Count
+                }
+            } catch {
+                # Ignore errors reading logs (runspace might not be ready yet)
             }
 
             if ($script:dhcpAsyncResult.IsCompleted) {
@@ -3641,7 +3658,14 @@ $btnCollectDHCP.Add_Click({
                         $serverCount = 0
                         $totalServers = 0
 
-                        foreach ($logMsg in $result.Logs) {
+                        # Only display logs we haven't already shown in real-time
+                        $logsToDisplay = if ($script:dhcpLogsDisplayed -gt 0) {
+                            $result.Logs | Select-Object -Skip $script:dhcpLogsDisplayed
+                        } else {
+                            $result.Logs
+                        }
+
+                        foreach ($logMsg in $logsToDisplay) {
                             Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
 
                             # Parse progress from log messages like "[X/Y] Completed: servername"
@@ -3651,6 +3675,11 @@ $btnCollectDHCP.Add_Click({
                                 $percentage = [int](($serverCount / $totalServers) * 100)
                                 Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
                             }
+                        }
+
+                        # If we displayed logs in real-time, show a summary message
+                        if ($script:dhcpLogsDisplayed -gt 0) {
+                            Write-Log -Message "($script:dhcpLogsDisplayed logs were displayed in real-time during collection)" -Color "DarkGray" -LogBox $dhcpLogBox
                         }
                     }
 
