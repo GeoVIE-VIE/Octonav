@@ -3611,83 +3611,95 @@ $btnCollectDHCP.Add_Click({
         $script:progressLabel.Visible = $true
         $script:progressLabel.Text = "Processing DHCP servers..."
 
-        # Wait for completion synchronously
-        $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult) | Out-Null
+        # Create a timer to monitor completion (keeps GUI responsive)
+        $script:dhcpTimer = New-Object System.Windows.Forms.Timer
+        $script:dhcpTimer.Interval = 500  # Check every 500ms
 
-        Write-Log -Message "Background collection completed - processing results..." -Color "Cyan" -LogBox $dhcpLogBox
+        $script:dhcpTimer.Add_Tick({
+            # Check if background collection is complete
+            if ($script:dhcpAsyncResult.IsCompleted) {
+                $script:dhcpTimer.Stop()
+                $script:dhcpTimer.Dispose()
 
-        # Reset progress bar to normal style
-        $script:progressBar.Style = "Blocks"
-        $script:progressBar.MarqueeAnimationSpeed = 0
+                Write-Log -Message "Background collection completed - processing results..." -Color "Cyan" -LogBox $dhcpLogBox
 
-        try {
-            # Get the results
-            $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
+                # Reset progress bar to normal style
+                $script:progressBar.Style = "Blocks"
+                $script:progressBar.MarqueeAnimationSpeed = 0
 
-            # Check for errors in the PowerShell error stream
-            if ($script:dhcpPowerShell.Streams.Error.Count -gt 0) {
-                Write-Log -Message "Background script encountered errors:" -Color "Red" -LogBox $dhcpLogBox
-                foreach ($err in $script:dhcpPowerShell.Streams.Error) {
-                    Write-Log -Message "  Error: $($err.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
-                }
-            }
+                try {
+                    # Get the results
+                    $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
 
-            if ($result.Logs) {
-                $serverCount = 0
-                $totalServers = 0
-
-                foreach ($logMsg in $result.Logs) {
-                    Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
-
-                    # Parse progress from log messages like "[X/Y] Completed: servername"
-                    if ($logMsg -match '\[(\d+)/(\d+)\]') {
-                        $serverCount = [int]$matches[1]
-                        $totalServers = [int]$matches[2]
-                        $percentage = [int](($serverCount / $totalServers) * 100)
-                        Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
+                    # Check for errors in the PowerShell error stream
+                    if ($script:dhcpPowerShell.Streams.Error.Count -gt 0) {
+                        Write-Log -Message "Background script encountered errors:" -Color "Red" -LogBox $dhcpLogBox
+                        foreach ($err in $script:dhcpPowerShell.Streams.Error) {
+                            Write-Log -Message "  Error: $($err.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
+                        }
                     }
-                }
-            }
 
-            if ($result.Success) {
-                $script:dhcpResults = $result.Results
-                if ($script:dhcpResults.Count -gt 0) {
-                    $btnExportDHCP.Enabled = $true
-                    Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
-                    Update-StatusBar -Status "Ready - Collection complete! Found $($script:dhcpResults.Count) scopes" -ProgressValue -1
-                } else {
-                    Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
-                    Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
-                    Update-StatusBar -Status "Ready - No DHCP scopes found matching criteria" -ProgressValue -1
+                    if ($result.Logs) {
+                        $serverCount = 0
+                        $totalServers = 0
 
-                    if ($result.Filters -and $result.Filters.Count -gt 0) {
-                        Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
-                        Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
-                        Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
-                        Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
-                        Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
-                        Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                        foreach ($logMsg in $result.Logs) {
+                            Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+
+                            # Parse progress from log messages like "[X/Y] Completed: servername"
+                            if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                                $serverCount = [int]$matches[1]
+                                $totalServers = [int]$matches[2]
+                                $percentage = [int](($serverCount / $totalServers) * 100)
+                                Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
+                            }
+                        }
+                    }
+
+                    if ($result.Success) {
+                        $script:dhcpResults = $result.Results
+                        if ($script:dhcpResults.Count -gt 0) {
+                            $btnExportDHCP.Enabled = $true
+                            Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
+                            Update-StatusBar -Status "Ready - Collection complete! Found $($script:dhcpResults.Count) scopes" -ProgressValue -1
+                        } else {
+                            Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
+                            Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                            Update-StatusBar -Status "Ready - No DHCP scopes found matching criteria" -ProgressValue -1
+
+                            if ($result.Filters -and $result.Filters.Count -gt 0) {
+                                Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                            } else {
+                                Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
+                            }
+                        }
                     } else {
-                        Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
-                        Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
-                        Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
-                        Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
+                        Update-StatusBar -Status "Ready - Error occurred during collection" -ProgressValue -1
                     }
+                } catch {
+                    $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+                    Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
+                    Update-StatusBar -Status "Ready - Error occurred" -ProgressValue -1
+                } finally {
+                    $script:dhcpPowerShell.Dispose()
+                    $script:dhcpRunspace.Close()
+                    $script:dhcpRunspace.Dispose()
+                    $btnCollectDHCP.Enabled = $true
                 }
-            } else {
-                Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
-                Update-StatusBar -Status "Ready - Error occurred during collection" -ProgressValue -1
             }
-        } catch {
-            $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
-            Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
-            Update-StatusBar -Status "Ready - Error occurred" -ProgressValue -1
-        } finally {
-            $script:dhcpPowerShell.Dispose()
-            $script:dhcpRunspace.Close()
-            $script:dhcpRunspace.Dispose()
-            $btnCollectDHCP.Enabled = $true
-        }
+        })
+
+        # Start the timer
+        $script:dhcpTimer.Start()
 
     } catch {
         $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
