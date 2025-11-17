@@ -3614,8 +3614,32 @@ $btnCollectDHCP.Add_Click({
         # Create a timer to monitor completion (keeps GUI responsive)
         $script:dhcpTimer = New-Object System.Windows.Forms.Timer
         $script:dhcpTimer.Interval = 500  # Check every 500ms
+        $script:dhcpLogsDisplayed = 0  # Track how many logs we've already shown
 
         $script:dhcpTimer.Add_Tick({
+            # Try to retrieve and display real-time logs from the background runspace
+            try {
+                $currentLogs = $script:dhcpRunspace.SessionStateProxy.GetVariable("LogBuffer")
+                if ($currentLogs -and $currentLogs.Count -gt $script:dhcpLogsDisplayed) {
+                    # Display new logs that have been added since last check
+                    for ($i = $script:dhcpLogsDisplayed; $i -lt $currentLogs.Count; $i++) {
+                        $logMsg = $currentLogs[$i]
+                        Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+
+                        # Parse progress from log messages like "[X/Y] Completed: servername"
+                        if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                            $serverCount = [int]$matches[1]
+                            $totalServers = [int]$matches[2]
+                            $percentage = [int](($serverCount / $totalServers) * 100)
+                            Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
+                        }
+                    }
+                    $script:dhcpLogsDisplayed = $currentLogs.Count
+                }
+            } catch {
+                # Ignore errors reading logs (runspace might not be ready yet)
+            }
+
             # Check if background collection is complete
             if ($script:dhcpAsyncResult.IsCompleted) {
                 $script:dhcpTimer.Stop()
@@ -3643,7 +3667,14 @@ $btnCollectDHCP.Add_Click({
                         $serverCount = 0
                         $totalServers = 0
 
-                        foreach ($logMsg in $result.Logs) {
+                        # Only display logs we haven't already shown in real-time
+                        $logsToDisplay = if ($script:dhcpLogsDisplayed -gt 0) {
+                            $result.Logs | Select-Object -Skip $script:dhcpLogsDisplayed
+                        } else {
+                            $result.Logs
+                        }
+
+                        foreach ($logMsg in $logsToDisplay) {
                             Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
 
                             # Parse progress from log messages like "[X/Y] Completed: servername"
