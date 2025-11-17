@@ -3580,14 +3580,26 @@ $btnCollectDHCP.Add_Click({
         [void]$script:dhcpPowerShell.AddScript($scriptBlock)
         $script:dhcpAsyncResult = $script:dhcpPowerShell.BeginInvoke()
 
-        # Create timer to poll for completion
+        # Create timer to poll for completion and show activity
         $script:dhcpTimer = New-Object System.Windows.Forms.Timer
         $script:dhcpTimer.Interval = 500  # Check every 500ms
+        $script:dhcpTickCount = 0
+
+        # Set progress bar to marquee style (continuous animation)
+        $script:progressBar.Style = "Marquee"
+        $script:progressBar.MarqueeAnimationSpeed = 30
+        $script:progressBar.Visible = $true
+        $script:progressLabel.Visible = $true
+        $script:progressLabel.Text = "Working..."
 
         $script:dhcpTimer.Add_Tick({
             if ($script:dhcpAsyncResult.IsCompleted) {
                 $script:dhcpTimer.Stop()
                 $script:dhcpTimer.Dispose()
+
+                # Reset progress bar to normal style
+                $script:progressBar.Style = "Blocks"
+                $script:progressBar.MarqueeAnimationSpeed = 0
 
                 try {
                     $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
