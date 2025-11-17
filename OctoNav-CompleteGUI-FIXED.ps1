@@ -2777,13 +2777,15 @@ $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "OctoNav v2.2 - Complete Network Management Tool (Security Hardened + DNACAPEiv6 + CLI Runner)"
 $mainForm.Size = New-Object System.Drawing.Size(1200, 800)
 $mainForm.StartPosition = "CenterScreen"
-$mainForm.FormBorderStyle = "FixedDialog"
+$mainForm.FormBorderStyle = "Sizable"
 $mainForm.MaximizeBox = $true
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1250, 850)
 
 # Create Tab Control
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Size = New-Object System.Drawing.Size(1180, 750)
 $tabControl.Location = New-Object System.Drawing.Point(10, 10)
+$tabControl.Anchor = "Top, Left, Right, Bottom"
 $mainForm.Controls.Add($tabControl)
 
 # ============================================
@@ -3160,29 +3162,28 @@ $btnCollectDHCP.Add_Click({
 
         # Add the entire script to run in background
         $scriptBlock = {
+            # Capture log messages to send back to the UI
+            $LogBuffer = New-Object System.Collections.ArrayList
+            function Add-ScopedLog {
+                param([string]$Message)
+                $null = $LogBuffer.Add($Message)
+            }
+
             # Re-define helper functions needed in runspace
             function Test-ScopeFilter {
                 param([string]$FilterValue)
-
                 # Empty/null/whitespace filters are valid (means no filtering)
-                if ([string]::IsNullOrWhiteSpace($FilterValue)) {
-                    return $true
-                }
-
+                if ([string]::IsNullOrWhiteSpace($FilterValue)) { return $true }
                 $trimmed = $FilterValue.Trim()
-
                 # Limit length
-                if ($trimmed.Length -gt 128) {
-                    return $false
-                }
-
+                if ($trimmed.Length -gt 128) { return $false }
                 # Only allow safe characters for scope names
-                return $trimmed -match '^[a-zA-Z0-9_.\-\s]+$'
+                return $trimmed -match '^[a-zA-Z0-9_.\-\s]+'
             }
 
             function Test-ServerName {
                 param([string]$ServerName)
-                return $ServerName -match '^[a-zA-Z0-9\.\-_]+$'
+                return $ServerName -match '^[a-zA-Z0-9\.\-_]+'
             }
 
             function Get-SanitizedErrorMessage {
@@ -3190,36 +3191,43 @@ $btnCollectDHCP.Add_Click({
                 return $ErrorRecord.Exception.Message
             }
 
-            # Main DHCP collection logic
+            # Main DHCP collection logic (mirrors Merged-DHCPScopeStats.ps1)
             try {
+                Add-ScopedLog "Importing DhcpServer module..."
+                try {
+                    Import-Module DhcpServer -ErrorAction Stop
+                } catch {
+                    return @{ Success = $false; Error = "Failed to import DhcpServer module: $($_.Exception.Message)"; Results = @(); Logs = $LogBuffer }
+                }
 
                 # Use specific servers if provided, otherwise discover from domain
                 if ($SpecificServers -and $SpecificServers.Count -gt 0) {
+                    Add-ScopedLog "Using specified DHCP servers..."
                     $DHCPServers = @()
                     foreach ($serverName in $SpecificServers) {
                         # Create custom object matching Get-DhcpServerInDC output structure
-                        $DHCPServers += [PSCustomObject]@{
-                            DnsName = $serverName
-                            IPAddress = $null
-                        }
+                        $DHCPServers += [PSCustomObject]@{ DnsName = $serverName; IPAddress = $null }
                     }
+                    Add-ScopedLog "Will query $($DHCPServers.Count) specified server(s)"
                 } else {
+                    Add-ScopedLog "Discovering DHCP servers in domain..."
                     try {
-                        $DHCPServers = Get-DhcpServerInDC
+                        $DHCPServers = Get-DhcpServerInDC -ErrorAction Stop
+                        Add-ScopedLog "Found $($DHCPServers.Count) DHCP server(s) in domain"
                     } catch {
-                        return @{
-                            Success = $false
-                            Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"
-                            Results = @()
-                        }
+                        return @{ Success = $false; Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"; Results = @(); Logs = $LogBuffer }
                     }
                 }
 
-                $ScriptBlock = {
-                    param($DHCPServerName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses)
-                    $ServerStats = @()
+                $AllStats = @()
+                $TotalServers = $DHCPServers.Count
+
+                foreach ($Server in $DHCPServers) {
+                    $dhcpName = $Server.DnsName
+                    Add-ScopedLog "Querying DHCP Server: $dhcpName"
+
                     try {
-                        $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
+                        $Scopes = Get-DhcpServerv4Scope -ComputerName $dhcpName -ErrorAction Stop
 
                         # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
@@ -3228,25 +3236,21 @@ $btnCollectDHCP.Add_Click({
                                 $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
                             }
                             $Scopes = $FilteredScopes | Select-Object -Unique
-
                             if ($Scopes.Count -eq 0) {
-                                return @()
+                                Add-ScopedLog "No scopes matching filters found on $dhcpName"
+                                continue
                             }
                         }
 
-                        $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $DHCPServerName -ErrorAction Stop
+                        $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $dhcpName -ErrorAction Stop
 
                         $DNSServerMap = @{}
                         if ($IncludeDNS) {
                             foreach ($Scope in $Scopes) {
                                 try {
-                                    $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
-                                    if ($DNSOption) {
-                                        $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
-                                    }
-                                } catch {
-                                    # DNS option not found for this scope
-                                }
+                                    $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $dhcpName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
+                                    if ($DNSOption) { $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ',' }
+                                } catch { }
                             }
                         }
 
@@ -3254,112 +3258,32 @@ $btnCollectDHCP.Add_Click({
                         if ($IncludeBadAddresses) {
                             foreach ($Scope in $Scopes) {
                                 try {
-                                    $BadAddresses = Get-DhcpServerv4Lease -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue |
-                                        Where-Object { $_.HostName -eq "BAD_ADDRESS" }
+                                    $BadAddresses = Get-DhcpServerv4Lease -ComputerName $dhcpName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue | Where-Object { $_.HostName -eq "BAD_ADDRESS" }
                                     $BadAddressMap[$Scope.ScopeId] = if ($BadAddresses) { $BadAddresses.Count } else { 0 }
-                                } catch {
-                                    $BadAddressMap[$Scope.ScopeId] = 0
-                                }
+                                } catch { $BadAddressMap[$Scope.ScopeId] = 0 }
                             }
                         }
 
                         foreach ($Scope in $Scopes) {
                             $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
                             if ($Stats) {
-                                $ServerStats += $Stats | Select-Object *,
-                                    @{Name='DHCPServer'; Expression={$DHCPServerName}},
+                                $AllStats += $Stats | Select-Object *,
+                                    @{Name='DHCPServer'; Expression={$dhcpName}},
                                     @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
                                     @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}},
                                     @{Name='BadAddressCount'; Expression={$BadAddressMap[$Scope.ScopeId]}}
                             }
                         }
+
+                        Add-ScopedLog "Collected $($Scopes.Count) scope(s) from $dhcpName"
                     } catch {
-                        Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
-                    }
-                    return $ServerStats
-                }
-
-                $Jobs = @()
-                $AllStats = @()
-                $MaxConcurrentJobs = 20
-                $TotalServers = $DHCPServers.Count
-                $ServerIndex = 0
-
-                # Start initial batch of jobs (up to 20)
-                while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
-                    $Server = $DHCPServers[$ServerIndex]
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                    $Jobs += @{
-                        Job = $Job
-                        ServerName = $Server.DnsName
-                        Processed = $false
-                    }
-                    $ServerIndex++
-                }
-
-                # Process jobs and maintain constant pool of 20
-                while ($Jobs | Where-Object { -not $_.Processed }) {
-                    Start-Sleep -Seconds 2
-
-                    # Handle completed jobs
-                    $CompletedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                    foreach ($CompletedJob in $CompletedJobs) {
-                        $CompletedJob.Processed = $true
-                        try {
-                            $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
-                            if ($Result) {
-                                $AllStats += $Result
-                            }
-                        } catch {
-                            # Failed to receive job result
-                        }
-                        Remove-Job -Job $CompletedJob.Job -Force
-
-                        # Start new job if more servers remain
-                        if ($ServerIndex -lt $TotalServers) {
-                            $Server = $DHCPServers[$ServerIndex]
-                            $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                            $Jobs += @{
-                                Job = $NewJob
-                                ServerName = $Server.DnsName
-                                Processed = $false
-                            }
-                            $ServerIndex++
-                        }
-                    }
-
-                    # Handle failed jobs
-                    $FailedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                    foreach ($FailedJob in $FailedJobs) {
-                        $FailedJob.Processed = $true
-                        Remove-Job -Job $FailedJob.Job -Force
-
-                        # Start new job if more servers remain
-                        if ($ServerIndex -lt $TotalServers) {
-                            $Server = $DHCPServers[$ServerIndex]
-                            $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                            $Jobs += @{
-                                Job = $NewJob
-                                ServerName = $Server.DnsName
-                                Processed = $false
-                            }
-                            $ServerIndex++
-                        }
+                        Add-ScopedLog "Error querying $dhcpName : $($_.Exception.Message)"
                     }
                 }
 
-                return @{
-                    Success = $true
-                    Error = $null
-                    Results = $AllStats
-                    ServerCount = $TotalServers
-                }
+                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer }
             } catch {
-                return @{
-                    Success = $false
-                    Error = $_.Exception.Message
-                    Results = @()
-                }
+                return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
             }
         }
 
@@ -3377,6 +3301,12 @@ $btnCollectDHCP.Add_Click({
 
                 try {
                     $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
+
+                    if ($result.Logs) {
+                        foreach ($logMsg in $result.Logs) {
+                            Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+                        }
+                    }
 
                     if ($result.Success) {
                         $script:dhcpResults = $result.Results
