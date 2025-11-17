@@ -2777,13 +2777,15 @@ $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "OctoNav v2.2 - Complete Network Management Tool (Security Hardened + DNACAPEiv6 + CLI Runner)"
 $mainForm.Size = New-Object System.Drawing.Size(1200, 800)
 $mainForm.StartPosition = "CenterScreen"
-$mainForm.FormBorderStyle = "FixedDialog"
+$mainForm.FormBorderStyle = "Sizable"
 $mainForm.MaximizeBox = $true
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1250, 850)
 
 # Create Tab Control
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Size = New-Object System.Drawing.Size(1180, 750)
 $tabControl.Location = New-Object System.Drawing.Point(10, 10)
+$tabControl.Anchor = "Top, Left, Right, Bottom"
 $mainForm.Controls.Add($tabControl)
 
 # ============================================
@@ -3193,6 +3195,16 @@ $btnCollectDHCP.Add_Click({
             # Main DHCP collection logic
             try {
 
+                try {
+                    Import-Module DhcpServer -ErrorAction Stop
+                } catch {
+                    return @{
+                        Success = $false
+                        Error = "Failed to import DhcpServer module: $($_.Exception.Message)"
+                        Results = @()
+                    }
+                }
+
                 # Use specific servers if provided, otherwise discover from domain
                 if ($SpecificServers -and $SpecificServers.Count -gt 0) {
                     $DHCPServers = @()
@@ -3219,6 +3231,8 @@ $btnCollectDHCP.Add_Click({
                     param($DHCPServerName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses)
                     $ServerStats = @()
                     try {
+                        Import-Module DhcpServer -ErrorAction Stop
+
                         $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
 
                         # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
