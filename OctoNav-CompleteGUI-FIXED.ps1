@@ -3406,29 +3406,7 @@ $btnCollectDHCP.Add_Click({
                 $null = $LogBuffer.Add($Message)
             }
 
-            # Re-define helper functions needed in runspace
-            function Test-ScopeFilter {
-                param([string]$FilterValue)
-                # Empty/null/whitespace filters are valid (means no filtering)
-                if ([string]::IsNullOrWhiteSpace($FilterValue)) { return $true }
-                $trimmed = $FilterValue.Trim()
-                # Limit length
-                if ($trimmed.Length -gt 128) { return $false }
-                # Only allow safe characters for scope names
-                return $trimmed -match '^[a-zA-Z0-9_.\-\s]+'
-            }
-
-            function Test-ServerName {
-                param([string]$ServerName)
-                return $ServerName -match '^[a-zA-Z0-9\.\-_]+'
-            }
-
-            function Get-SanitizedErrorMessage {
-                param([System.Management.Automation.ErrorRecord]$ErrorRecord)
-                return $ErrorRecord.Exception.Message
-            }
-
-            # Main DHCP collection logic (mirrors Merged-DHCPScopeStats.ps1)
+            # Main DHCP collection logic using runspace pools (no console windows)
             try {
                 Add-ScopedLog "Importing DhcpServer module..."
                 try {
@@ -3442,7 +3420,6 @@ $btnCollectDHCP.Add_Click({
                     Add-ScopedLog "Using specified DHCP servers..."
                     $DHCPServers = @()
                     foreach ($serverName in $SpecificServers) {
-                        # Create custom object matching Get-DhcpServerInDC output structure
                         $DHCPServers += [PSCustomObject]@{ DnsName = $serverName; IPAddress = $null }
                     }
                     Add-ScopedLog "Will query $($DHCPServers.Count) specified server(s)"
@@ -3456,11 +3433,11 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                $AllStats = @()
+                $AllStats = New-Object System.Collections.ArrayList
                 $TotalServers = $DHCPServers.Count
-                $MaxConcurrentJobs = 20
+                $MaxConcurrentRunspaces = 20
 
-                Add-ScopedLog "Starting parallel processing of $TotalServers DHCP servers (maintaining $MaxConcurrentJobs concurrent jobs)..."
+                Add-ScopedLog "Starting parallel processing of $TotalServers DHCP servers (using $MaxConcurrentRunspaces concurrent runspaces)..."
 
                 # Script block for processing a single DHCP server
                 $ServerScriptBlock = {
@@ -3516,40 +3493,18 @@ $btnCollectDHCP.Add_Click({
                         $BadAddressMap = @{}
                         if ($IncludeBadAddresses) {
                             try {
-                                $ServerLogs += "Retrieving Bad_Address information from $DHCPServerName (using parallel queries)..."
+                                $ServerLogs += "Retrieving Bad_Address information from $DHCPServerName (sequential queries)..."
 
-                                $leaseJobs = @()
+                                # Use sequential queries to avoid nested runspace/job issues
                                 foreach ($Scope in $Scopes) {
-                                    $job = Start-Job -ScriptBlock {
-                                        param($server, $scopeId)
-                                        try {
-                                            $badLeases = Get-DhcpServerv4Lease -ComputerName $server -ScopeId $scopeId -ErrorAction SilentlyContinue |
-                                                Where-Object { $_.HostName -eq "BAD_ADDRESS" }
-                                            return @{
-                                                ScopeId = $scopeId
-                                                Count = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
-                                            }
-                                        } catch {
-                                            return @{ ScopeId = $scopeId; Count = 0 }
-                                        }
-                                    } -ArgumentList $DHCPServerName, $Scope.ScopeId
-
-                                    $leaseJobs += $job
-
-                                    while ((Get-Job -State Running | Where-Object { $leaseJobs.Id -contains $_.Id }).Count -ge 10) {
-                                        Start-Sleep -Milliseconds 100
+                                    try {
+                                        $badLeases = Get-DhcpServerv4Lease -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue |
+                                            Where-Object { $_.HostName -eq "BAD_ADDRESS" }
+                                        $BadAddressMap[$Scope.ScopeId] = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
+                                    } catch {
+                                        $BadAddressMap[$Scope.ScopeId] = 0
                                     }
                                 }
-
-                                $leaseJobs | Wait-Job -Timeout 300 | ForEach-Object {
-                                    $result = Receive-Job -Job $_
-                                    if ($result) {
-                                        $BadAddressMap[$result.ScopeId] = $result.Count
-                                    }
-                                    Remove-Job -Job $_ -Force
-                                }
-
-                                $leaseJobs | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force
 
                                 $ServerLogs += "  Bad_Address retrieval complete for $DHCPServerName"
                             } catch {
@@ -3576,96 +3531,76 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                # Start parallel job processing
-                $Jobs = @()
-                $ServerIndex = 0
-                $CompletedJobs = 0
+                # Create runspace pool for parallel processing
+                $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxConcurrentRunspaces)
+                $RunspacePool.Open()
 
-                # Start initial batch of jobs
-                while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
-                    $Server = $DHCPServers[$ServerIndex]
-                    $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                    $Jobs += @{
-                        Job = $Job
+                # Create runspaces for all servers
+                $Runspaces = @()
+                $CompletedServers = 0
+
+                foreach ($Server in $DHCPServers) {
+                    $PowerShell = [powershell]::Create()
+                    $PowerShell.RunspacePool = $RunspacePool
+                    [void]$PowerShell.AddScript($ServerScriptBlock)
+                    [void]$PowerShell.AddArgument($Server.DnsName)
+                    [void]$PowerShell.AddArgument($ScopeFilters)
+                    [void]$PowerShell.AddArgument($IncludeDNS)
+                    [void]$PowerShell.AddArgument($IncludeBadAddresses)
+
+                    $Runspaces += [PSCustomObject]@{
+                        PowerShell = $PowerShell
+                        Handle = $PowerShell.BeginInvoke()
                         ServerName = $Server.DnsName
-                        Processed = $false
+                        Completed = $false
                     }
-                    Add-ScopedLog "Started job for: $($Server.DnsName)"
-                    $ServerIndex++
                 }
 
-                # Process jobs as they complete
-                while ($CompletedJobs -lt $TotalServers) {
+                Add-ScopedLog "All runspaces started - waiting for completion..."
+
+                # Wait for all runspaces to complete
+                while ($CompletedServers -lt $TotalServers) {
                     Start-Sleep -Milliseconds 500
 
-                    # Check for completed jobs
-                    $CompletedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                    foreach ($CompletedJob in $CompletedInRound) {
-                        $CompletedJobs++
-                        $CompletedJob.Processed = $true
+                    foreach ($Runspace in $Runspaces | Where-Object { -not $_.Completed }) {
+                        if ($Runspace.Handle.IsCompleted) {
+                            $CompletedServers++
+                            $Runspace.Completed = $true
 
-                        try {
-                            $result = Receive-Job -Job $CompletedJob.Job
+                            try {
+                                $result = $Runspace.PowerShell.EndInvoke($Runspace.Handle)
 
-                            # Add logs from this server
-                            if ($result.Logs) {
-                                foreach ($log in $result.Logs) {
-                                    Add-ScopedLog $log
+                                # Add logs from this server
+                                if ($result.Logs) {
+                                    foreach ($log in $result.Logs) {
+                                        Add-ScopedLog $log
+                                    }
                                 }
+
+                                # Collect statistics
+                                if ($result.Stats) {
+                                    foreach ($stat in $result.Stats) {
+                                        [void]$AllStats.Add($stat)
+                                    }
+                                }
+
+                                Add-ScopedLog "[$CompletedServers/$TotalServers] Completed: $($Runspace.ServerName)"
+                            } catch {
+                                Add-ScopedLog "[$CompletedServers/$TotalServers] Error from $($Runspace.ServerName): $($_.Exception.Message)"
+                            } finally {
+                                $Runspace.PowerShell.Dispose()
                             }
-
-                            # Collect statistics
-                            if ($result.Stats) {
-                                $AllStats += $result.Stats
-                            }
-
-                            Add-ScopedLog "[$CompletedJobs/$TotalServers] Completed: $($CompletedJob.ServerName)"
-                        } catch {
-                            Add-ScopedLog "[$CompletedJobs/$TotalServers] Failed to receive results from $($CompletedJob.ServerName): $($_.Exception.Message)"
-                        }
-
-                        Remove-Job -Job $CompletedJob.Job -Force
-
-                        # Start next job to maintain pool
-                        if ($ServerIndex -lt $TotalServers) {
-                            $Server = $DHCPServers[$ServerIndex]
-                            $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                            $Jobs += @{
-                                Job = $Job
-                                ServerName = $Server.DnsName
-                                Processed = $false
-                            }
-                            Add-ScopedLog "Started job for: $($Server.DnsName)"
-                            $ServerIndex++
-                        }
-                    }
-
-                    # Check for failed jobs
-                    $FailedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                    foreach ($FailedJob in $FailedInRound) {
-                        $CompletedJobs++
-                        $FailedJob.Processed = $true
-                        Add-ScopedLog "[$CompletedJobs/$TotalServers] Failed: $($FailedJob.ServerName)"
-                        Remove-Job -Job $FailedJob.Job -Force
-
-                        # Start next job to maintain pool
-                        if ($ServerIndex -lt $TotalServers) {
-                            $Server = $DHCPServers[$ServerIndex]
-                            $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                            $Jobs += @{
-                                Job = $Job
-                                ServerName = $Server.DnsName
-                                Processed = $false
-                            }
-                            Add-ScopedLog "Started job for: $($Server.DnsName)"
-                            $ServerIndex++
                         }
                     }
                 }
 
-                Add-ScopedLog "All server jobs completed!"
+                # Cleanup
+                $RunspacePool.Close()
+                $RunspacePool.Dispose()
 
-                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
+                Add-ScopedLog "All server runspaces completed!"
+
+                return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
             } catch {
                 return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
             }
@@ -3684,139 +3619,92 @@ $btnCollectDHCP.Add_Click({
             throw
         }
 
-        # Create timer to poll for completion and show activity
-        Write-Log -Message "Starting completion monitor timer (500ms interval)..." -Color "Gray" -LogBox $dhcpLogBox
-        $script:dhcpTimer = New-Object System.Windows.Forms.Timer
-        $script:dhcpTimer.Interval = 500  # Check every 500ms
-        $script:dhcpTickCount = 0
-        $script:dhcpLogsDisplayed = 0  # Track how many logs we've already shown
-
         # Set progress bar to marquee style (continuous animation)
         $script:progressBar.Style = "Marquee"
         $script:progressBar.MarqueeAnimationSpeed = 30
         $script:progressBar.Visible = $true
         $script:progressLabel.Visible = $true
-        $script:progressLabel.Text = "Working..."
+        $script:progressLabel.Text = "Processing DHCP servers..."
 
-        $script:dhcpTimer.Add_Tick({
-            $script:dhcpTickCount++
+        Write-Log -Message "Waiting for background collection to complete..." -Color "Cyan" -LogBox $dhcpLogBox
 
-            # Try to retrieve and display real-time logs from the background runspace
-            try {
-                $currentLogs = $script:dhcpRunspace.SessionStateProxy.GetVariable("LogBuffer")
-                if ($currentLogs -and $currentLogs.Count -gt $script:dhcpLogsDisplayed) {
-                    # Display new logs that have been added since last check
-                    for ($i = $script:dhcpLogsDisplayed; $i -lt $currentLogs.Count; $i++) {
-                        $logMsg = $currentLogs[$i]
-                        Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+        # Wait for completion synchronously
+        $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult) | Out-Null
 
-                        # Parse progress from log messages like "[X/Y] Completed: servername"
-                        if ($logMsg -match '\[(\d+)/(\d+)\]') {
-                            $serverCount = [int]$matches[1]
-                            $totalServers = [int]$matches[2]
-                            $percentage = [int](($serverCount / $totalServers) * 100)
-                            Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
-                        }
-                    }
-                    $script:dhcpLogsDisplayed = $currentLogs.Count
+        Write-Log -Message "Background collection completed - processing results..." -Color "Cyan" -LogBox $dhcpLogBox
+
+        # Reset progress bar to normal style
+        $script:progressBar.Style = "Blocks"
+        $script:progressBar.MarqueeAnimationSpeed = 0
+
+        try {
+            # Get the results
+            $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
+
+            # Check for errors in the PowerShell error stream
+            if ($script:dhcpPowerShell.Streams.Error.Count -gt 0) {
+                Write-Log -Message "Background script encountered errors:" -Color "Red" -LogBox $dhcpLogBox
+                foreach ($err in $script:dhcpPowerShell.Streams.Error) {
+                    Write-Log -Message "  Error: $($err.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
                 }
-            } catch {
-                # Ignore errors reading logs (runspace might not be ready yet)
             }
 
-            if ($script:dhcpAsyncResult.IsCompleted) {
-                $script:dhcpTimer.Stop()
-                $script:dhcpTimer.Dispose()
-                Write-Log -Message "Background collection completed - processing results..." -Color "Cyan" -LogBox $dhcpLogBox
+            if ($result.Logs) {
+                $serverCount = 0
+                $totalServers = 0
 
-                # Reset progress bar to normal style
-                $script:progressBar.Style = "Blocks"
-                $script:progressBar.MarqueeAnimationSpeed = 0
+                foreach ($logMsg in $result.Logs) {
+                    Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
 
-                try {
-                    $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
-
-                    # Check for errors in the PowerShell error stream
-                    if ($script:dhcpPowerShell.Streams.Error.Count -gt 0) {
-                        Write-Log -Message "Background script encountered errors:" -Color "Red" -LogBox $dhcpLogBox
-                        foreach ($err in $script:dhcpPowerShell.Streams.Error) {
-                            Write-Log -Message "  Error: $($err.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
-                        }
+                    # Parse progress from log messages like "[X/Y] Completed: servername"
+                    if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                        $serverCount = [int]$matches[1]
+                        $totalServers = [int]$matches[2]
+                        $percentage = [int](($serverCount / $totalServers) * 100)
+                        Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
                     }
+                }
+            }
 
-                    if ($result.Logs) {
-                        $serverCount = 0
-                        $totalServers = 0
+            if ($result.Success) {
+                $script:dhcpResults = $result.Results
+                if ($script:dhcpResults.Count -gt 0) {
+                    $btnExportDHCP.Enabled = $true
+                    Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
+                    Update-StatusBar -Status "Ready - Collection complete! Found $($script:dhcpResults.Count) scopes" -ProgressValue -1
+                } else {
+                    Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
+                    Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                    Update-StatusBar -Status "Ready - No DHCP scopes found matching criteria" -ProgressValue -1
 
-                        # Only display logs we haven't already shown in real-time
-                        $logsToDisplay = if ($script:dhcpLogsDisplayed -gt 0) {
-                            $result.Logs | Select-Object -Skip $script:dhcpLogsDisplayed
-                        } else {
-                            $result.Logs
-                        }
-
-                        foreach ($logMsg in $logsToDisplay) {
-                            Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
-
-                            # Parse progress from log messages like "[X/Y] Completed: servername"
-                            if ($logMsg -match '\[(\d+)/(\d+)\]') {
-                                $serverCount = [int]$matches[1]
-                                $totalServers = [int]$matches[2]
-                                $percentage = [int](($serverCount / $totalServers) * 100)
-                                Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
-                            }
-                        }
-
-                        # If we displayed logs in real-time, show a summary message
-                        if ($script:dhcpLogsDisplayed -gt 0) {
-                            Write-Log -Message "($script:dhcpLogsDisplayed logs were displayed in real-time during collection)" -Color "DarkGray" -LogBox $dhcpLogBox
-                        }
-                    }
-
-                    if ($result.Success) {
-                        $script:dhcpResults = $result.Results
-                        if ($script:dhcpResults.Count -gt 0) {
-                            $btnExportDHCP.Enabled = $true
-                            Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
-                            Update-StatusBar -Status "Ready - Collection complete! Found $($script:dhcpResults.Count) scopes" -ProgressValue -1
-                        } else {
-                            Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
-                            Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
-                            Update-StatusBar -Status "Ready - No DHCP scopes found matching criteria" -ProgressValue -1
-
-                            if ($result.Filters -and $result.Filters.Count -gt 0) {
-                                Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
-                                Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
-                                Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
-                                Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
-                                Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
-                                Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
-                            } else {
-                                Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
-                                Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
-                                Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
-                                Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
-                            }
-                        }
+                    if ($result.Filters -and $result.Filters.Count -gt 0) {
+                        Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
+                        Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
+                        Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
                     } else {
-                        Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
-                        Update-StatusBar -Status "Ready - Error occurred during collection" -ProgressValue -1
+                        Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
+                        Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                        Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
                     }
-                } catch {
-                    $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
-                    Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
-                    Update-StatusBar -Status "Ready - Error occurred" -ProgressValue -1
-                } finally {
-                    $script:dhcpPowerShell.Dispose()
-                    $script:dhcpRunspace.Close()
-                    $script:dhcpRunspace.Dispose()
-                    $btnCollectDHCP.Enabled = $true
                 }
+            } else {
+                Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
+                Update-StatusBar -Status "Ready - Error occurred during collection" -ProgressValue -1
             }
-        })
-
-        Write-Log -Message "Monitor timer started - checking every 500ms for completion" -Color "Green" -LogBox $dhcpLogBox
-        $script:dhcpTimer.Start()
+        } catch {
+            $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+            Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
+            Update-StatusBar -Status "Ready - Error occurred" -ProgressValue -1
+        } finally {
+            $script:dhcpPowerShell.Dispose()
+            $script:dhcpRunspace.Close()
+            $script:dhcpRunspace.Dispose()
+            $btnCollectDHCP.Enabled = $true
+        }
 
     } catch {
         $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
