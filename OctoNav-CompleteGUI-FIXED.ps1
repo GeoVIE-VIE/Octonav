@@ -861,11 +861,13 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
-        # Validate scope filters
+        # Validate scope filters (skip empty ones)
         foreach ($filter in $ScopeFilters) {
-            if (-not (Test-ScopeFilter -FilterValue $filter)) {
-                Write-Log -Message "Invalid scope filter detected: contains unsafe characters" -Color "Red" -LogBox $LogBox
-                return @()
+            if (-not [string]::IsNullOrWhiteSpace($filter)) {
+                if (-not (Test-ScopeFilter -FilterValue $filter)) {
+                    Write-Log -Message "Invalid scope filter detected: contains unsafe characters" -Color "Red" -LogBox $LogBox
+                    return @()
+                }
             }
         }
 
@@ -917,7 +919,10 @@ function Get-DHCPScopeStatistics {
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
-                        $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                        # Skip empty/null filters
+                        if (-not [string]::IsNullOrWhiteSpace($Filter)) {
+                            $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                        }
                     }
                     $Scopes = $FilteredScopes | Select-Object -Unique
 
@@ -3080,19 +3085,17 @@ $btnCollectDHCP.Add_Click({
         # Validate and parse scope filters
         $scopeFilters = @()
         if (-not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
-            $rawFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() }
+            $rawFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
             # Validate each filter
             foreach ($filter in $rawFilters) {
-                if (-not [string]::IsNullOrWhiteSpace($filter)) {
-                    if (Test-ScopeFilter -FilterValue $filter) {
-                        $scopeFilters += $filter.ToUpper()
-                    } else {
-                        Write-Log -Message "Invalid scope filter: '$filter' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
-                        [System.Windows.Forms.MessageBox]::Show("Invalid scope filter: '$filter'`n`nOnly alphanumeric characters, spaces, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                        $btnCollectDHCP.Enabled = $true
-                        return
-                    }
+                if (Test-ScopeFilter -FilterValue $filter) {
+                    $scopeFilters += $filter.ToUpper()
+                } else {
+                    Write-Log -Message "Invalid scope filter: '$filter' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
+                    [System.Windows.Forms.MessageBox]::Show("Invalid scope filter: '$filter'`n`nOnly alphanumeric characters, spaces, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                    $btnCollectDHCP.Enabled = $true
+                    return
                 }
             }
         }
@@ -3150,7 +3153,21 @@ $btnCollectDHCP.Add_Click({
             # Re-define helper functions needed in runspace
             function Test-ScopeFilter {
                 param([string]$FilterValue)
-                return $FilterValue -match '^[a-zA-Z0-9\s\.\-_]+$'
+
+                # Empty/null/whitespace filters are valid (means no filtering)
+                if ([string]::IsNullOrWhiteSpace($FilterValue)) {
+                    return $true
+                }
+
+                $trimmed = $FilterValue.Trim()
+
+                # Limit length
+                if ($trimmed.Length -gt 128) {
+                    return $false
+                }
+
+                # Only allow safe characters for scope names
+                return $trimmed -match '^[a-zA-Z0-9_.\-\s]+$'
             }
 
             function Test-ServerName {
@@ -3165,12 +3182,15 @@ $btnCollectDHCP.Add_Click({
 
             # Main DHCP collection logic
             try {
+                # Validate filters (skip empty ones)
                 foreach ($filter in $ScopeFilters) {
-                    if (-not (Test-ScopeFilter -FilterValue $filter)) {
-                        return @{
-                            Success = $false
-                            Error = "Invalid scope filter detected: contains unsafe characters"
-                            Results = @()
+                    if (-not [string]::IsNullOrWhiteSpace($filter)) {
+                        if (-not (Test-ScopeFilter -FilterValue $filter)) {
+                            return @{
+                                Success = $false
+                                Error = "Invalid scope filter detected: contains unsafe characters"
+                                Results = @()
+                            }
                         }
                     }
                 }
@@ -3206,7 +3226,10 @@ $btnCollectDHCP.Add_Click({
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                             $FilteredScopes = @()
                             foreach ($Filter in $ScopeFilters) {
-                                $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                                # Skip empty/null filters
+                                if (-not [string]::IsNullOrWhiteSpace($Filter)) {
+                                    $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                                }
                             }
                             $Scopes = $FilteredScopes | Select-Object -Unique
                             if ($Scopes.Count -eq 0) {
