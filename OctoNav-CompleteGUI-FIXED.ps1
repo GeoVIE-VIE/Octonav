@@ -1,15 +1,21 @@
 #Requires -Version 5.1
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     OctoNav Complete GUI - Unified Network Management Tool (Security Hardened + DNACAPEiv6)
 .DESCRIPTION
     Comprehensive Windows Forms GUI combining Network Configuration, DHCP Statistics, and DNA Center API functions
     Includes advanced DNACAPEiv6 functions: Path Trace, Last Disconnect Times, Availability Events
+
+    PRIVILEGE REQUIREMENTS:
+    - Network Configuration Tab: Requires Administrator privileges
+    - All other tabs: Standard user privileges sufficient
 .AUTHOR
     Integrated by Claude - In Memory of Zesty.PS1
 .VERSION
-    2.1 - Security Hardened + DNACAPEiv6 Integration
+    2.2 - Privilege Separation (Security Enhancement)
+    - Removed global admin requirement
+    - Only Network Configuration tab requires elevation
+    - DHCP, DNA Center, and other functions run as standard user
     - 23 DNA Center API functions (up from 20)
     - Path Trace with interactive dialog
     - Device availability event tracking
@@ -24,6 +30,32 @@ Add-Type -AssemblyName System.Drawing
 
 # Handle errors gracefully
 $ErrorActionPreference = "Stop"
+
+# ============================================
+# PRIVILEGE MANAGEMENT
+# ============================================
+
+function Test-IsAdministrator {
+    <#
+    .SYNOPSIS
+        Tests if the current PowerShell session is running with Administrator privileges
+    .DESCRIPTION
+        Uses WindowsIdentity and WindowsPrincipal to check if the current user has admin rights
+    .OUTPUTS
+        Boolean - $true if running as admin, $false otherwise
+    #>
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        Write-Warning "Unable to determine administrator status: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# Store admin status globally for performance (check once)
+$script:IsRunningAsAdmin = Test-IsAdministrator
 
 # ============================================
 # GLOBAL VARIABLES
@@ -747,6 +779,19 @@ function Reset-DNADeviceSelection {
 function Restore-NetworkDefaults {
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
+    # Check for administrator privileges
+    if (-not $script:IsRunningAsAdmin) {
+        Write-Log -Message "ERROR: Network configuration requires Administrator privileges" -Color "Red" -LogBox $LogBox
+        Write-Log -Message "Please restart OctoNav as Administrator to use Network Configuration features" -Color "Yellow" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show(
+            "Network configuration operations require Administrator privileges.`n`nPlease close OctoNav and restart it by right-clicking and selecting 'Run as Administrator'.",
+            "Administrator Required",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return $false
+    }
+
     Write-Log -Message "Restoring network to default settings..." -Color "Yellow" -LogBox $LogBox
 
     try {
@@ -837,6 +882,19 @@ function Set-NetworkConfiguration {
         [int]$PrefixLength = 24,
         [System.Windows.Forms.RichTextBox]$LogBox
     )
+
+    # Check for administrator privileges
+    if (-not $script:IsRunningAsAdmin) {
+        Write-Log -Message "ERROR: Network configuration requires Administrator privileges" -Color "Red" -LogBox $LogBox
+        Write-Log -Message "Please restart OctoNav as Administrator to use Network Configuration features" -Color "Yellow" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show(
+            "Network configuration operations require Administrator privileges.`n`nPlease close OctoNav and restart it by right-clicking and selecting 'Run as Administrator'.",
+            "Administrator Required",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return $false
+    }
 
     try {
         # Validate inputs
@@ -934,14 +992,32 @@ function Get-DHCPScopeStatistics {
 
                 # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                    $OriginalScopeCount = $Scopes.Count
+                    Write-Output "Found $OriginalScopeCount total scope(s) on $DHCPServerName, applying filters..."
+
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
-                        $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                        # Explicitly case-insensitive matching using .ToUpper() for both sides
+                        $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
+                        if ($MatchingScopes) {
+                            Write-Output "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                            $FilteredScopes += $MatchingScopes
+                        } else {
+                            Write-Output "  Filter '$Filter' matched 0 scopes"
+                        }
                     }
+
+                    # Remove duplicates if a scope matched multiple filters
                     $Scopes = $FilteredScopes | Select-Object -Unique
 
                     if ($Scopes.Count -eq 0) {
+                        Write-Output "WARNING: No scopes matching filter criteria on $DHCPServerName"
+                        Write-Output "  Filters used: $($ScopeFilters -join ', ')"
+                        Write-Output "  Available scope names on this server might not contain these strings"
                         return @()
+                    } else {
+                        Write-Output "After filtering: $($Scopes.Count) scope(s) will be processed on $DHCPServerName"
                     }
                 }
 
@@ -2796,11 +2872,28 @@ $tab1 = New-Object System.Windows.Forms.TabPage
 $tab1.Text = "Network Configuration"
 $tabControl.Controls.Add($tab1)
 
+# Admin Status Indicator for Network Config Tab
+$lblAdminStatus = New-Object System.Windows.Forms.Label
+$lblAdminStatus.Size = New-Object System.Drawing.Size(1140, 25)
+$lblAdminStatus.Location = New-Object System.Drawing.Point(10, 10)
+$lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblAdminStatus.TextAlign = "MiddleLeft"
+if ($script:IsRunningAsAdmin) {
+    $lblAdminStatus.Text = "✓ Administrator Privileges: ACTIVE - Network configuration operations enabled"
+    $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
+    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)  # Light green
+} else {
+    $lblAdminStatus.Text = "⚠ Administrator Privileges: REQUIRED - Right-click OctoNav.ps1 and select 'Run as Administrator' to enable this tab"
+    $lblAdminStatus.ForeColor = [System.Drawing.Color]::DarkOrange
+    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(255, 245, 230)  # Light orange
+}
+$tab1.Controls.Add($lblAdminStatus)
+
 # Group Box for Network Settings
 $netGroupBox = New-Object System.Windows.Forms.GroupBox
 $netGroupBox.Text = "Network Adapter Configuration"
 $netGroupBox.Size = New-Object System.Drawing.Size(1140, 300)
-$netGroupBox.Location = New-Object System.Drawing.Point(10, 10)
+$netGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab1.Controls.Add($netGroupBox)
 
 # Find Network Button
@@ -2866,8 +2959,8 @@ $netGroupBox.Controls.Add($btnRestoreDefaults)
 
 # Network Config Log
 $netLogBox = New-Object System.Windows.Forms.RichTextBox
-$netLogBox.Size = New-Object System.Drawing.Size(1140, 380)
-$netLogBox.Location = New-Object System.Drawing.Point(10, 320)
+$netLogBox.Size = New-Object System.Drawing.Size(1140, 350)
+$netLogBox.Location = New-Object System.Drawing.Point(10, 350)
 $netLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $netLogBox.ReadOnly = $true
 $tab1.Controls.Add($netLogBox)
@@ -3117,18 +3210,33 @@ $btnCollectDHCP.Add_Click({
         if (-not [string]::IsNullOrWhiteSpace($txtSpecificServers.Text)) {
             $rawServers = $txtSpecificServers.Text.Split(',') | ForEach-Object { $_.Trim() }
 
+            $validServers = @()
+            $invalidServers = @()
+
             foreach ($server in $rawServers) {
                 if (-not [string]::IsNullOrWhiteSpace($server)) {
-                    if ($server -match '^[a-zA-Z0-9\.\-_]+$') {
-                        $specificServers += $server
+                    # Allow alphanumeric, dots, hyphens, and underscores for FQDNs
+                    if ($server -match '^[a-zA-Z0-9][a-zA-Z0-9.\-_]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$') {
+                        $validServers += $server
                     } else {
-                        Write-Log -Message "Invalid server name: '$server' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
-                        [System.Windows.Forms.MessageBox]::Show("Invalid server name: '$server'`n`nOnly alphanumeric characters, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                        $btnCollectDHCP.Enabled = $true
-                        return
+                        $invalidServers += $server
                     }
                 }
             }
+
+            if ($invalidServers.Count -gt 0) {
+                $invalidList = $invalidServers -join ', '
+                Write-Log -Message "Warning: Invalid server name(s) detected and will be skipped: $invalidList" -Color "Red" -LogBox $dhcpLogBox
+                [System.Windows.Forms.MessageBox]::Show("Warning: The following server name(s) contain invalid characters and will be skipped:`n`n$invalidList`n`nOnly alphanumeric characters, dots, hyphens, and underscores are allowed.", "Validation Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            }
+
+            if ($validServers.Count -eq 0 -and $invalidServers.Count -gt 0) {
+                Write-Log -Message "Error: No valid servers specified. Operation cancelled." -Color "Red" -LogBox $dhcpLogBox
+                $btnCollectDHCP.Enabled = $true
+                return
+            }
+
+            $specificServers = $validServers
         }
 
         $includeDNS = $chkIncludeDNS.Checked
@@ -3231,14 +3339,32 @@ $btnCollectDHCP.Add_Click({
 
                         # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                            $OriginalScopeCount = $Scopes.Count
+                            Add-ScopedLog "Found $OriginalScopeCount total scope(s) on $dhcpName, applying filters..."
+
                             $FilteredScopes = @()
                             foreach ($Filter in $ScopeFilters) {
-                                $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                                # Explicitly case-insensitive matching using .ToUpper() for both sides
+                                $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
+                                if ($MatchingScopes) {
+                                    Add-ScopedLog "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                                    $FilteredScopes += $MatchingScopes
+                                } else {
+                                    Add-ScopedLog "  Filter '$Filter' matched 0 scopes"
+                                }
                             }
+
+                            # Remove duplicates if a scope matched multiple filters
                             $Scopes = $FilteredScopes | Select-Object -Unique
+
                             if ($Scopes.Count -eq 0) {
-                                Add-ScopedLog "No scopes matching filters found on $dhcpName"
+                                Add-ScopedLog "WARNING: No scopes matching filter criteria on $dhcpName"
+                                Add-ScopedLog "  Filters used: $($ScopeFilters -join ', ')"
+                                Add-ScopedLog "  Available scope names on this server might not contain these strings"
                                 continue
+                            } else {
+                                Add-ScopedLog "After filtering: $($Scopes.Count) scope(s) will be processed on $dhcpName"
                             }
                         }
 
@@ -3281,7 +3407,7 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer }
+                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
             } catch {
                 return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
             }
@@ -3314,7 +3440,22 @@ $btnCollectDHCP.Add_Click({
                             $btnExportDHCP.Enabled = $true
                             Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
                         } else {
-                            Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                            Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
+                            Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
+
+                            if ($result.Filters -and $result.Filters.Count -gt 0) {
+                                Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                            } else {
+                                Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
+                            }
                         }
                     } else {
                         Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
