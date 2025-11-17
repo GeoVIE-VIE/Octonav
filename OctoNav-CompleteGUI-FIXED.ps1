@@ -3392,11 +3392,11 @@ $btnCollectDHCP.Add_Click({
 
         # Add the entire script to run in background
         $scriptBlock = {
-            # Capture log messages to send back to the UI
-            $LogBuffer = New-Object System.Collections.ArrayList
+            # Capture log messages to send back to the UI (use script scope for external access)
+            $script:LogBuffer = New-Object System.Collections.ArrayList
             function Add-ScopedLog {
                 param([string]$Message)
-                $null = $LogBuffer.Add($Message)
+                $null = $script:LogBuffer.Add($Message)
             }
 
             # Main DHCP collection logic using runspace pools (no console windows)
@@ -3405,7 +3405,7 @@ $btnCollectDHCP.Add_Click({
                 try {
                     Import-Module DhcpServer -ErrorAction Stop
                 } catch {
-                    return @{ Success = $false; Error = "Failed to import DhcpServer module: $($_.Exception.Message)"; Results = @(); Logs = $LogBuffer }
+                    return @{ Success = $false; Error = "Failed to import DhcpServer module: $($_.Exception.Message)"; Results = @(); Logs = $script:LogBuffer }
                 }
 
                 # Use specific servers if provided, otherwise discover from domain
@@ -3420,7 +3420,7 @@ $btnCollectDHCP.Add_Click({
                         $DHCPServers = Get-DhcpServerInDC -ErrorAction Stop
                         Add-ScopedLog "Found $($DHCPServers.Count) DHCP server(s) in domain"
                     } catch {
-                        return @{ Success = $false; Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"; Results = @(); Logs = $LogBuffer }
+                        return @{ Success = $false; Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"; Results = @(); Logs = $script:LogBuffer }
                     }
                 }
 
@@ -3587,9 +3587,9 @@ $btnCollectDHCP.Add_Click({
                 $RunspacePool.Close()
                 $RunspacePool.Dispose()
 
-                return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
+                return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $script:LogBuffer; Filters = $ScopeFilters }
             } catch {
-                return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
+                return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $script:LogBuffer }
             }
         }
 
