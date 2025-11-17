@@ -32,6 +32,25 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
 
 # ============================================
+# IMPORT OPTIMIZATIONS AND SECURITY
+# ============================================
+
+# Import optimized functions
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+try {
+    Import-Module "$scriptPath\OptimizedDHCPFunctions.ps1" -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-Warning "OptimizedDHCPFunctions.ps1 not found. Some optimizations unavailable."
+}
+
+# Enable secure protocols (TLS 1.2+)
+try {
+    Enable-SecureProtocol | Out-Null
+} catch {
+    Write-Warning "Could not enable TLS 1.2+. Continuing with default protocols."
+}
+
+# ============================================
 # PRIVILEGE MANAGEMENT
 # ============================================
 
@@ -122,6 +141,13 @@ try {
     $testFile = Join-Path $script:outputDir ".writetest"
     "test" | Out-File -FilePath $testFile -ErrorAction Stop
     Remove-Item $testFile -ErrorAction SilentlyContinue
+
+    # Secure the output directory
+    try {
+        Set-SecureOutputDirectory -Path $script:outputDir | Out-Null
+    } catch {
+        Write-Verbose "Could not set secure ACLs on output directory (continuing anyway)"
+    }
 } catch {
     Write-Warning "Cannot write to output directory: $script:outputDir. Using temp directory."
     $script:outputDir = Join-Path $env:TEMP "OctoNav_Reports"
@@ -1037,17 +1063,52 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
+                # OPTIMIZED: BadAddress tracking with parallel lease queries
                 $BadAddressMap = @{}
                 if ($IncludeBadAddresses) {
-                    foreach ($Scope in $Scopes) {
-                        try {
-                            $BadAddresses = Get-DhcpServerv4Lease -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue |
-                                Where-Object { $_.HostName -eq "BAD_ADDRESS" }
+                    try {
+                        Write-Output "Retrieving Bad_Address information from $DHCPServerName (using parallel queries)..."
 
-                            $BadAddressMap[$Scope.ScopeId] = if ($BadAddresses) { $BadAddresses.Count } else { 0 }
-                        } catch {
-                            $BadAddressMap[$Scope.ScopeId] = 0
+                        # Parallel lease queries (PowerShell 5.1 compatible)
+                        $leaseJobs = @()
+                        foreach ($Scope in $Scopes) {
+                            $job = Start-Job -ScriptBlock {
+                                param($server, $scopeId)
+                                try {
+                                    $badLeases = Get-DhcpServerv4Lease -ComputerName $server -ScopeId $scopeId -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.HostName -eq "BAD_ADDRESS" }
+                                    return @{
+                                        ScopeId = $scopeId
+                                        Count = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
+                                    }
+                                } catch {
+                                    return @{ ScopeId = $scopeId; Count = 0 }
+                                }
+                            } -ArgumentList $DHCPServerName, $Scope.ScopeId
+
+                            $leaseJobs += $job
+
+                            # Throttle to 10 concurrent lease queries per server
+                            while ((Get-Job -State Running | Where-Object { $leaseJobs.Id -contains $_.Id }).Count -ge 10) {
+                                Start-Sleep -Milliseconds 100
+                            }
                         }
+
+                        # Wait and collect results
+                        $leaseJobs | Wait-Job -Timeout 300 | ForEach-Object {
+                            $result = Receive-Job -Job $_
+                            if ($result) {
+                                $BadAddressMap[$result.ScopeId] = $result.Count
+                            }
+                            Remove-Job -Job $_ -Force
+                        }
+
+                        # Clean up any remaining jobs
+                        $leaseJobs | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force
+
+                        Write-Output "  Bad_Address retrieval complete for $DHCPServerName"
+                    } catch {
+                        Write-Output "Warning: Could not retrieve Bad_Address information for $DHCPServerName : $($_.Exception.Message)"
                     }
                 }
 
@@ -3380,13 +3441,52 @@ $btnCollectDHCP.Add_Click({
                             }
                         }
 
+                        # OPTIMIZED: BadAddress tracking with parallel lease queries
                         $BadAddressMap = @{}
                         if ($IncludeBadAddresses) {
-                            foreach ($Scope in $Scopes) {
-                                try {
-                                    $BadAddresses = Get-DhcpServerv4Lease -ComputerName $dhcpName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue | Where-Object { $_.HostName -eq "BAD_ADDRESS" }
-                                    $BadAddressMap[$Scope.ScopeId] = if ($BadAddresses) { $BadAddresses.Count } else { 0 }
-                                } catch { $BadAddressMap[$Scope.ScopeId] = 0 }
+                            try {
+                                Add-ScopedLog "Retrieving Bad_Address information from $dhcpName (using parallel queries)..."
+
+                                # Parallel lease queries (PowerShell 5.1 compatible)
+                                $leaseJobs = @()
+                                foreach ($Scope in $Scopes) {
+                                    $job = Start-Job -ScriptBlock {
+                                        param($server, $scopeId)
+                                        try {
+                                            $badLeases = Get-DhcpServerv4Lease -ComputerName $server -ScopeId $scopeId -ErrorAction SilentlyContinue |
+                                                Where-Object { $_.HostName -eq "BAD_ADDRESS" }
+                                            return @{
+                                                ScopeId = $scopeId
+                                                Count = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
+                                            }
+                                        } catch {
+                                            return @{ ScopeId = $scopeId; Count = 0 }
+                                        }
+                                    } -ArgumentList $dhcpName, $Scope.ScopeId
+
+                                    $leaseJobs += $job
+
+                                    # Throttle to 10 concurrent lease queries per server
+                                    while ((Get-Job -State Running | Where-Object { $leaseJobs.Id -contains $_.Id }).Count -ge 10) {
+                                        Start-Sleep -Milliseconds 100
+                                    }
+                                }
+
+                                # Wait and collect results
+                                $leaseJobs | Wait-Job -Timeout 300 | ForEach-Object {
+                                    $result = Receive-Job -Job $_
+                                    if ($result) {
+                                        $BadAddressMap[$result.ScopeId] = $result.Count
+                                    }
+                                    Remove-Job -Job $_ -Force
+                                }
+
+                                # Clean up any remaining jobs
+                                $leaseJobs | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force
+
+                                Add-ScopedLog "  Bad_Address retrieval complete for $dhcpName"
+                            } catch {
+                                Add-ScopedLog "Warning: Could not retrieve Bad_Address information for $dhcpName : $($_.Exception.Message)"
                             }
                         }
 
