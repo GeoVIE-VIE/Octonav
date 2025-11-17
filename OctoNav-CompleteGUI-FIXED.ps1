@@ -2850,16 +2850,16 @@ function Invoke-CommandRunner {
 
 # Main Form
 $mainForm = New-Object System.Windows.Forms.Form
-$mainForm.Text = "OctoNav v2.2 - Complete Network Management Tool (Security Hardened + DNACAPEiv6 + CLI Runner)"
-$mainForm.Size = New-Object System.Drawing.Size(1200, 800)
+$mainForm.Text = "OctoNav v2.2 - Network Management Tool"
+$mainForm.Size = New-Object System.Drawing.Size(1000, 700)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = "Sizable"
 $mainForm.MaximizeBox = $true
-$mainForm.MinimumSize = New-Object System.Drawing.Size(1250, 850)
+$mainForm.MinimumSize = New-Object System.Drawing.Size(900, 650)
 
 # Create Tab Control
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Size = New-Object System.Drawing.Size(1180, 750)
+$tabControl.Size = New-Object System.Drawing.Size(980, 650)
 $tabControl.Location = New-Object System.Drawing.Point(10, 10)
 $tabControl.Anchor = "Top, Left, Right, Bottom"
 $mainForm.Controls.Add($tabControl)
@@ -2874,16 +2874,16 @@ $tabControl.Controls.Add($tab1)
 
 # Admin Status Indicator for Network Config Tab
 $lblAdminStatus = New-Object System.Windows.Forms.Label
-$lblAdminStatus.Size = New-Object System.Drawing.Size(1140, 25)
+$lblAdminStatus.Size = New-Object System.Drawing.Size(940, 25)
 $lblAdminStatus.Location = New-Object System.Drawing.Point(10, 10)
-$lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblAdminStatus.TextAlign = "MiddleLeft"
 if ($script:IsRunningAsAdmin) {
-    $lblAdminStatus.Text = "✓ Administrator Privileges: ACTIVE - Network configuration operations enabled"
+    $lblAdminStatus.Text = "✓ Administrator Privileges: ACTIVE - Network configuration enabled"
     $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
     $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)  # Light green
 } else {
-    $lblAdminStatus.Text = "⚠ Administrator Privileges: REQUIRED - Right-click OctoNav.ps1 and select 'Run as Administrator' to enable this tab"
+    $lblAdminStatus.Text = "⚠ Administrator Required - Right-click and select 'Run as Administrator' to enable this tab"
     $lblAdminStatus.ForeColor = [System.Drawing.Color]::DarkOrange
     $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(255, 245, 230)  # Light orange
 }
@@ -2892,7 +2892,7 @@ $tab1.Controls.Add($lblAdminStatus)
 # Group Box for Network Settings
 $netGroupBox = New-Object System.Windows.Forms.GroupBox
 $netGroupBox.Text = "Network Adapter Configuration"
-$netGroupBox.Size = New-Object System.Drawing.Size(1140, 300)
+$netGroupBox.Size = New-Object System.Drawing.Size(940, 250)
 $netGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab1.Controls.Add($netGroupBox)
 
@@ -2959,8 +2959,8 @@ $netGroupBox.Controls.Add($btnRestoreDefaults)
 
 # Network Config Log
 $netLogBox = New-Object System.Windows.Forms.RichTextBox
-$netLogBox.Size = New-Object System.Drawing.Size(1140, 350)
-$netLogBox.Location = New-Object System.Drawing.Point(10, 350)
+$netLogBox.Size = New-Object System.Drawing.Size(940, 310)
+$netLogBox.Location = New-Object System.Drawing.Point(10, 300)
 $netLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $netLogBox.ReadOnly = $true
 $tab1.Controls.Add($netLogBox)
@@ -3054,7 +3054,7 @@ $tabControl.Controls.Add($tab2)
 $lblDHCPInfo = New-Object System.Windows.Forms.Label
 $lblDHCPInfo.Text = "Collect and analyze DHCP scope statistics from domain DHCP servers"
 $lblDHCPInfo.Location = New-Object System.Drawing.Point(15, 15)
-$lblDHCPInfo.Size = New-Object System.Drawing.Size(1100, 20)
+$lblDHCPInfo.Size = New-Object System.Drawing.Size(900, 20)
 $lblDHCPInfo.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Italic)
 $lblDHCPInfo.ForeColor = [System.Drawing.Color]::DarkBlue
 $tab2.Controls.Add($lblDHCPInfo)
@@ -3062,7 +3062,7 @@ $tab2.Controls.Add($lblDHCPInfo)
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Configuration"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(1140, 120)
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(940, 110)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab2.Controls.Add($dhcpServerGroupBox)
 
@@ -3082,15 +3082,15 @@ $lblServerExample.ForeColor = [System.Drawing.Color]::Gray
 $dhcpServerGroupBox.Controls.Add($lblServerExample)
 
 $txtSpecificServers = New-Object System.Windows.Forms.TextBox
-$txtSpecificServers.Size = New-Object System.Drawing.Size(1100, 20)
+$txtSpecificServers.Size = New-Object System.Drawing.Size(900, 20)
 $txtSpecificServers.Location = New-Object System.Drawing.Point(15, 50)
 $txtSpecificServers.MaxLength = 1000
 $dhcpServerGroupBox.Controls.Add($txtSpecificServers)
 
 $lblServerNote = New-Object System.Windows.Forms.Label
-$lblServerNote.Text = "Note: If blank, all domain DHCP servers will be auto-discovered. Script must be run as Administrator."
-$lblServerNote.Location = New-Object System.Drawing.Point(15, 80)
-$lblServerNote.Size = New-Object System.Drawing.Size(1100, 20)
+$lblServerNote.Text = "Note: If blank, all domain DHCP servers will be auto-discovered"
+$lblServerNote.Location = New-Object System.Drawing.Point(15, 75)
+$lblServerNote.Size = New-Object System.Drawing.Size(900, 20)
 $lblServerNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblServerNote.ForeColor = [System.Drawing.Color]::Gray
 $dhcpServerGroupBox.Controls.Add($lblServerNote)
@@ -3098,8 +3098,8 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 # Scope Filtering Group
 $dhcpFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpFilterGroupBox.Text = "Scope Filtering (Optional)"
-$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
-$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 170)
+$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(940, 75)
+$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
 $tab2.Controls.Add($dhcpFilterGroupBox)
 
 $lblScopeFilter = New-Object System.Windows.Forms.Label
@@ -3117,16 +3117,16 @@ $lblFilterExample.ForeColor = [System.Drawing.Color]::Gray
 $dhcpFilterGroupBox.Controls.Add($lblFilterExample)
 
 $txtScopeFilter = New-Object System.Windows.Forms.TextBox
-$txtScopeFilter.Size = New-Object System.Drawing.Size(1100, 20)
-$txtScopeFilter.Location = New-Object System.Drawing.Point(15, 50)
+$txtScopeFilter.Size = New-Object System.Drawing.Size(900, 20)
+$txtScopeFilter.Location = New-Object System.Drawing.Point(15, 45)
 $txtScopeFilter.MaxLength = 500
 $dhcpFilterGroupBox.Controls.Add($txtScopeFilter)
 
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
-$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 265)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(940, 75)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 245)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
 $chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
@@ -3160,8 +3160,8 @@ $dhcpOptionsGroupBox.Controls.Add($lblBadAddrWarning)
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
-$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(1140, 75)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 360)
+$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(940, 65)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 330)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -3188,8 +3188,8 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 
 # DHCP Log
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
-$dhcpLogBox.Size = New-Object System.Drawing.Size(1140, 300)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 445)
+$dhcpLogBox.Size = New-Object System.Drawing.Size(940, 220)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $tab2.Controls.Add($dhcpLogBox)
@@ -3516,7 +3516,7 @@ $tabControl.Controls.Add($tab3)
 # Connection Group
 $dnaConnGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaConnGroupBox.Text = "DNA Center Connection"
-$dnaConnGroupBox.Size = New-Object System.Drawing.Size(1140, 150)
+$dnaConnGroupBox.Size = New-Object System.Drawing.Size(940, 140)
 $dnaConnGroupBox.Location = New-Object System.Drawing.Point(10, 10)
 $tab3.Controls.Add($dnaConnGroupBox)
 
@@ -3580,8 +3580,8 @@ $dnaConnGroupBox.Controls.Add($btnLoadDevices)
 # Device Filters
 $dnaFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFilterGroupBox.Text = "Device Filters"
-$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(1140, 110)
-$dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 170)
+$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(940, 105)
+$dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
 $tab3.Controls.Add($dnaFilterGroupBox)
 
 $lblFilterHostname = New-Object System.Windows.Forms.Label
@@ -3659,8 +3659,8 @@ $dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
 # Functions Group
 $dnaFuncGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFuncGroupBox.Text = "DNA Center Functions - 23 Available (Click to Execute)"
-$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(1140, 250)
-$dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 290)
+$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(940, 210)
+$dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 275)
 $tab3.Controls.Add($dnaFuncGroupBox)
 
 # Create buttons for DNA Center functions in a grid layout
@@ -3726,8 +3726,8 @@ for ($i = 0; $i -lt $functions.Count; $i++) {
 
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
-$dnaLogBox.Size = New-Object System.Drawing.Size(1140, 200)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 550)
+$dnaLogBox.Size = New-Object System.Drawing.Size(940, 140)
+$dnaLogBox.Location = New-Object System.Drawing.Point(10, 495)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $tab3.Controls.Add($dnaLogBox)
