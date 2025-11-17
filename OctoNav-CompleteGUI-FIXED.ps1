@@ -974,69 +974,80 @@ function Get-DHCPScopeStatistics {
             return $ServerStats
         }
 
-        # Process servers in parallel
+        # Process servers in parallel - maintain constant pool of 20 running jobs
         $Jobs = @()
         $AllStats = @()
-        $MaxJobs = 20
+        $MaxConcurrentJobs = 20
         $TotalServers = $DHCPServers.Count
+        $ServerIndex = 0
 
-        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers..." -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (maintaining 20 concurrent jobs)..." -Color "Cyan" -LogBox $LogBox
 
-        for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxJobs) {
-            $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxJobs - 1, $DHCPServers.Count - 1))]
-
-            foreach ($Server in $Batch) {
-                $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                $Jobs += @{
-                    Job = $Job
-                    ServerName = $Server.DnsName
-                    Processed = $false
-                }
+        # Start initial batch of jobs (up to 20)
+        while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
+            $Server = $DHCPServers[$ServerIndex]
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+            $Jobs += @{
+                Job = $Job
+                ServerName = $Server.DnsName
+                Processed = $false
             }
-
-            while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
-                Start-Sleep -Seconds 2
-
-                $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                foreach ($CompletedJob in $CompletedInBatch) {
-                    $CompletedJob.Processed = $true
-                    Write-Log -Message "Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
-
-                    try {
-                        $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
-                        if ($Result) {
-                            $AllStats += $Result
-                        }
-                    } catch {
-                        Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
-                    }
-
-                    Remove-Job -Job $CompletedJob.Job -Force
-                }
-
-                $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                foreach ($FailedJob in $FailedInBatch) {
-                    $FailedJob.Processed = $true
-                    Write-Log -Message "Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
-                    Remove-Job -Job $FailedJob.Job -Force
-                }
-            }
+            $ServerIndex++
         }
 
-        # Cleanup remaining jobs
-        $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
-        foreach ($RemainingJob in $RemainingJobs) {
-            if ($RemainingJob.Job.State -eq 'Completed') {
+        # Process jobs and maintain constant pool of 20
+        while ($Jobs | Where-Object { -not $_.Processed }) {
+            Start-Sleep -Seconds 2
+
+            # Handle completed jobs
+            $CompletedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+            foreach ($CompletedJob in $CompletedJobs) {
+                $CompletedJob.Processed = $true
+                Write-Log -Message "Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
+
                 try {
-                    $Result = Receive-Job -Job $RemainingJob.Job
+                    $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
                     if ($Result) {
                         $AllStats += $Result
                     }
                 } catch {
-                    Write-Log -Message "Failed to receive from $($RemainingJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                    Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                }
+
+                Remove-Job -Job $CompletedJob.Job -Force
+
+                # Start new job if more servers remain
+                if ($ServerIndex -lt $TotalServers) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                    $Jobs += @{
+                        Job = $NewJob
+                        ServerName = $Server.DnsName
+                        Processed = $false
+                    }
+                    $ServerIndex++
                 }
             }
-            Remove-Job -Job $RemainingJob.Job -Force
+
+            # Handle failed jobs
+            $FailedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+            foreach ($FailedJob in $FailedJobs) {
+                $FailedJob.Processed = $true
+                Write-Log -Message "Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
+                Remove-Job -Job $FailedJob.Job -Force
+
+                # Start new job if more servers remain
+                if ($ServerIndex -lt $TotalServers) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                    $Jobs += @{
+                        Job = $NewJob
+                        ServerName = $Server.DnsName
+                        Processed = $false
+                    }
+                    $ServerIndex++
+                }
+            }
         }
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
@@ -3199,59 +3210,71 @@ $btnCollectDHCP.Add_Click({
 
                 $Jobs = @()
                 $AllStats = @()
-                $MaxJobs = 20
+                $MaxConcurrentJobs = 20
                 $TotalServers = $DHCPServers.Count
+                $ServerIndex = 0
 
-                for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxJobs) {
-                    $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxJobs - 1, $DHCPServers.Count - 1))]
-
-                    foreach ($Server in $Batch) {
-                        $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                        $Jobs += @{
-                            Job = $Job
-                            ServerName = $Server.DnsName
-                            Processed = $false
-                        }
+                # Start initial batch of jobs (up to 20)
+                while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server.DnsName
+                        Processed = $false
                     }
-
-                    while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
-                        Start-Sleep -Seconds 2
-
-                        $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                        foreach ($CompletedJob in $CompletedInBatch) {
-                            $CompletedJob.Processed = $true
-                            try {
-                                $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
-                                if ($Result) {
-                                    $AllStats += $Result
-                                }
-                            } catch {
-                                # Failed to receive job result
-                            }
-                            Remove-Job -Job $CompletedJob.Job -Force
-                        }
-
-                        $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                        foreach ($FailedJob in $FailedInBatch) {
-                            $FailedJob.Processed = $true
-                            Remove-Job -Job $FailedJob.Job -Force
-                        }
-                    }
+                    $ServerIndex++
                 }
 
-                $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
-                foreach ($RemainingJob in $RemainingJobs) {
-                    if ($RemainingJob.Job.State -eq 'Completed') {
+                # Process jobs and maintain constant pool of 20
+                while ($Jobs | Where-Object { -not $_.Processed }) {
+                    Start-Sleep -Seconds 2
+
+                    # Handle completed jobs
+                    $CompletedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+                    foreach ($CompletedJob in $CompletedJobs) {
+                        $CompletedJob.Processed = $true
                         try {
-                            $Result = Receive-Job -Job $RemainingJob.Job
+                            $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
                             if ($Result) {
                                 $AllStats += $Result
                             }
                         } catch {
                             # Failed to receive job result
                         }
+                        Remove-Job -Job $CompletedJob.Job -Force
+
+                        # Start new job if more servers remain
+                        if ($ServerIndex -lt $TotalServers) {
+                            $Server = $DHCPServers[$ServerIndex]
+                            $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                            $Jobs += @{
+                                Job = $NewJob
+                                ServerName = $Server.DnsName
+                                Processed = $false
+                            }
+                            $ServerIndex++
+                        }
                     }
-                    Remove-Job -Job $RemainingJob.Job -Force
+
+                    # Handle failed jobs
+                    $FailedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+                    foreach ($FailedJob in $FailedJobs) {
+                        $FailedJob.Processed = $true
+                        Remove-Job -Job $FailedJob.Job -Force
+
+                        # Start new job if more servers remain
+                        if ($ServerIndex -lt $TotalServers) {
+                            $Server = $DHCPServers[$ServerIndex]
+                            $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                            $Jobs += @{
+                                Job = $NewJob
+                                ServerName = $Server.DnsName
+                                Processed = $false
+                            }
+                            $ServerIndex++
+                        }
+                    }
                 }
 
                 return @{
