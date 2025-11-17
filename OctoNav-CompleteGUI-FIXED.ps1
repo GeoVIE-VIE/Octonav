@@ -35,19 +35,19 @@ $ErrorActionPreference = "Stop"
 # IMPORT OPTIMIZATIONS AND SECURITY
 # ============================================
 
-# Import optimized functions
+# Import optimized functions (silently)
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 try {
-    Import-Module "$scriptPath\OptimizedDHCPFunctions.ps1" -Force -ErrorAction SilentlyContinue
+    Import-Module "$scriptPath\OptimizedDHCPFunctions.ps1" -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 } catch {
-    Write-Warning "OptimizedDHCPFunctions.ps1 not found. Some optimizations unavailable."
+    # Silently continue if module not found
 }
 
 # Enable secure protocols (TLS 1.2+)
 try {
     Enable-SecureProtocol | Out-Null
 } catch {
-    Write-Warning "Could not enable TLS 1.2+. Continuing with default protocols."
+    # Silently continue with default protocols
 }
 
 # ============================================
@@ -68,7 +68,7 @@ function Test-IsAdministrator {
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
         return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     } catch {
-        Write-Warning "Unable to determine administrator status: $($_.Exception.Message)"
+        # Silently return false if unable to determine admin status
         return $false
     }
 }
@@ -86,16 +86,15 @@ $script:IsRunningAsAdmin = Test-IsAdministrator
 function Get-DNACenterServers {
     $configFile = Join-Path $PSScriptRoot "dna_config.json"
 
-    # Try to load from config file first
+    # Try to load from config file first (silently)
     if (Test-Path $configFile) {
         try {
             $config = Get-Content $configFile -Raw | ConvertFrom-Json
             if ($config.servers -and $config.servers.Count -gt 0) {
-                Write-Verbose "Loaded DNA Center servers from config file"
                 return $config.servers
             }
         } catch {
-            Write-Warning "Failed to load config file: $($_.Exception.Message)"
+            # Silently continue if config file is invalid
         }
     }
 
@@ -114,12 +113,10 @@ function Get-DNACenterServers {
     }
 
     if ($servers.Count -gt 0) {
-        Write-Verbose "Loaded DNA Center servers from environment variables"
         return $servers
     }
 
-    # Fallback to default (prompt user to configure)
-    Write-Warning "No DNA Center servers configured. Please create dna_config.json or set environment variables."
+    # Fallback to default (user will see this in the GUI dropdown)
     return @([pscustomobject]@{ Name = "Please Configure"; Url = "https://your-dnac-server.example.com" })
 }
 
@@ -146,10 +143,10 @@ try {
     try {
         Set-SecureOutputDirectory -Path $script:outputDir | Out-Null
     } catch {
-        Write-Verbose "Could not set secure ACLs on output directory (continuing anyway)"
+        # Silently continue if ACLs cannot be set
     }
 } catch {
-    Write-Warning "Cannot write to output directory: $script:outputDir. Using temp directory."
+    # Silently fall back to temp directory
     $script:outputDir = Join-Path $env:TEMP "OctoNav_Reports"
     New-Item -ItemType Directory -Path $script:outputDir -Force -ErrorAction SilentlyContinue | Out-Null
 }
@@ -4102,6 +4099,5 @@ $mainForm.Add_FormClosing({
 # SHOW FORM
 # ============================================
 
-Write-Host "OctoNav Complete GUI - Security Hardened Edition" -ForegroundColor Cyan
-Write-Host "Starting application..." -ForegroundColor Green
+# Launch GUI silently (no console output at startup)
 [void]$mainForm.ShowDialog()
