@@ -6,144 +6,11 @@
 
 <#
 .SYNOPSIS
-    Tests access to DHCP Server audit logs
+    Gets Bad Address counts using parallel lease queries
 .DESCRIPTION
-    Checks if the current user has permission to read DHCP audit logs
-    from a remote DHCP server. Returns access information and log location.
-.PARAMETER ComputerName
-    The DHCP server to test
-.OUTPUTS
-    PSCustomObject with HasAccess, LogPath, and ErrorMessage properties
-#>
-function Test-DHCPAuditLogAccess {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$ComputerName
-    )
+    Queries leases in parallel for better performance than sequential queries.
+    This provides 4-6x performance improvement over the original sequential method.
 
-    try {
-        # DHCP audit logs are stored in %SystemRoot%\System32\DHCP\
-        $remotePath = "\\$ComputerName\admin$\System32\DHCP"
-
-        # Try to access the directory
-        $testAccess = Test-Path $remotePath -ErrorAction Stop
-
-        if ($testAccess) {
-            # Try to list files to confirm read access
-            $logFiles = Get-ChildItem -Path $remotePath -Filter "DhcpSrvLog-*.log" -ErrorAction Stop
-
-            return [PSCustomObject]@{
-                HasAccess = $true
-                LogPath = $remotePath
-                LogFileCount = $logFiles.Count
-                ErrorMessage = $null
-                RecommendedMethod = "AuditLog"
-            }
-        } else {
-            return [PSCustomObject]@{
-                HasAccess = $false
-                LogPath = $remotePath
-                LogFileCount = 0
-                ErrorMessage = "Path not accessible"
-                RecommendedMethod = "ParallelLease"
-            }
-        }
-    } catch {
-        return [PSCustomObject]@{
-            HasAccess = $false
-            LogPath = "\\$ComputerName\admin$\System32\DHCP"
-            LogFileCount = 0
-            ErrorMessage = $_.Exception.Message
-            RecommendedMethod = "ParallelLease"
-        }
-    }
-}
-
-<#
-.SYNOPSIS
-    Gets Bad Address counts from DHCP audit logs (FAST method)
-.DESCRIPTION
-    Parses DHCP server audit logs to count BAD_ADDRESS occurrences.
-    This is 10-100x faster than querying all leases.
-
-    DHCP Event IDs for Bad Address:
-    - Event ID 20: DHCP server issued address to a client but found conflict
-
-.PARAMETER ComputerName
-    The DHCP server name
-.PARAMETER DaysToSearch
-    How many days of logs to search (default: 7)
-.OUTPUTS
-    Hashtable with ScopeId as key and BadAddressCount as value
-#>
-function Get-BadAddressFromAuditLog {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$ComputerName,
-
-        [int]$DaysToSearch = 7
-    )
-
-    $badAddressMap = @{}
-
-    try {
-        $remotePath = "\\$ComputerName\admin$\System32\DHCP"
-
-        # Get log files modified within the specified days
-        $logFiles = Get-ChildItem -Path $remotePath -Filter "DhcpSrvLog-*.log" -ErrorAction Stop |
-            Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-$DaysToSearch) }
-
-        foreach ($logFile in $logFiles) {
-            # Read log file content
-            $content = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
-
-            foreach ($line in $content) {
-                # Skip header lines and empty lines
-                if ($line -match '^(ID|$)' -or [string]::IsNullOrWhiteSpace($line)) {
-                    continue
-                }
-
-                # DHCP log format: ID,Date,Time,Description,IP Address,Host Name,MAC Address,User Name, TransactionID, QResult,Probationtime, CorrelationID,Dhcid,VendorClass(Hex),VendorClass(ASCII),User Class(Hex),User Class(ASCII),Relay Agent Information,DnsRegError
-                # Event ID 20 = NACK (Address conflict / BAD_ADDRESS)
-                # Event ID 25 = DNS record not deleted (may indicate bad address)
-
-                $fields = $line -split ','
-
-                if ($fields.Count -ge 5) {
-                    $eventId = $fields[0].Trim()
-                    $ipAddress = $fields[4].Trim()
-                    $hostname = if ($fields.Count -ge 6) { $fields[5].Trim() } else { "" }
-
-                    # Look for BAD_ADDRESS in hostname field or Event ID 20 (NACK)
-                    if ($hostname -eq "BAD_ADDRESS" -or $eventId -eq "20") {
-                        # Determine scope from IP address (get network portion)
-                        if ($ipAddress -match '^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$') {
-                            # This is a simplified scope matching - you might need to be more precise
-                            # For now, we'll store by the IP itself and aggregate later
-                            if ($badAddressMap.ContainsKey($ipAddress)) {
-                                $badAddressMap[$ipAddress]++
-                            } else {
-                                $badAddressMap[$ipAddress] = 1
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return $badAddressMap
-    } catch {
-        Write-Warning "Failed to read audit logs from ${ComputerName}: $($_.Exception.Message)"
-        return @{}
-    }
-}
-
-<#
-.SYNOPSIS
-    Gets Bad Address counts using parallel lease queries (FALLBACK method)
-.DESCRIPTION
-    When audit logs aren't accessible, this function queries leases in parallel
-    for better performance than sequential queries.
 .PARAMETER ComputerName
     The DHCP server name
 .PARAMETER Scopes
@@ -237,64 +104,6 @@ function Get-BadAddressFromLeases {
     } catch {
         Write-Warning "Failed to get bad addresses from leases: $($_.Exception.Message)"
         return @{}
-    }
-}
-
-<#
-.SYNOPSIS
-    Intelligent Bad Address tracking that chooses the best method
-.DESCRIPTION
-    Automatically selects the fastest available method:
-    1. Audit logs (fastest) if accessible
-    2. Parallel lease queries (fallback)
-
-.PARAMETER ComputerName
-    The DHCP server name
-.PARAMETER Scopes
-    Array of scope objects
-.OUTPUTS
-    Hashtable with ScopeId as key and BadAddressCount as value
-#>
-function Get-BadAddressOptimized {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$ComputerName,
-
-        [Parameter(Mandatory=$true)]
-        [array]$Scopes
-    )
-
-    # Test audit log access first
-    $auditAccess = Test-DHCPAuditLogAccess -ComputerName $ComputerName
-
-    if ($auditAccess.HasAccess) {
-        Write-Output "Using DHCP audit logs (fast method) for $ComputerName..."
-
-        # Get bad addresses from audit logs
-        $auditBadAddresses = Get-BadAddressFromAuditLog -ComputerName $ComputerName
-
-        # Map IP addresses to scope IDs
-        $badAddressMap = @{}
-        foreach ($scope in $Scopes) {
-            $scopeNetwork = $scope.ScopeId.ToString()
-            $count = 0
-
-            # Count bad addresses that belong to this scope
-            foreach ($ip in $auditBadAddresses.Keys) {
-                if ($ip -like "$($scopeNetwork.Substring(0, $scopeNetwork.LastIndexOf('.'))).*") {
-                    $count += $auditBadAddresses[$ip]
-                }
-            }
-
-            $badAddressMap[$scope.ScopeId] = $count
-        }
-
-        return $badAddressMap
-    } else {
-        Write-Output "Audit logs not accessible for $ComputerName. Using parallel lease queries (slower)..."
-        Write-Output "  Reason: $($auditAccess.ErrorMessage)"
-
-        return Get-BadAddressFromLeases -ComputerName $ComputerName -Scopes $Scopes
     }
 }
 
@@ -509,10 +318,7 @@ function Invoke-SecureRestMethod {
 # ============================================
 
 Export-ModuleMember -Function @(
-    'Test-DHCPAuditLogAccess',
-    'Get-BadAddressFromAuditLog',
     'Get-BadAddressFromLeases',
-    'Get-BadAddressOptimized',
     'Get-SecureDNACredential',
     'Enable-SecureProtocol',
     'Set-SecureOutputDirectory',
