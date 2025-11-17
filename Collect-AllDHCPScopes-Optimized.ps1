@@ -119,8 +119,13 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 
     # Collect results
     foreach ($result in $results) {
-        if ($result -and $result.Count -gt 0) {
-            [void]$AllStats.AddRange($result)
+        if ($result) {
+            # Add items individually to avoid type casting issues
+            foreach ($item in $result) {
+                if ($item) {
+                    [void]$AllStats.Add($item)
+                }
+            }
         }
     }
 
@@ -171,8 +176,13 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
                 try {
                     $result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
 
-                    if ($result -and $result.Count -gt 0) {
-                        [void]$AllStats.AddRange($result)
+                    if ($result) {
+                        # Add items individually to avoid type casting issues
+                        foreach ($item in $result) {
+                            if ($item) {
+                                [void]$AllStats.Add($item)
+                            }
+                        }
                     }
                 } catch {
                     Write-Warning "Failed to receive results from $($Runspace.ServerName): $($_.Exception.Message)"
