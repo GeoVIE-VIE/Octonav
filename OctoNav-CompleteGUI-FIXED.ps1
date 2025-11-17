@@ -2940,20 +2940,34 @@ $tab2.Controls.Add($lblDHCPInfo)
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Configuration"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(1140, 80)
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(1140, 120)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab2.Controls.Add($dhcpServerGroupBox)
 
 $lblServerInfo = New-Object System.Windows.Forms.Label
-$lblServerInfo.Text = "DHCP servers will be auto-discovered from the domain. Script must be run as Administrator."
+$lblServerInfo.Text = "Specify DHCP servers (comma-separated, leave blank to auto-discover from domain):"
 $lblServerInfo.Location = New-Object System.Drawing.Point(15, 25)
-$lblServerInfo.Size = New-Object System.Drawing.Size(1100, 20)
+$lblServerInfo.Size = New-Object System.Drawing.Size(550, 20)
 $lblServerInfo.ForeColor = [System.Drawing.Color]::DarkGreen
 $dhcpServerGroupBox.Controls.Add($lblServerInfo)
 
+$lblServerExample = New-Object System.Windows.Forms.Label
+$lblServerExample.Text = "Example: dhcp-server1.domain.com, dhcp-server2.domain.com"
+$lblServerExample.Location = New-Object System.Drawing.Point(580, 25)
+$lblServerExample.Size = New-Object System.Drawing.Size(500, 20)
+$lblServerExample.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblServerExample.ForeColor = [System.Drawing.Color]::Gray
+$dhcpServerGroupBox.Controls.Add($lblServerExample)
+
+$txtSpecificServers = New-Object System.Windows.Forms.TextBox
+$txtSpecificServers.Size = New-Object System.Drawing.Size(1100, 20)
+$txtSpecificServers.Location = New-Object System.Drawing.Point(15, 50)
+$txtSpecificServers.MaxLength = 1000
+$dhcpServerGroupBox.Controls.Add($txtSpecificServers)
+
 $lblServerNote = New-Object System.Windows.Forms.Label
-$lblServerNote.Text = "Note: You can also specify servers via `$env:DHCP_SERVERS = 'server1,server2'"
-$lblServerNote.Location = New-Object System.Drawing.Point(15, 45)
+$lblServerNote.Text = "Note: If blank, all domain DHCP servers will be auto-discovered. Script must be run as Administrator."
+$lblServerNote.Location = New-Object System.Drawing.Point(15, 80)
 $lblServerNote.Size = New-Object System.Drawing.Size(1100, 20)
 $lblServerNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblServerNote.ForeColor = [System.Drawing.Color]::Gray
@@ -2963,7 +2977,7 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 $dhcpFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpFilterGroupBox.Text = "Scope Filtering (Optional)"
 $dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
-$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 130)
+$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 170)
 $tab2.Controls.Add($dhcpFilterGroupBox)
 
 $lblScopeFilter = New-Object System.Windows.Forms.Label
@@ -2990,7 +3004,7 @@ $dhcpFilterGroupBox.Controls.Add($txtScopeFilter)
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
 $dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
-$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 225)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 265)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
 $chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
@@ -3025,7 +3039,7 @@ $dhcpOptionsGroupBox.Controls.Add($lblBadAddrWarning)
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
 $dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(1140, 75)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 320)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 360)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -3053,7 +3067,7 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 # DHCP Log
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
 $dhcpLogBox.Size = New-Object System.Drawing.Size(1140, 300)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 445)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $tab2.Controls.Add($dhcpLogBox)
@@ -3083,12 +3097,36 @@ $btnCollectDHCP.Add_Click({
             }
         }
 
+        # Parse and validate specific servers
+        $specificServers = @()
+        if (-not [string]::IsNullOrWhiteSpace($txtSpecificServers.Text)) {
+            $rawServers = $txtSpecificServers.Text.Split(',') | ForEach-Object { $_.Trim() }
+
+            foreach ($server in $rawServers) {
+                if (-not [string]::IsNullOrWhiteSpace($server)) {
+                    if ($server -match '^[a-zA-Z0-9\.\-_]+$') {
+                        $specificServers += $server
+                    } else {
+                        Write-Log -Message "Invalid server name: '$server' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
+                        [System.Windows.Forms.MessageBox]::Show("Invalid server name: '$server'`n`nOnly alphanumeric characters, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                        $btnCollectDHCP.Enabled = $true
+                        return
+                    }
+                }
+            }
+        }
+
         $includeDNS = $chkIncludeDNS.Checked
         $includeBad = $chkIncludeBadAddr.Checked
 
         Write-Log -Message "Starting DHCP statistics collection..." -Color "Cyan" -LogBox $dhcpLogBox
+        if ($specificServers.Count -gt 0) {
+            Write-Log -Message "Using specified servers: $($specificServers -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
+        } else {
+            Write-Log -Message "Auto-discovering DHCP servers from domain..." -Color "Yellow" -LogBox $dhcpLogBox
+        }
         if ($scopeFilters.Count -gt 0) {
-            Write-Log -Message "Applying filters: $($scopeFilters -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
+            Write-Log -Message "Applying scope filters: $($scopeFilters -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
         }
 
         # Create runspace for background processing
@@ -3099,6 +3137,7 @@ $btnCollectDHCP.Add_Click({
 
         # Import required functions into runspace
         $script:dhcpRunspace.SessionStateProxy.SetVariable("ScopeFilters", $scopeFilters)
+        $script:dhcpRunspace.SessionStateProxy.SetVariable("SpecificServers", $specificServers)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeDNS", $includeDNS)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeBadAddresses", $includeBad)
 
@@ -3136,13 +3175,25 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                try {
-                    $DHCPServers = Get-DhcpServerInDC
-                } catch {
-                    return @{
-                        Success = $false
-                        Error = "Failed to get DHCP servers: $($_.Exception.Message)"
-                        Results = @()
+                # Use specific servers if provided, otherwise discover from domain
+                if ($SpecificServers -and $SpecificServers.Count -gt 0) {
+                    $DHCPServers = @()
+                    foreach ($serverName in $SpecificServers) {
+                        # Create custom object matching Get-DhcpServerInDC output structure
+                        $DHCPServers += [PSCustomObject]@{
+                            DnsName = $serverName
+                            IPAddress = $null
+                        }
+                    }
+                } else {
+                    try {
+                        $DHCPServers = Get-DhcpServerInDC
+                    } catch {
+                        return @{
+                            Success = $false
+                            Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"
+                            Results = @()
+                        }
                     }
                 }
 
