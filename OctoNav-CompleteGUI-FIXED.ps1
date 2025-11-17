@@ -417,6 +417,42 @@ function Write-Log {
     }
 }
 
+function Update-StatusBar {
+    param(
+        [string]$Status = "",
+        [int]$ProgressValue = -1,
+        [int]$ProgressMax = 100,
+        [string]$ProgressText = ""
+    )
+
+    try {
+        if ($script:statusLabel) {
+            $script:statusLabel.GetCurrentParent().Invoke([Action]{
+                if ($Status) {
+                    $script:statusLabel.Text = $Status
+                }
+
+                if ($ProgressValue -ge 0) {
+                    $script:progressBar.Visible = $true
+                    $script:progressBar.Maximum = $ProgressMax
+                    $script:progressBar.Value = [Math]::Min($ProgressValue, $ProgressMax)
+
+                    if ($ProgressText) {
+                        $script:progressLabel.Visible = $true
+                        $script:progressLabel.Text = $ProgressText
+                    }
+                } else {
+                    # Hide progress indicators
+                    $script:progressBar.Visible = $false
+                    $script:progressLabel.Visible = $false
+                }
+            })
+        }
+    } catch {
+        # Silently fail if status bar not available
+    }
+}
+
 # ============================================
 # DNA CENTER HELPER FUNCTIONS
 # ============================================
@@ -2920,10 +2956,34 @@ $mainForm.MinimumSize = New-Object System.Drawing.Size(900, 650)
 
 # Create Tab Control
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Size = New-Object System.Drawing.Size(980, 650)
+$tabControl.Size = New-Object System.Drawing.Size(980, 620)
 $tabControl.Location = New-Object System.Drawing.Point(10, 10)
 $tabControl.Anchor = "Top, Left, Right, Bottom"
 $mainForm.Controls.Add($tabControl)
+
+# Create Status Bar
+$statusStrip = New-Object System.Windows.Forms.StatusStrip
+$statusStrip.SizingGrip = $true
+$mainForm.Controls.Add($statusStrip)
+
+# Status Label (shows current operation)
+$script:statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$script:statusLabel.Text = "Ready"
+$script:statusLabel.Spring = $true  # Takes remaining space
+$script:statusLabel.TextAlign = "MiddleLeft"
+$statusStrip.Items.Add($script:statusLabel) | Out-Null
+
+# Progress Bar (shows progress percentage)
+$script:progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
+$script:progressBar.Size = New-Object System.Drawing.Size(200, 16)
+$script:progressBar.Visible = $false  # Hidden by default
+$statusStrip.Items.Add($script:progressBar) | Out-Null
+
+# Progress Label (shows X/Y)
+$script:progressLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$script:progressLabel.Text = ""
+$script:progressLabel.Visible = $false  # Hidden by default
+$statusStrip.Items.Add($script:progressLabel) | Out-Null
 
 # ============================================
 # TAB 1: NETWORK CONFIGURATION (XFER)
@@ -3253,6 +3313,8 @@ $dhcpLogBox.Size = New-Object System.Drawing.Size(940, 220)
 $dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
+$dhcpLogBox.ScrollBars = "Vertical"
+$dhcpLogBox.WordWrap = $false
 $tab2.Controls.Add($dhcpLogBox)
 
 # Event Handlers for Tab 2
@@ -3304,6 +3366,8 @@ $btnCollectDHCP.Add_Click({
         $includeBad = $chkIncludeBadAddr.Checked
 
         Write-Log -Message "Starting DHCP statistics collection..." -Color "Cyan" -LogBox $dhcpLogBox
+        Update-StatusBar -Status "Starting DHCP statistics collection..." -ProgressValue 0 -ProgressMax 100 -ProgressText "Initializing..."
+
         if ($specificServers.Count -gt 0) {
             Write-Log -Message "Using specified servers: $($specificServers -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
         } else {
@@ -3529,8 +3593,19 @@ $btnCollectDHCP.Add_Click({
                     $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
 
                     if ($result.Logs) {
+                        $serverCount = 0
+                        $totalServers = 0
+
                         foreach ($logMsg in $result.Logs) {
                             Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+
+                            # Parse progress from log messages like "[X/Y] Completed: servername"
+                            if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                                $serverCount = [int]$matches[1]
+                                $totalServers = [int]$matches[2]
+                                $percentage = [int](($serverCount / $totalServers) * 100)
+                                Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
+                            }
                         }
                     }
 
@@ -3539,9 +3614,11 @@ $btnCollectDHCP.Add_Click({
                         if ($script:dhcpResults.Count -gt 0) {
                             $btnExportDHCP.Enabled = $true
                             Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
+                            Update-StatusBar -Status "Ready - Collection complete! Found $($script:dhcpResults.Count) scopes" -ProgressValue -1
                         } else {
                             Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
                             Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                            Update-StatusBar -Status "Ready - No DHCP scopes found matching criteria" -ProgressValue -1
 
                             if ($result.Filters -and $result.Filters.Count -gt 0) {
                                 Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
@@ -3559,10 +3636,12 @@ $btnCollectDHCP.Add_Click({
                         }
                     } else {
                         Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
+                        Update-StatusBar -Status "Ready - Error occurred during collection" -ProgressValue -1
                     }
                 } catch {
                     $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
                     Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
+                    Update-StatusBar -Status "Ready - Error occurred" -ProgressValue -1
                 } finally {
                     $script:dhcpPowerShell.Dispose()
                     $script:dhcpRunspace.Close()
@@ -3830,6 +3909,8 @@ $dnaLogBox.Size = New-Object System.Drawing.Size(940, 140)
 $dnaLogBox.Location = New-Object System.Drawing.Point(10, 495)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
+$dnaLogBox.ScrollBars = "Vertical"
+$dnaLogBox.WordWrap = $false
 $tab3.Controls.Add($dnaLogBox)
 
 # Event Handlers for Tab 3
@@ -3851,13 +3932,16 @@ $btnDNAConnect.Add_Click({
         }
 
         Initialize-DNACenter -LogBox $dnaLogBox
+        Update-StatusBar -Status "Connecting to DNA Center..."
 
         $success = Connect-DNACenter -DnaCenter $script:selectedDnaCenter -Username $username -Password $password -LogBox $dnaLogBox
 
         if ($success) {
             $btnLoadDevices.Enabled = $true
+            Update-StatusBar -Status "Ready - Connected to DNA Center"
             [System.Windows.Forms.MessageBox]::Show("Successfully connected to DNA Center!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
+            Update-StatusBar -Status "Ready - Failed to connect to DNA Center"
             [System.Windows.Forms.MessageBox]::Show("Failed to connect to DNA Center", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {
@@ -3872,6 +3956,7 @@ $btnDNAConnect.Add_Click({
 
 $btnLoadDevices.Add_Click({
     try {
+        Update-StatusBar -Status "Loading devices from DNA Center..."
         $success = Load-AllDNADevices -LogBox $dnaLogBox
 
         if ($success) {
@@ -3887,9 +3972,11 @@ $btnLoadDevices.Add_Click({
             }
 
             $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
+            Update-StatusBar -Status "Ready - Loaded $($script:allDNADevices.Count) devices from DNA Center"
 
             [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($script:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
+            Update-StatusBar -Status "Ready - Failed to load devices"
             [System.Windows.Forms.MessageBox]::Show("Failed to load devices", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {
