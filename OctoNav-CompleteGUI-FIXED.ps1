@@ -186,6 +186,32 @@ function Get-SafeFileName {
     return $safeName
 }
 
+# Apply filters to output lines - matches DNACAPEiv6_COMPLETE behavior
+function Apply-Filters {
+    param(
+        [string[]]$Lines,
+        [string[]]$Filters
+    )
+
+    # No filters = return all lines
+    if ($Filters.Count -eq 0) {
+        return $Lines
+    }
+
+    $matchedLines = @()
+    foreach ($line in $Lines) {
+        foreach ($pattern in $Filters) {
+            # Use -like for simple substring matching (case-insensitive)
+            if ($line -like "*$pattern*") {
+                $matchedLines += $line
+                break  # Stop checking other patterns once matched (OR logic)
+            }
+        }
+    }
+
+    return $matchedLines
+}
+
 function Test-ServerName {
     param([string]$ServerName)
 
@@ -2498,9 +2524,9 @@ function Invoke-CommandRunner {
 
     # Output filter label
     $lblFilter = New-Object System.Windows.Forms.Label
-    $lblFilter.Text = "Output Filter (optional, case-insensitive text match):"
+    $lblFilter.Text = "Output Filters (optional, comma-separated patterns, OR logic):"
     $lblFilter.Location = New-Object System.Drawing.Point(20, $y)
-    $lblFilter.Size = New-Object System.Drawing.Size(350, 20)
+    $lblFilter.Size = New-Object System.Drawing.Size(400, 20)
     $cmdForm.Controls.Add($lblFilter)
 
     $y += 25
@@ -2552,7 +2578,15 @@ function Invoke-CommandRunner {
         return
     }
 
-    $outputFilter = $txtFilter.Text.Trim()
+    # Parse filters (comma-separated) - matches DNACAPEiv6_COMPLETE behavior
+    $outputFilters = @()
+    $filterText = $txtFilter.Text.Trim()
+    if (-not [string]::IsNullOrWhiteSpace($filterText)) {
+        $outputFilters = $filterText.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if ($outputFilters.Count -gt 0) {
+            Write-Log -Message "Output filters: $($outputFilters -join ', ')" -Color "Yellow" -LogBox $LogBox
+        }
+    }
 
     Write-Log -Message "Executing $($commandLines.Count) command(s) on $($devices.Count) device(s)..." -Color "Cyan" -LogBox $LogBox
 
@@ -2655,11 +2689,11 @@ function Invoke-CommandRunner {
                                 }
                             }
 
-                            # Apply filter if specified
+                            # Apply filters if specified - matches DNACAPEiv6_COMPLETE behavior
                             $filteredOutput = $outputText
-                            if (-not [string]::IsNullOrWhiteSpace($outputFilter) -and -not [string]::IsNullOrWhiteSpace($outputText)) {
+                            if ($outputFilters.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($outputText)) {
                                 $lines = $outputText -split "`n"
-                                $filteredLines = $lines | Where-Object { $_ -match [regex]::Escape($outputFilter) }
+                                $filteredLines = Apply-Filters -Lines $lines -Filters $outputFilters
                                 $filteredOutput = $filteredLines -join "`n"
                             }
 
