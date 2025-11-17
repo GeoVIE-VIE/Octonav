@@ -3378,18 +3378,22 @@ $btnCollectDHCP.Add_Click({
         }
 
         # Create runspace for background processing
+        Write-Log -Message "Creating background runspace for DHCP collection..." -Color "Cyan" -LogBox $dhcpLogBox
         $script:dhcpRunspace = [runspacefactory]::CreateRunspace()
         $script:dhcpRunspace.ApartmentState = "STA"
         $script:dhcpRunspace.ThreadOptions = "ReuseThread"
         $script:dhcpRunspace.Open()
+        Write-Log -Message "Runspace created and opened successfully" -Color "Gray" -LogBox $dhcpLogBox
 
         # Import required functions into runspace
+        Write-Log -Message "Setting runspace variables (Servers: $($specificServers.Count), Filters: $($scopeFilters.Count))..." -Color "Gray" -LogBox $dhcpLogBox
         $script:dhcpRunspace.SessionStateProxy.SetVariable("ScopeFilters", $scopeFilters)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("SpecificServers", $specificServers)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeDNS", $includeDNS)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeBadAddresses", $includeBad)
 
         # Create PowerShell instance
+        Write-Log -Message "Creating PowerShell instance for background execution..." -Color "Gray" -LogBox $dhcpLogBox
         $script:dhcpPowerShell = [powershell]::Create()
         $script:dhcpPowerShell.Runspace = $script:dhcpRunspace
 
@@ -3577,10 +3581,21 @@ $btnCollectDHCP.Add_Click({
             }
         }
 
+        Write-Log -Message "Adding background script to PowerShell instance..." -Color "Gray" -LogBox $dhcpLogBox
         [void]$script:dhcpPowerShell.AddScript($scriptBlock)
-        $script:dhcpAsyncResult = $script:dhcpPowerShell.BeginInvoke()
+
+        Write-Log -Message "Starting background DHCP collection (async)..." -Color "Cyan" -LogBox $dhcpLogBox
+        try {
+            $script:dhcpAsyncResult = $script:dhcpPowerShell.BeginInvoke()
+            Write-Log -Message "Background collection started successfully - monitoring for completion..." -Color "Green" -LogBox $dhcpLogBox
+        } catch {
+            $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+            Write-Log -Message "FAILED to start background collection: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
+            throw
+        }
 
         # Create timer to poll for completion and show activity
+        Write-Log -Message "Starting completion monitor timer (500ms interval)..." -Color "Gray" -LogBox $dhcpLogBox
         $script:dhcpTimer = New-Object System.Windows.Forms.Timer
         $script:dhcpTimer.Interval = 500  # Check every 500ms
         $script:dhcpTickCount = 0
@@ -3593,9 +3608,19 @@ $btnCollectDHCP.Add_Click({
         $script:progressLabel.Text = "Working..."
 
         $script:dhcpTimer.Add_Tick({
+            $script:dhcpTickCount++
+
+            # Log progress every 10 ticks (5 seconds) to show the timer is running
+            if ($script:dhcpTickCount % 10 -eq 0) {
+                $elapsed = [int]($script:dhcpTickCount * 0.5)
+                Write-Log -Message "Still collecting... (${elapsed}s elapsed, monitoring for completion)" -Color "DarkGray" -LogBox $dhcpLogBox
+                Update-StatusBar -Status "Collecting DHCP statistics..." -ProgressValue -1 -ProgressText "${elapsed}s elapsed"
+            }
+
             if ($script:dhcpAsyncResult.IsCompleted) {
                 $script:dhcpTimer.Stop()
                 $script:dhcpTimer.Dispose()
+                Write-Log -Message "Background collection completed - processing results..." -Color "Cyan" -LogBox $dhcpLogBox
 
                 # Reset progress bar to normal style
                 $script:progressBar.Style = "Blocks"
@@ -3603,6 +3628,14 @@ $btnCollectDHCP.Add_Click({
 
                 try {
                     $result = $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult)
+
+                    # Check for errors in the PowerShell error stream
+                    if ($script:dhcpPowerShell.Streams.Error.Count -gt 0) {
+                        Write-Log -Message "Background script encountered errors:" -Color "Red" -LogBox $dhcpLogBox
+                        foreach ($err in $script:dhcpPowerShell.Streams.Error) {
+                            Write-Log -Message "  Error: $($err.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
+                        }
+                    }
 
                     if ($result.Logs) {
                         $serverCount = 0
@@ -3663,6 +3696,7 @@ $btnCollectDHCP.Add_Click({
             }
         })
 
+        Write-Log -Message "Monitor timer started - checking every 500ms for completion" -Color "Green" -LogBox $dhcpLogBox
         $script:dhcpTimer.Start()
 
     } catch {
