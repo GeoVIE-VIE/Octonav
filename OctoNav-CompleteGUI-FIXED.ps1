@@ -861,16 +861,6 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
-        # Validate scope filters (skip empty ones)
-        foreach ($filter in $ScopeFilters) {
-            if (-not [string]::IsNullOrWhiteSpace($filter)) {
-                if (-not (Test-ScopeFilter -FilterValue $filter)) {
-                    Write-Log -Message "Invalid scope filter detected: contains unsafe characters" -Color "Red" -LogBox $LogBox
-                    return @()
-                }
-            }
-        }
-
         # Get DHCP servers
         if ($SpecificServers.Count -gt 0) {
             Write-Log -Message "Using specified DHCP servers..." -Color "Cyan" -LogBox $LogBox
@@ -916,13 +906,11 @@ function Get-DHCPScopeStatistics {
             try {
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
 
+                # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
-                        # Skip empty/null filters
-                        if (-not [string]::IsNullOrWhiteSpace($Filter)) {
-                            $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
-                        }
+                        $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
                     }
                     $Scopes = $FilteredScopes | Select-Object -Unique
 
@@ -3082,22 +3070,10 @@ $btnCollectDHCP.Add_Click({
     try {
         $btnCollectDHCP.Enabled = $false
 
-        # Validate and parse scope filters
+        # Parse scope filters - matches Merged-DHCPScopeStats.ps1 logic
         $scopeFilters = @()
         if (-not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
-            $rawFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-            # Validate each filter
-            foreach ($filter in $rawFilters) {
-                if (Test-ScopeFilter -FilterValue $filter) {
-                    $scopeFilters += $filter.ToUpper()
-                } else {
-                    Write-Log -Message "Invalid scope filter: '$filter' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
-                    [System.Windows.Forms.MessageBox]::Show("Invalid scope filter: '$filter'`n`nOnly alphanumeric characters, spaces, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                    $btnCollectDHCP.Enabled = $true
-                    return
-                }
-            }
+            $scopeFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim().ToUpper() }
         }
 
         # Parse and validate specific servers
@@ -3182,18 +3158,6 @@ $btnCollectDHCP.Add_Click({
 
             # Main DHCP collection logic
             try {
-                # Validate filters (skip empty ones)
-                foreach ($filter in $ScopeFilters) {
-                    if (-not [string]::IsNullOrWhiteSpace($filter)) {
-                        if (-not (Test-ScopeFilter -FilterValue $filter)) {
-                            return @{
-                                Success = $false
-                                Error = "Invalid scope filter detected: contains unsafe characters"
-                                Results = @()
-                            }
-                        }
-                    }
-                }
 
                 # Use specific servers if provided, otherwise discover from domain
                 if ($SpecificServers -and $SpecificServers.Count -gt 0) {
@@ -3223,15 +3187,14 @@ $btnCollectDHCP.Add_Click({
                     try {
                         $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
 
+                        # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                             $FilteredScopes = @()
                             foreach ($Filter in $ScopeFilters) {
-                                # Skip empty/null filters
-                                if (-not [string]::IsNullOrWhiteSpace($Filter)) {
-                                    $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
-                                }
+                                $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
                             }
                             $Scopes = $FilteredScopes | Select-Object -Unique
+
                             if ($Scopes.Count -eq 0) {
                                 return @()
                             }
