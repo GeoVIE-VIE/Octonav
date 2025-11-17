@@ -3374,23 +3374,19 @@ $btnCollectDHCP.Add_Click({
             Write-Log -Message "Applying scope filters: $($scopeFilters -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
         }
 
-        # Create runspace for background processing
-        Write-Log -Message "Creating background runspace for DHCP collection..." -Color "Cyan" -LogBox $dhcpLogBox
+        # Create runspace for background processing (silently)
         $script:dhcpRunspace = [runspacefactory]::CreateRunspace()
         $script:dhcpRunspace.ApartmentState = "STA"
         $script:dhcpRunspace.ThreadOptions = "ReuseThread"
         $script:dhcpRunspace.Open()
-        Write-Log -Message "Runspace created and opened successfully" -Color "Gray" -LogBox $dhcpLogBox
 
         # Import required functions into runspace
-        Write-Log -Message "Setting runspace variables (Servers: $($specificServers.Count), Filters: $($scopeFilters.Count))..." -Color "Gray" -LogBox $dhcpLogBox
         $script:dhcpRunspace.SessionStateProxy.SetVariable("ScopeFilters", $scopeFilters)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("SpecificServers", $specificServers)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeDNS", $includeDNS)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeBadAddresses", $includeBad)
 
         # Create PowerShell instance
-        Write-Log -Message "Creating PowerShell instance for background execution..." -Color "Gray" -LogBox $dhcpLogBox
         $script:dhcpPowerShell = [powershell]::Create()
         $script:dhcpPowerShell.Runspace = $script:dhcpRunspace
 
@@ -3405,7 +3401,7 @@ $btnCollectDHCP.Add_Click({
 
             # Main DHCP collection logic using runspace pools (no console windows)
             try {
-                Add-ScopedLog "Importing DhcpServer module..."
+                # Import DHCP module
                 try {
                     Import-Module DhcpServer -ErrorAction Stop
                 } catch {
@@ -3414,14 +3410,12 @@ $btnCollectDHCP.Add_Click({
 
                 # Use specific servers if provided, otherwise discover from domain
                 if ($SpecificServers -and $SpecificServers.Count -gt 0) {
-                    Add-ScopedLog "Using specified DHCP servers..."
                     $DHCPServers = @()
                     foreach ($serverName in $SpecificServers) {
                         $DHCPServers += [PSCustomObject]@{ DnsName = $serverName; IPAddress = $null }
                     }
-                    Add-ScopedLog "Will query $($DHCPServers.Count) specified server(s)"
+                    Add-ScopedLog "Querying $($DHCPServers.Count) specified server(s)..."
                 } else {
-                    Add-ScopedLog "Discovering DHCP servers in domain..."
                     try {
                         $DHCPServers = Get-DhcpServerInDC -ErrorAction Stop
                         Add-ScopedLog "Found $($DHCPServers.Count) DHCP server(s) in domain"
@@ -3434,7 +3428,7 @@ $btnCollectDHCP.Add_Click({
                 $TotalServers = $DHCPServers.Count
                 $MaxConcurrentRunspaces = 20
 
-                Add-ScopedLog "Starting parallel processing of $TotalServers DHCP servers (using $MaxConcurrentRunspaces concurrent runspaces)..."
+                Add-ScopedLog "Processing $TotalServers DHCP servers..."
 
                 # Script block for processing a single DHCP server
                 $ServerScriptBlock = {
@@ -3553,8 +3547,6 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                Add-ScopedLog "All runspaces started - waiting for completion..."
-
                 # Wait for all runspaces to complete
                 while ($CompletedServers -lt $TotalServers) {
                     Start-Sleep -Milliseconds 500
@@ -3595,21 +3587,17 @@ $btnCollectDHCP.Add_Click({
                 $RunspacePool.Close()
                 $RunspacePool.Dispose()
 
-                Add-ScopedLog "All server runspaces completed!"
-
                 return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
             } catch {
                 return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
             }
         }
 
-        Write-Log -Message "Adding background script to PowerShell instance..." -Color "Gray" -LogBox $dhcpLogBox
+        # Start background collection
         [void]$script:dhcpPowerShell.AddScript($scriptBlock)
 
-        Write-Log -Message "Starting background DHCP collection (async)..." -Color "Cyan" -LogBox $dhcpLogBox
         try {
             $script:dhcpAsyncResult = $script:dhcpPowerShell.BeginInvoke()
-            Write-Log -Message "Background collection started successfully - monitoring for completion..." -Color "Green" -LogBox $dhcpLogBox
         } catch {
             $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
             Write-Log -Message "FAILED to start background collection: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
@@ -3622,8 +3610,6 @@ $btnCollectDHCP.Add_Click({
         $script:progressBar.Visible = $true
         $script:progressLabel.Visible = $true
         $script:progressLabel.Text = "Processing DHCP servers..."
-
-        Write-Log -Message "Waiting for background collection to complete..." -Color "Cyan" -LogBox $dhcpLogBox
 
         # Wait for completion synchronously
         $script:dhcpPowerShell.EndInvoke($script:dhcpAsyncResult) | Out-Null
