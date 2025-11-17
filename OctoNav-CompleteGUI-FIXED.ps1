@@ -3374,6 +3374,12 @@ $btnCollectDHCP.Add_Click({
             Write-Log -Message "Applying scope filters: $($scopeFilters -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
         }
 
+        # Create synchronized hashtable for real-time log streaming
+        $script:dhcpSyncHash = [hashtable]::Synchronized(@{
+            Logs = New-Object System.Collections.ArrayList
+            LogCount = 0
+        })
+
         # Create runspace for background processing (silently)
         $script:dhcpRunspace = [runspacefactory]::CreateRunspace()
         $script:dhcpRunspace.ApartmentState = "STA"
@@ -3381,6 +3387,7 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpRunspace.Open()
 
         # Import required functions into runspace
+        $script:dhcpRunspace.SessionStateProxy.SetVariable("SyncHash", $script:dhcpSyncHash)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("ScopeFilters", $scopeFilters)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("SpecificServers", $specificServers)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeDNS", $includeDNS)
@@ -3392,11 +3399,11 @@ $btnCollectDHCP.Add_Click({
 
         # Add the entire script to run in background
         $scriptBlock = {
-            # Capture log messages to send back to the UI (use script scope for external access)
-            $script:LogBuffer = New-Object System.Collections.ArrayList
+            # Capture log messages to send back to the UI using synchronized hashtable
             function Add-ScopedLog {
                 param([string]$Message)
-                $null = $script:LogBuffer.Add($Message)
+                $null = $SyncHash.Logs.Add($Message)
+                $SyncHash.LogCount = $SyncHash.Logs.Count
             }
 
             # Main DHCP collection logic using runspace pools (no console windows)
@@ -3405,7 +3412,7 @@ $btnCollectDHCP.Add_Click({
                 try {
                     Import-Module DhcpServer -ErrorAction Stop
                 } catch {
-                    return @{ Success = $false; Error = "Failed to import DhcpServer module: $($_.Exception.Message)"; Results = @(); Logs = $script:LogBuffer }
+                    return @{ Success = $false; Error = "Failed to import DhcpServer module: $($_.Exception.Message)"; Results = @(); Logs = $SyncHash.Logs }
                 }
 
                 # Use specific servers if provided, otherwise discover from domain
@@ -3420,7 +3427,7 @@ $btnCollectDHCP.Add_Click({
                         $DHCPServers = Get-DhcpServerInDC -ErrorAction Stop
                         Add-ScopedLog "Found $($DHCPServers.Count) DHCP server(s) in domain"
                     } catch {
-                        return @{ Success = $false; Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"; Results = @(); Logs = $script:LogBuffer }
+                        return @{ Success = $false; Error = "Failed to get DHCP servers from domain: $($_.Exception.Message)"; Results = @(); Logs = $SyncHash.Logs }
                     }
                 }
 
@@ -3587,9 +3594,9 @@ $btnCollectDHCP.Add_Click({
                 $RunspacePool.Close()
                 $RunspacePool.Dispose()
 
-                return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $script:LogBuffer; Filters = $ScopeFilters }
+                return @{ Success = $true; Error = $null; Results = $AllStats.ToArray(); ServerCount = $TotalServers; Logs = $SyncHash.Logs; Filters = $ScopeFilters }
             } catch {
-                return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $script:LogBuffer }
+                return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $SyncHash.Logs }
             }
         }
 
@@ -3617,27 +3624,22 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpLogsDisplayed = 0  # Track how many logs we've already shown
 
         $script:dhcpTimer.Add_Tick({
-            # Try to retrieve and display real-time logs from the background runspace
-            try {
-                $currentLogs = $script:dhcpRunspace.SessionStateProxy.GetVariable("LogBuffer")
-                if ($currentLogs -and $currentLogs.Count -gt $script:dhcpLogsDisplayed) {
-                    # Display new logs that have been added since last check
-                    for ($i = $script:dhcpLogsDisplayed; $i -lt $currentLogs.Count; $i++) {
-                        $logMsg = $currentLogs[$i]
-                        Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
+            # Retrieve and display real-time logs from synchronized hashtable
+            if ($script:dhcpSyncHash.LogCount -gt $script:dhcpLogsDisplayed) {
+                # Display new logs that have been added since last check
+                for ($i = $script:dhcpLogsDisplayed; $i -lt $script:dhcpSyncHash.LogCount; $i++) {
+                    $logMsg = $script:dhcpSyncHash.Logs[$i]
+                    Write-Log -Message $logMsg -Color "Gray" -LogBox $dhcpLogBox
 
-                        # Parse progress from log messages like "[X/Y] Completed: servername"
-                        if ($logMsg -match '\[(\d+)/(\d+)\]') {
-                            $serverCount = [int]$matches[1]
-                            $totalServers = [int]$matches[2]
-                            $percentage = [int](($serverCount / $totalServers) * 100)
-                            Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
-                        }
+                    # Parse progress from log messages like "[X/Y] Completed: servername"
+                    if ($logMsg -match '\[(\d+)/(\d+)\]') {
+                        $serverCount = [int]$matches[1]
+                        $totalServers = [int]$matches[2]
+                        $percentage = [int](($serverCount / $totalServers) * 100)
+                        Update-StatusBar -Status "Processing DHCP servers..." -ProgressValue $percentage -ProgressMax 100 -ProgressText "$serverCount/$totalServers servers"
                     }
-                    $script:dhcpLogsDisplayed = $currentLogs.Count
                 }
-            } catch {
-                # Ignore errors reading logs (runspace might not be ready yet)
+                $script:dhcpLogsDisplayed = $script:dhcpSyncHash.LogCount
             }
 
             # Check if background collection is complete
