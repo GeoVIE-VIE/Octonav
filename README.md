@@ -6,17 +6,17 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 - DHCP scope statistics collection
 - Cisco DNA Center API integration
 
-**Current Version**: 2.0 - Security Hardened with Enhanced Validation
+**Current Version**: 2.2 - Security Hardened + DNACAPEiv6 Integration + CLI Command Runner + Improved DHCP UI
 
 ---
 
 ## Files in Repository
 
 ### Main Application
-- **OctoNav-CompleteGUI-FIXED.ps1** - Main GUI application (2,288 lines)
+- **OctoNav-CompleteGUI-FIXED.ps1** - Main GUI application (~3,300 lines)
   - ✅ Merged: XFER network configuration (Tab 1)
-  - ✅ Merged: DHCP statistics collection (Tab 2)
-  - ✅ Merged: DNA Center API functions (Tab 3 - 20 functions)
+  - ✅ Merged: DHCP statistics collection (Tab 2 - Redesigned UI)
+  - ✅ Merged: DNA Center API functions (Tab 3 - 25 functions)
 
 ### Standalone Scripts
 - **Merged-DHCPScopeStats.ps1** - Standalone DHCP statistics script (329 lines)
@@ -28,16 +28,15 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
   - Can still be used independently
 
 - **DNACAPEiv6_COMPLETE(1).txt** - Extended DNA Center CLI script (3,943 lines)
-  - ⚠️ **NOT merged into GUI**
+  - ✅ **Core functions merged into GUI (v2.1-v2.2)**
+  - ✅ **Kept as standalone CLI tool** for advanced use
   - Command-line interactive menu system
-  - Contains additional DNA Center functions not in GUI:
-    - Get-LastPingReachableTime
-    - Get-LastDisconnectTime
-    - Get-LastDeviceAvailabilityEventTime
+  - Additional CLI-only features:
     - Advanced device selection menus
     - ASCII art banner
     - Progress indicators
-  - Use this for advanced DNA Center operations
+    - Batch command execution with advanced filtering
+  - Use GUI for most operations, CLI for advanced scripting/automation
 
 ### Configuration Files
 - **dna_config.json.example** - DNA Center server configuration template
@@ -50,11 +49,12 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 | File | Status | Location in GUI | Lines |
 |------|--------|----------------|-------|
 | XFER | ✅ Merged | Tab 1: Network Configuration | 387 |
-| Merged-DHCPScopeStats.ps1 | ✅ Merged | Tab 2: DHCP Statistics | 329 |
-| DNA Center (Basic) | ✅ Merged | Tab 3: DNA Center (20 functions) | - |
-| DNACAPEiv6_COMPLETE(1).txt | ⚠️ NOT Merged | Standalone CLI script | 3,943 |
+| Merged-DHCPScopeStats.ps1 | ✅ Merged | Tab 2: DHCP Statistics (Redesigned in v2.2) | 329 |
+| DNA Center (Core API) | ✅ Merged | Tab 3: DNA Center (25 functions) | - |
+| DNACAPEiv6 Advanced Functions | ✅ Merged | Tab 3: Path Trace, Availability, Disconnect, Ping, CLI Runner | 469 |
+| DNACAPEiv6_COMPLETE(1).txt | ✅ Kept as Standalone | CLI script with interactive menus | 3,943 |
 
-**Note**: DNACAPEiv6_COMPLETE(1).txt provides a richer command-line experience with additional functionality not available in the GUI. Both can coexist.
+**Note**: DNACAPEiv6_COMPLETE(1).txt remains available as a standalone CLI tool for advanced automation. Most valuable functions are now in the GUI (v2.2 includes CLI command execution!).
 
 ---
 
@@ -152,20 +152,35 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 4. (Optional) Apply device filters
 5. Click any function button to execute and export data
 
-**Available Functions** (20 total):
+**Available Functions** (25 total):
+
+**Core Device Information:**
 - Device Information (Basic & Detailed)
 - Device Inventory Count
 - Device Configurations
 - Device Interfaces & Modules
-- Network & Client Health
 - Device Reachability
+
+**Network Health & Monitoring:**
+- Network & Client Health
 - Compliance Status
-- VLANs, Templates, Sites
+- Last Disconnect Times (from DNACAPEiv6)
+- Availability Events (from DNACAPEiv6)
+- Last Ping Reachable Times (NEW v2.2 - from DNACAPEiv6)
+
+**Topology & Neighbors:**
 - Physical Topology
 - OSPF, CDP, LLDP Neighbors
+
+**Network Services:**
+- VLANs, Templates, Sites
 - Access Points
-- Issues/Events
 - Software Images
+- Issues/Events
+
+**Advanced Analysis:**
+- Path Trace (from DNACAPEiv6) - Interactive network path analysis
+- Execute CLI Commands (NEW v2.2) - Run CLI commands on devices with output filtering
 
 **Security Note**: Credentials cleared from memory after authentication. Tokens expire after 1 hour.
 
@@ -232,6 +247,12 @@ All exports are CSV files saved to the configured output directory:
 - `Issues_YYYYMMDD_HHMMSS.csv`
 - `AccessPoints_YYYYMMDD_HHMMSS.csv`
 - `DeviceConfigurations_YYYYMMDD_HHMMSS/` (folder with individual config files)
+- `DeviceLastDisconnect_YYYYMMDD_HHMMSS.csv` (last disconnect times)
+- `DeviceAvailabilityEvents_YYYYMMDD_HHMMSS.csv` (availability event timestamps)
+- `PathTrace_SOURCE_to_DEST_YYYYMMDD_HHMMSS.csv` (network path trace results)
+- `DeviceLastPingReachable_YYYYMMDD_HHMMSS.csv` (NEW v2.2 - last ping reachable times)
+- `CommandRunner_YYYYMMDD_HHMMSS/` (NEW v2.2 - folder with CLI command outputs per device)
+- `CommandRunner_Summary_YYYYMMDD_HHMMSS.csv` (NEW v2.2 - CLI execution summary)
 
 ---
 
@@ -266,24 +287,46 @@ All exports are CSV files saved to the configured output directory:
 
 ## Using DNACAPEiv6_COMPLETE (Advanced)
 
-For advanced DNA Center operations not available in the GUI:
+As of v2.2, most DNACAPEiv6 functions are now in the GUI. The standalone CLI script is recommended for:
+- Advanced scripting and automation
+- Batch operations with complex filtering
+- Command-line only environments
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File "DNACAPEiv6_COMPLETE(1).txt"
 ```
 
-This provides:
-- Interactive menu system
-- Additional timestamp functions
-- Device availability tracking
-- Last ping/disconnect times
-- More granular device selection
+CLI-only features:
+- Interactive menu system with device selection
+- Advanced batch command execution with per-command filters
+- ASCII art banners and progress bars
+- Concatenated output files for analysis
 
 ---
 
 ## Version History
 
-### v2.0 (Current)
+### v2.2 (Current)
+- **NEW**: Added CLI Command Runner function (execute CLI commands on devices via GUI)
+- **NEW**: Added Last Ping Reachable Times function
+- **IMPROVED**: Completely redesigned DHCP tab UI with better organization and clarity
+  - Separated sections: Server Configuration, Scope Filtering, Collection Options, Actions
+  - Added helpful labels, examples, and explanatory text
+  - Visual improvements with color coding and better spacing
+- Increased DNA Center functions from 23 to 25
+- All security features from v2.0/v2.1 maintained
+- Updated documentation
+
+### v2.1
+- **MAJOR**: Merged DNACAPEiv6 advanced functions into GUI
+- Added Path Trace function with interactive dialog
+- Added Last Disconnect Times function
+- Added Availability Events function
+- Increased DNA Center functions from 20 to 23
+- All security hardening from v2.0 maintained
+- DNACAPEiv6_COMPLETE kept as standalone CLI tool
+
+### v2.0
 - Enhanced input validation (server names, scope filters)
 - Strengthened path traversal protection
 - Configuration file support (JSON + environment variables)
@@ -340,4 +383,4 @@ For issues, questions, or contributions:
 ---
 
 **Last Updated**: 2024
-**Script Version**: 2.0
+**Script Version**: 2.2

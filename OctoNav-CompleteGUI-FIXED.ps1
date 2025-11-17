@@ -2,13 +2,19 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    OctoNav Complete GUI - Unified Network Management Tool (Security Hardened v2)
+    OctoNav Complete GUI - Unified Network Management Tool (Security Hardened + DNACAPEiv6)
 .DESCRIPTION
     Comprehensive Windows Forms GUI combining Network Configuration, DHCP Statistics, and DNA Center API functions
+    Includes advanced DNACAPEiv6 functions: Path Trace, Last Disconnect Times, Availability Events
 .AUTHOR
     Integrated by Claude - In Memory of Zesty.PS1
 .VERSION
-    2.0 - Security Hardened with Enhanced Validation
+    2.1 - Security Hardened + DNACAPEiv6 Integration
+    - 23 DNA Center API functions (up from 20)
+    - Path Trace with interactive dialog
+    - Device availability event tracking
+    - Last disconnect time monitoring
+    - All security enhancements from v2.0
 #>
 
 # Enable visual styles
@@ -1853,12 +1859,884 @@ function Get-DeviceConfigurations {
 }
 
 # ============================================
+# ADVANCED DNA CENTER FUNCTIONS (from DNACAPEiv6)
+# ============================================
+
+function Get-EventSeriesLastTimestamp {
+    param(
+        [string]$DeviceId,
+        [string]$EventId,
+        [string]$EventName,
+        [hashtable]$AdditionalQuery,
+        [System.Windows.Forms.RichTextBox]$LogBox
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+        return $null
+    }
+
+    if (-not (Test-DNACTokenValid)) {
+        Write-Log -Message "DNA Center token expired or invalid" -Color "Red" -LogBox $LogBox
+        return $null
+    }
+
+    $baseUrl = "$($script:selectedDnaCenter)/dna/data/api/v1/event/event-series"
+    $queryParts = @()
+
+    if ($EventId) {
+        $queryParts += "eventId=$([System.Uri]::EscapeDataString($EventId))"
+    }
+
+    if ($EventName) {
+        $queryParts += "eventName=$([System.Uri]::EscapeDataString($EventName))"
+    }
+
+    $queryParts += "deviceId=$([System.Uri]::EscapeDataString($DeviceId))"
+    $queryParts += "limit=1"
+    $queryParts += "offset=0"
+    $queryParts += "sortBy=eventTimestamp"
+    $queryParts += "order=desc"
+
+    if ($AdditionalQuery) {
+        foreach ($entry in $AdditionalQuery.GetEnumerator()) {
+            $key = $entry.Key
+            $value = $entry.Value
+
+            if ([string]::IsNullOrWhiteSpace([string]$key)) { continue }
+            if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { continue }
+
+            $queryParts += "{0}={1}" -f [System.Uri]::EscapeDataString([string]$key), [System.Uri]::EscapeDataString([string]$value)
+        }
+    }
+
+    $queryString = $queryParts -join '&'
+    $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
+
+    try {
+        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+    } catch {
+        return $null
+    }
+
+    $records = @()
+    if ($response) {
+        if ($response.PSObject.Properties['response']) {
+            $records = @($response.response)
+        } elseif ($response.PSObject.Properties['data']) {
+            $records = @($response.data)
+        } elseif ($response -is [array]) {
+            $records = @($response)
+        } else {
+            $records = @($response)
+        }
+    }
+
+    foreach ($record in $records) {
+        if (-not $record) { continue }
+
+        $timestampValue = $null
+        if ($record.PSObject.Properties['eventTimestamp']) {
+            $timestampValue = $record.eventTimestamp
+        } elseif ($record.PSObject.Properties['timestamp']) {
+            $timestampValue = $record.timestamp
+        }
+
+        if ($timestampValue) {
+            return ConvertTo-ReadableTimestamp -Value $timestampValue
+        }
+    }
+
+    return $null
+}
+
+function Get-LastDeviceAvailabilityEventTime {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    try {
+        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+
+        if (-not $devices -or $devices.Count -eq 0) {
+            Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
+            return
+        }
+
+        $eventList = @()
+
+        foreach ($device in $devices) {
+            $queryHints = @{ tags = 'ASSURANCE' }
+            $timestamp = Get-EventSeriesLastTimestamp -DeviceId $device.id -EventName "Device Unreachable" -AdditionalQuery $queryHints -LogBox $LogBox
+
+            $eventList += [PSCustomObject]@{
+                Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                LastEventTime = if ($timestamp) { $timestamp } else { "N/A" }
+                EventType = "Device Unreachable"
+            }
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = Join-Path -Path $script:outputDir -ChildPath "DeviceAvailabilityEvents_$timestamp.csv"
+        $eventList | Export-Csv -Path $csvPath -NoTypeInformation
+
+        Write-Log -Message "Exported to: $csvPath" -Color "Green" -LogBox $LogBox
+    } catch {
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $LogBox
+    }
+}
+
+function Get-LastDisconnectTime {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    try {
+        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+
+        if (-not $devices -or $devices.Count -eq 0) {
+            Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
+            return
+        }
+
+        if (-not (Test-DNACTokenValid)) {
+            Write-Log -Message "DNA Center token expired or invalid" -Color "Red" -LogBox $LogBox
+            return
+        }
+
+        $disconnectList = @()
+
+        foreach ($device in $devices) {
+            $enrichmentUrl = "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/enrichment-details"
+
+            try {
+                $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+
+                $lastDisconnect = $null
+                if ($response) {
+                    $records = @()
+                    if ($response.PSObject.Properties['response']) {
+                        $records = @($response.response)
+                    } else {
+                        $records = @($response)
+                    }
+
+                    foreach ($record in $records) {
+                        if (-not $record) { continue }
+
+                        $deviceDetails = $null
+                        if ($record.PSObject.Properties['deviceDetails']) {
+                            $deviceDetails = $record.deviceDetails
+                        }
+
+                        if ($deviceDetails -and $deviceDetails.PSObject.Properties['lastDisconnectTime']) {
+                            $lastDisconnect = ConvertTo-ReadableTimestamp -Value $deviceDetails.lastDisconnectTime
+                        }
+                    }
+                }
+
+                $disconnectList += [PSCustomObject]@{
+                    Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                    IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    LastDisconnectTime = if ($lastDisconnect) { $lastDisconnect } else { "N/A" }
+                }
+            } catch {
+                $disconnectList += [PSCustomObject]@{
+                    Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                    IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                    LastDisconnectTime = "Error"
+                }
+            }
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = Join-Path -Path $script:outputDir -ChildPath "DeviceLastDisconnect_$timestamp.csv"
+        $disconnectList | Export-Csv -Path $csvPath -NoTypeInformation
+
+        Write-Log -Message "Exported to: $csvPath" -Color "Green" -LogBox $LogBox
+    } catch {
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $LogBox
+    }
+}
+
+function Invoke-PathTrace {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    if (-not (Test-DNACTokenValid)) {
+        Write-Log -Message "DNA Center token expired or invalid" -Color "Red" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show("Please connect to DNA Center first", "Not Authenticated", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    # Create input dialog
+    $pathTraceForm = New-Object System.Windows.Forms.Form
+    $pathTraceForm.Text = "Path Trace Configuration"
+    $pathTraceForm.Size = New-Object System.Drawing.Size(500, 400)
+    $pathTraceForm.StartPosition = "CenterParent"
+    $pathTraceForm.FormBorderStyle = "FixedDialog"
+    $pathTraceForm.MaximizeBox = $false
+
+    $y = 20
+
+    # Source IP
+    $lblSource = New-Object System.Windows.Forms.Label
+    $lblSource.Text = "Source IP Address:"
+    $lblSource.Location = New-Object System.Drawing.Point(20, $y)
+    $lblSource.Size = New-Object System.Drawing.Size(120, 20)
+    $pathTraceForm.Controls.Add($lblSource)
+
+    $txtSource = New-Object System.Windows.Forms.TextBox
+    $txtSource.Location = New-Object System.Drawing.Point(150, $y)
+    $txtSource.Size = New-Object System.Drawing.Size(300, 20)
+    $pathTraceForm.Controls.Add($txtSource)
+
+    $y += 40
+
+    # Destination IP
+    $lblDest = New-Object System.Windows.Forms.Label
+    $lblDest.Text = "Destination IP Address:"
+    $lblDest.Location = New-Object System.Drawing.Point(20, $y)
+    $lblDest.Size = New-Object System.Drawing.Size(120, 20)
+    $pathTraceForm.Controls.Add($lblDest)
+
+    $txtDest = New-Object System.Windows.Forms.TextBox
+    $txtDest.Location = New-Object System.Drawing.Point(150, $y)
+    $txtDest.Size = New-Object System.Drawing.Size(300, 20)
+    $pathTraceForm.Controls.Add($txtDest)
+
+    $y += 40
+
+    # Protocol
+    $lblProtocol = New-Object System.Windows.Forms.Label
+    $lblProtocol.Text = "Protocol:"
+    $lblProtocol.Location = New-Object System.Drawing.Point(20, $y)
+    $lblProtocol.Size = New-Object System.Drawing.Size(120, 20)
+    $pathTraceForm.Controls.Add($lblProtocol)
+
+    $comboProtocol = New-Object System.Windows.Forms.ComboBox
+    $comboProtocol.Location = New-Object System.Drawing.Point(150, $y)
+    $comboProtocol.Size = New-Object System.Drawing.Size(150, 20)
+    $comboProtocol.DropDownStyle = "DropDownList"
+    $comboProtocol.Items.AddRange(@("ICMP", "TCP", "UDP"))
+    $comboProtocol.SelectedIndex = 0
+    $pathTraceForm.Controls.Add($comboProtocol)
+
+    $y += 40
+
+    # Source Port (optional)
+    $lblSourcePort = New-Object System.Windows.Forms.Label
+    $lblSourcePort.Text = "Source Port (optional):"
+    $lblSourcePort.Location = New-Object System.Drawing.Point(20, $y)
+    $lblSourcePort.Size = New-Object System.Drawing.Size(120, 20)
+    $pathTraceForm.Controls.Add($lblSourcePort)
+
+    $txtSourcePort = New-Object System.Windows.Forms.TextBox
+    $txtSourcePort.Location = New-Object System.Drawing.Point(150, $y)
+    $txtSourcePort.Size = New-Object System.Drawing.Size(100, 20)
+    $pathTraceForm.Controls.Add($txtSourcePort)
+
+    $y += 40
+
+    # Dest Port (optional)
+    $lblDestPort = New-Object System.Windows.Forms.Label
+    $lblDestPort.Text = "Dest Port (optional):"
+    $lblDestPort.Location = New-Object System.Drawing.Point(20, $y)
+    $lblDestPort.Size = New-Object System.Drawing.Size(120, 20)
+    $pathTraceForm.Controls.Add($lblDestPort)
+
+    $txtDestPort = New-Object System.Windows.Forms.TextBox
+    $txtDestPort.Location = New-Object System.Drawing.Point(150, $y)
+    $txtDestPort.Size = New-Object System.Drawing.Size(100, 20)
+    $pathTraceForm.Controls.Add($txtDestPort)
+
+    $y += 60
+
+    # Start button
+    $btnStart = New-Object System.Windows.Forms.Button
+    $btnStart.Text = "Start Path Trace"
+    $btnStart.Location = New-Object System.Drawing.Point(150, $y)
+    $btnStart.Size = New-Object System.Drawing.Size(120, 30)
+    $pathTraceForm.Controls.Add($btnStart)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(280, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $pathTraceForm.Controls.Add($btnCancel)
+    $pathTraceForm.CancelButton = $btnCancel
+
+    $btnStart.Add_Click({
+        # Validate inputs
+        if (-not (Test-IPAddress -IPAddress $txtSource.Text.Trim())) {
+            [System.Windows.Forms.MessageBox]::Show("Invalid source IP address", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        if (-not (Test-IPAddress -IPAddress $txtDest.Text.Trim())) {
+            [System.Windows.Forms.MessageBox]::Show("Invalid destination IP address", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        # Validate ports if provided
+        if (-not [string]::IsNullOrWhiteSpace($txtSourcePort.Text)) {
+            $port = 0
+            if (-not [int]::TryParse($txtSourcePort.Text, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+                [System.Windows.Forms.MessageBox]::Show("Source port must be between 1 and 65535", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($txtDestPort.Text)) {
+            $port = 0
+            if (-not [int]::TryParse($txtDestPort.Text, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+                [System.Windows.Forms.MessageBox]::Show("Destination port must be between 1 and 65535", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+        }
+
+        $pathTraceForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $pathTraceForm.Close()
+    })
+
+    $result = $pathTraceForm.ShowDialog()
+
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        return
+    }
+
+    # Execute path trace
+    $sourceIP = $txtSource.Text.Trim()
+    $destIP = $txtDest.Text.Trim()
+    $protocol = $comboProtocol.SelectedItem
+
+    Write-Log -Message "Starting path trace: $sourceIP -> $destIP ($protocol)" -Color "Cyan" -LogBox $LogBox
+
+    try {
+        # Build request body
+        $requestBody = @{
+            "sourceIP" = $sourceIP
+            "destIP" = $destIP
+            "protocol" = $protocol
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($txtSourcePort.Text)) {
+            $requestBody["sourcePort"] = [int]$txtSourcePort.Text
+        }
+        if (-not [string]::IsNullOrWhiteSpace($txtDestPort.Text)) {
+            $requestBody["destPort"] = [int]$txtDestPort.Text
+        }
+
+        $requestJson = $requestBody | ConvertTo-Json -Depth 10
+
+        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/flow-analysis" `
+            -Method Post `
+            -Headers $script:dnaCenterHeaders `
+            -Body $requestJson `
+            -ContentType "application/json" `
+            -TimeoutSec 30
+
+        if ($response -and $response.response -and $response.response.flowAnalysisId) {
+            $flowAnalysisId = $response.response.flowAnalysisId
+            Write-Log -Message "Flow analysis initiated (ID: $flowAnalysisId)" -Color "Green" -LogBox $LogBox
+            Write-Log -Message "Waiting for path trace to complete..." -Color "Yellow" -LogBox $LogBox
+
+            $completed = $false
+            $attempts = 0
+            $maxAttempts = 30
+
+            while (-not $completed -and $attempts -lt $maxAttempts) {
+                Start-Sleep -Seconds 2
+                $attempts++
+
+                $statusResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/flow-analysis/$flowAnalysisId" `
+                    -Method Get `
+                    -Headers $script:dnaCenterHeaders `
+                    -TimeoutSec 30
+
+                if ($statusResponse -and $statusResponse.response) {
+                    $status = $statusResponse.response.request.status
+
+                    if ($status -eq "COMPLETED") {
+                        $completed = $true
+                        Write-Log -Message "Path trace completed!" -Color "Green" -LogBox $LogBox
+
+                        # Parse results
+                        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+                        $csvPath = Join-Path -Path $script:outputDir -ChildPath "PathTrace_${sourceIP}_to_${destIP}_$timestamp.csv"
+
+                        $pathList = @()
+                        $hopNumber = 1
+
+                        if ($statusResponse.response.networkElementsInfo) {
+                            foreach ($element in $statusResponse.response.networkElementsInfo) {
+                                $deviceName = if ($element.name) { $element.name } else { "Unknown" }
+                                $deviceIP = if ($element.ip) { $element.ip } else { "N/A" }
+                                $deviceType = if ($element.type) { $element.type } else { "N/A" }
+
+                                $ingressInterface = "N/A"
+                                if ($element.ingressInterface -and $element.ingressInterface.physicalInterface -and $element.ingressInterface.physicalInterface.name) {
+                                    $ingressInterface = $element.ingressInterface.physicalInterface.name
+                                }
+
+                                $egressInterface = "N/A"
+                                if ($element.egressInterface -and $element.egressInterface.physicalInterface -and $element.egressInterface.physicalInterface.name) {
+                                    $egressInterface = $element.egressInterface.physicalInterface.name
+                                }
+
+                                $pathList += [PSCustomObject]@{
+                                    HopNumber = $hopNumber
+                                    DeviceName = $deviceName
+                                    DeviceIP = $deviceIP
+                                    DeviceType = $deviceType
+                                    IngressInterface = $ingressInterface
+                                    EgressInterface = $egressInterface
+                                    SourceIP = $sourceIP
+                                    DestinationIP = $destIP
+                                    Protocol = $protocol
+                                    TraceTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                                }
+
+                                $hopNumber++
+                            }
+                        }
+
+                        $pathList | Export-Csv -Path $csvPath -NoTypeInformation
+                        Write-Log -Message "Exported to: $csvPath" -Color "Green" -LogBox $LogBox
+                        Write-Log -Message "Total hops: $($pathList.Count)" -Color "Green" -LogBox $LogBox
+
+                        [System.Windows.Forms.MessageBox]::Show("Path trace completed!`nTotal hops: $($pathList.Count)`n`nExported to: $csvPath", "Path Trace Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                        break
+                    } elseif ($status -eq "FAILED") {
+                        Write-Log -Message "Path trace failed" -Color "Red" -LogBox $LogBox
+                        if ($statusResponse.response.request.failureReason) {
+                            Write-Log -Message "Reason: $($statusResponse.response.request.failureReason)" -Color "Red" -LogBox $LogBox
+                        }
+                        break
+                    }
+                }
+            }
+
+            if (-not $completed -and $attempts -ge $maxAttempts) {
+                Write-Log -Message "Path trace timed out after $($attempts * 2) seconds" -Color "Red" -LogBox $LogBox
+            }
+        } else {
+            Write-Log -Message "Failed to initiate path trace" -Color "Red" -LogBox $LogBox
+        }
+    } catch {
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error during path trace: $sanitizedError" -Color "Red" -LogBox $LogBox
+    }
+}
+
+function Get-LastPingReachableTime {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    try {
+        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+
+        if (-not $devices -or $devices.Count -eq 0) {
+            Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
+            return
+        }
+
+        if (-not (Test-DNACTokenValid)) {
+            Write-Log -Message "DNA Center token expired or invalid" -Color "Red" -LogBox $LogBox
+            return
+        }
+
+        Write-Log -Message "Retrieving last ping reachable times for $($devices.Count) device(s)..." -Color "Cyan" -LogBox $LogBox
+
+        $reachableList = @()
+
+        foreach ($device in $devices) {
+            $lastReachable = "N/A"
+
+            # Try to get last seen/reachable time from device record first
+            $deviceId = $device.id
+
+            if ($deviceId) {
+                try {
+                    $enrichmentUrl = "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$deviceId"
+                    $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+
+                    if ($response -and $response.response) {
+                        $deviceData = $response.response
+
+                        # Try various timestamp properties
+                        $lastSeenValue = $null
+                        if ($deviceData.PSObject.Properties['lastUpdateTime']) {
+                            $lastSeenValue = $deviceData.lastUpdateTime
+                        } elseif ($deviceData.PSObject.Properties['lastUpdated']) {
+                            $lastSeenValue = $deviceData.lastUpdated
+                        } elseif ($deviceData.PSObject.Properties['collectionStatus']) {
+                            $lastSeenValue = $deviceData.collectionStatus
+                        }
+
+                        if ($lastSeenValue) {
+                            $lastReachable = ConvertTo-ReadableTimestamp -Value $lastSeenValue
+                        }
+                    }
+                } catch {
+                    # Continue to event-based lookup
+                }
+
+                # If still N/A, try event series for ping_reachable
+                if ($lastReachable -eq "N/A") {
+                    $timestamp = Get-EventSeriesLastTimestamp `
+                        -DeviceId $deviceId `
+                        -EventName "device_availability:ping_reachable" `
+                        -AdditionalQuery @{} `
+                        -LogBox $LogBox
+
+                    if ($timestamp) {
+                        $lastReachable = $timestamp
+                    }
+                }
+
+                # If still N/A, try general reachable event
+                if ($lastReachable -eq "N/A") {
+                    $timestamp = Get-EventSeriesLastTimestamp `
+                        -DeviceId $deviceId `
+                        -EventName "device_availability:reachable" `
+                        -AdditionalQuery @{} `
+                        -LogBox $LogBox
+
+                    if ($timestamp) {
+                        $lastReachable = $timestamp
+                    }
+                }
+            }
+
+            $reachableList += [PSCustomObject]@{
+                Hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+                IPAddress = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                Family = if ($device.family) { $device.family } else { "N/A" }
+                LastPingReachable = $lastReachable
+            }
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $csvPath = Join-Path -Path $script:outputDir -ChildPath "DeviceLastPingReachable_$timestamp.csv"
+        $reachableList | Export-Csv -Path $csvPath -NoTypeInformation
+
+        Write-Log -Message "Exported to: $csvPath" -Color "Green" -LogBox $LogBox
+    } catch {
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $LogBox
+    }
+}
+
+function Invoke-CommandRunner {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    if (-not (Test-DNACTokenValid)) {
+        Write-Log -Message "DNA Center token expired or invalid" -Color "Red" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show("Please connect to DNA Center first", "Not Authenticated", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+
+    if (-not $devices -or $devices.Count -eq 0) {
+        Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show("Please load devices first", "No Devices", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    # Create command input dialog
+    $cmdForm = New-Object System.Windows.Forms.Form
+    $cmdForm.Text = "Execute CLI Command"
+    $cmdForm.Size = New-Object System.Drawing.Size(600, 350)
+    $cmdForm.StartPosition = "CenterParent"
+    $cmdForm.FormBorderStyle = "FixedDialog"
+    $cmdForm.MaximizeBox = $false
+
+    $y = 20
+
+    # Info label
+    $lblInfo = New-Object System.Windows.Forms.Label
+    $lblInfo.Text = "Execute CLI command on $($devices.Count) device(s)"
+    $lblInfo.Location = New-Object System.Drawing.Point(20, $y)
+    $lblInfo.Size = New-Object System.Drawing.Size(550, 20)
+    $lblInfo.Font = New-Object System.Drawing.Font("Arial", 10, [System.Drawing.FontStyle]::Bold)
+    $cmdForm.Controls.Add($lblInfo)
+
+    $y += 30
+
+    # Command label
+    $lblCommand = New-Object System.Windows.Forms.Label
+    $lblCommand.Text = "CLI Command(s) - one per line:"
+    $lblCommand.Location = New-Object System.Drawing.Point(20, $y)
+    $lblCommand.Size = New-Object System.Drawing.Size(200, 20)
+    $cmdForm.Controls.Add($lblCommand)
+
+    $y += 25
+
+    # Command textbox (multiline)
+    $txtCommand = New-Object System.Windows.Forms.TextBox
+    $txtCommand.Multiline = $true
+    $txtCommand.ScrollBars = "Vertical"
+    $txtCommand.Location = New-Object System.Drawing.Point(20, $y)
+    $txtCommand.Size = New-Object System.Drawing.Size(550, 100)
+    $txtCommand.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $cmdForm.Controls.Add($txtCommand)
+
+    $y += 110
+
+    # Warning label
+    $lblWarning = New-Object System.Windows.Forms.Label
+    $lblWarning.Text = "Note: Pipes (|) are not supported. Use plain commands only."
+    $lblWarning.Location = New-Object System.Drawing.Point(20, $y)
+    $lblWarning.Size = New-Object System.Drawing.Size(550, 20)
+    $lblWarning.ForeColor = [System.Drawing.Color]::DarkOrange
+    $cmdForm.Controls.Add($lblWarning)
+
+    $y += 30
+
+    # Output filter label
+    $lblFilter = New-Object System.Windows.Forms.Label
+    $lblFilter.Text = "Output Filter (optional, case-insensitive text match):"
+    $lblFilter.Location = New-Object System.Drawing.Point(20, $y)
+    $lblFilter.Size = New-Object System.Drawing.Size(350, 20)
+    $cmdForm.Controls.Add($lblFilter)
+
+    $y += 25
+
+    # Filter textbox
+    $txtFilter = New-Object System.Windows.Forms.TextBox
+    $txtFilter.Location = New-Object System.Drawing.Point(20, $y)
+    $txtFilter.Size = New-Object System.Drawing.Size(550, 20)
+    $cmdForm.Controls.Add($txtFilter)
+
+    $y += 40
+
+    # Execute button
+    $btnExecute = New-Object System.Windows.Forms.Button
+    $btnExecute.Text = "Execute"
+    $btnExecute.Location = New-Object System.Drawing.Point(20, $y)
+    $btnExecute.Size = New-Object System.Drawing.Size(100, 30)
+    $cmdForm.Controls.Add($btnExecute)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(130, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cmdForm.Controls.Add($btnCancel)
+    $cmdForm.CancelButton = $btnCancel
+
+    $btnExecute.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtCommand.Text)) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter at least one command", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        $cmdForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $cmdForm.Close()
+    })
+
+    $result = $cmdForm.ShowDialog()
+
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        return
+    }
+
+    # Parse commands
+    $commandLines = $txtCommand.Text -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($commandLines.Count -eq 0) {
+        Write-Log -Message "No valid commands entered" -Color "Red" -LogBox $LogBox
+        return
+    }
+
+    $outputFilter = $txtFilter.Text.Trim()
+
+    Write-Log -Message "Executing $($commandLines.Count) command(s) on $($devices.Count) device(s)..." -Color "Cyan" -LogBox $LogBox
+
+    foreach ($cmd in $commandLines) {
+        Write-Log -Message "Command: $cmd" -Color "Yellow" -LogBox $LogBox
+    }
+
+    try {
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $outputFolder = Join-Path -Path $script:outputDir -ChildPath "CommandRunner_$timestamp"
+        New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
+
+        $allResults = @()
+
+        foreach ($device in $devices) {
+            $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
+            $deviceId = $device.id
+
+            foreach ($cmd in $commandLines) {
+                Write-Log -Message "[$hostname] Submitting: $cmd" -Color "Gray" -LogBox $LogBox
+
+                $requestBody = @{
+                    "name" = "GUI-Cmd-$hostname-$(Get-Random)"
+                    "commands" = @($cmd)
+                    "deviceUuids" = @($deviceId)
+                } | ConvertTo-Json -Depth 10
+
+                try {
+                    $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device-poller/cli/read-request" `
+                        -Method Post `
+                        -Headers $script:dnaCenterHeaders `
+                        -Body $requestBody `
+                        -ContentType "application/json" `
+                        -TimeoutSec 30
+
+                    if ($response -and $response.response -and $response.response.taskId) {
+                        $taskId = $response.response.taskId
+
+                        # Poll for completion
+                        $maxWait = 60
+                        $waited = 0
+                        $fileId = $null
+
+                        while ($waited -lt $maxWait) {
+                            Start-Sleep -Seconds 2
+                            $waited += 2
+
+                            $taskResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/task/$taskId" `
+                                -Method Get `
+                                -Headers $script:dnaCenterHeaders `
+                                -TimeoutSec 30
+
+                            if ($taskResponse -and $taskResponse.response) {
+                                $taskInfo = $taskResponse.response
+
+                                if ($taskInfo.isError) {
+                                    Write-Log -Message "[$hostname] Command failed" -Color "Red" -LogBox $LogBox
+                                    break
+                                } elseif ($taskInfo.endTime) {
+                                    # Extract file ID
+                                    if ($taskInfo.additionalStatusURL -and $taskInfo.additionalStatusURL -match '/file/([a-f0-9\-]+)') {
+                                        $fileId = $Matches[1]
+                                    } elseif ($taskInfo.progress) {
+                                        try {
+                                            $progressData = $taskInfo.progress | ConvertFrom-Json
+                                            if ($progressData.fileId) {
+                                                $fileId = $progressData.fileId
+                                            }
+                                        } catch {
+                                            if ($taskInfo.progress -match '"fileId"\s*:\s*"([^"]+)"') {
+                                                $fileId = $Matches[1]
+                                            }
+                                        }
+                                    }
+                                    break
+                                }
+                            }
+                        }
+
+                        if ($fileId) {
+                            # Retrieve output
+                            $fileResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/file/$fileId" `
+                                -Method Get `
+                                -Headers $script:dnaCenterHeaders `
+                                -TimeoutSec 30
+
+                            $outputText = ""
+                            if ($fileResponse) {
+                                if ($fileResponse -is [string]) {
+                                    $outputText = $fileResponse
+                                } else {
+                                    try {
+                                        $fileData = $fileResponse | ConvertFrom-Json
+                                        if ($fileData -is [array] -and $fileData.Count -gt 0 -and $fileData[0].PSObject.Properties['commandResponses']) {
+                                            $outputText = ($fileData[0].commandResponses.SUCCESS -join "`n")
+                                        }
+                                    } catch {
+                                        $outputText = $fileResponse | Out-String
+                                    }
+                                }
+                            }
+
+                            # Apply filter if specified
+                            $filteredOutput = $outputText
+                            if (-not [string]::IsNullOrWhiteSpace($outputFilter) -and -not [string]::IsNullOrWhiteSpace($outputText)) {
+                                $lines = $outputText -split "`n"
+                                $filteredLines = $lines | Where-Object { $_ -match [regex]::Escape($outputFilter) }
+                                $filteredOutput = $filteredLines -join "`n"
+                            }
+
+                            # Save to individual file
+                            $safeHostname = Get-SafeFileName -InputName $hostname
+                            $safeCommand = Get-SafeFileName -InputName $cmd
+                            $outputFile = Join-Path -Path $outputFolder -ChildPath "${safeHostname}_${safeCommand}.txt"
+                            $filteredOutput | Out-File -FilePath $outputFile -Encoding UTF8
+
+                            $allResults += [PSCustomObject]@{
+                                Hostname = $hostname
+                                DeviceIP = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                                Command = $cmd
+                                Status = "Success"
+                                OutputFile = $outputFile
+                                OutputLength = $filteredOutput.Length
+                            }
+
+                            Write-Log -Message "[$hostname] Success - output saved" -Color "Green" -LogBox $LogBox
+                        } else {
+                            $allResults += [PSCustomObject]@{
+                                Hostname = $hostname
+                                DeviceIP = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                                Command = $cmd
+                                Status = "Timeout"
+                                OutputFile = "N/A"
+                                OutputLength = 0
+                            }
+                            Write-Log -Message "[$hostname] Timeout - no output received" -Color "Yellow" -LogBox $LogBox
+                        }
+                    } else {
+                        $allResults += [PSCustomObject]@{
+                            Hostname = $hostname
+                            DeviceIP = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                            Command = $cmd
+                            Status = "Submit Failed"
+                            OutputFile = "N/A"
+                            OutputLength = 0
+                        }
+                        Write-Log -Message "[$hostname] Failed to submit command" -Color "Red" -LogBox $LogBox
+                    }
+                } catch {
+                    $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+                    $allResults += [PSCustomObject]@{
+                        Hostname = $hostname
+                        DeviceIP = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+                        Command = $cmd
+                        Status = "Error: $sanitizedError"
+                        OutputFile = "N/A"
+                        OutputLength = 0
+                    }
+                    Write-Log -Message "[$hostname] Error: $sanitizedError" -Color "Red" -LogBox $LogBox
+                }
+
+                # Small delay between commands
+                Start-Sleep -Milliseconds 500
+            }
+        }
+
+        # Export summary CSV
+        $csvPath = Join-Path -Path $outputFolder -ChildPath "CommandRunner_Summary_$timestamp.csv"
+        $allResults | Export-Csv -Path $csvPath -NoTypeInformation
+
+        Write-Log -Message "Command execution complete!" -Color "Green" -LogBox $LogBox
+        Write-Log -Message "Output folder: $outputFolder" -Color "Green" -LogBox $LogBox
+        Write-Log -Message "Summary CSV: $csvPath" -Color "Green" -LogBox $LogBox
+
+        [System.Windows.Forms.MessageBox]::Show("Command execution complete!`n`nOutput folder: $outputFolder`nSummary: $csvPath", "Execution Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } catch {
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error during command execution: $sanitizedError" -Color "Red" -LogBox $LogBox
+    }
+}
+
+# ============================================
 # CREATE GUI
 # ============================================
 
 # Main Form
 $mainForm = New-Object System.Windows.Forms.Form
-$mainForm.Text = "OctoNav - Complete Network Management Tool (Security Hardened)"
+$mainForm.Text = "OctoNav v2.2 - Complete Network Management Tool (Security Hardened + DNACAPEiv6 + CLI Runner)"
 $mainForm.Size = New-Object System.Drawing.Size(1200, 800)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = "FixedDialog"
@@ -2039,60 +2917,132 @@ $tab2 = New-Object System.Windows.Forms.TabPage
 $tab2.Text = "DHCP Statistics"
 $tabControl.Controls.Add($tab2)
 
-# DHCP Options Group
-$dhcpGroupBox = New-Object System.Windows.Forms.GroupBox
-$dhcpGroupBox.Text = "DHCP Collection Options"
-$dhcpGroupBox.Size = New-Object System.Drawing.Size(1140, 200)
-$dhcpGroupBox.Location = New-Object System.Drawing.Point(10, 10)
-$tab2.Controls.Add($dhcpGroupBox)
+# Info Label
+$lblDHCPInfo = New-Object System.Windows.Forms.Label
+$lblDHCPInfo.Text = "Collect and analyze DHCP scope statistics from domain DHCP servers"
+$lblDHCPInfo.Location = New-Object System.Drawing.Point(15, 15)
+$lblDHCPInfo.Size = New-Object System.Drawing.Size(1100, 20)
+$lblDHCPInfo.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Italic)
+$lblDHCPInfo.ForeColor = [System.Drawing.Color]::DarkBlue
+$tab2.Controls.Add($lblDHCPInfo)
 
-# Include DNS Checkbox
-$chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
-$chkIncludeDNS.Text = "Include DNS Server Information (slower)"
-$chkIncludeDNS.Size = New-Object System.Drawing.Size(400, 20)
-$chkIncludeDNS.Location = New-Object System.Drawing.Point(20, 30)
-$dhcpGroupBox.Controls.Add($chkIncludeDNS)
+# Server Configuration Group
+$dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
+$dhcpServerGroupBox.Text = "Server Configuration"
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(1140, 80)
+$dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
+$tab2.Controls.Add($dhcpServerGroupBox)
 
-# Include Bad Addresses Checkbox
-$chkIncludeBadAddr = New-Object System.Windows.Forms.CheckBox
-$chkIncludeBadAddr.Text = "Track Bad_Address Occurrences (slower)"
-$chkIncludeBadAddr.Size = New-Object System.Drawing.Size(400, 20)
-$chkIncludeBadAddr.Location = New-Object System.Drawing.Point(20, 60)
-$dhcpGroupBox.Controls.Add($chkIncludeBadAddr)
+$lblServerInfo = New-Object System.Windows.Forms.Label
+$lblServerInfo.Text = "DHCP servers will be auto-discovered from the domain. Script must be run as Administrator."
+$lblServerInfo.Location = New-Object System.Drawing.Point(15, 25)
+$lblServerInfo.Size = New-Object System.Drawing.Size(1100, 20)
+$lblServerInfo.ForeColor = [System.Drawing.Color]::DarkGreen
+$dhcpServerGroupBox.Controls.Add($lblServerInfo)
 
-# Scope Filter Label
+$lblServerNote = New-Object System.Windows.Forms.Label
+$lblServerNote.Text = "Note: You can also specify servers via `$env:DHCP_SERVERS = 'server1,server2'"
+$lblServerNote.Location = New-Object System.Drawing.Point(15, 45)
+$lblServerNote.Size = New-Object System.Drawing.Size(1100, 20)
+$lblServerNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblServerNote.ForeColor = [System.Drawing.Color]::Gray
+$dhcpServerGroupBox.Controls.Add($lblServerNote)
+
+# Scope Filtering Group
+$dhcpFilterGroupBox = New-Object System.Windows.Forms.GroupBox
+$dhcpFilterGroupBox.Text = "Scope Filtering (Optional)"
+$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
+$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 130)
+$tab2.Controls.Add($dhcpFilterGroupBox)
+
 $lblScopeFilter = New-Object System.Windows.Forms.Label
-$lblScopeFilter.Text = "Scope Name Filter (comma-separated, optional):"
-$lblScopeFilter.Size = New-Object System.Drawing.Size(400, 20)
-$lblScopeFilter.Location = New-Object System.Drawing.Point(20, 95)
-$dhcpGroupBox.Controls.Add($lblScopeFilter)
+$lblScopeFilter.Text = "Filter by scope names (comma-separated, leave blank for all scopes):"
+$lblScopeFilter.Size = New-Object System.Drawing.Size(450, 20)
+$lblScopeFilter.Location = New-Object System.Drawing.Point(15, 25)
+$dhcpFilterGroupBox.Controls.Add($lblScopeFilter)
 
-# Scope Filter TextBox
+$lblFilterExample = New-Object System.Windows.Forms.Label
+$lblFilterExample.Text = "Example: VLAN100, Guest-Network, Lab"
+$lblFilterExample.Size = New-Object System.Drawing.Size(400, 20)
+$lblFilterExample.Location = New-Object System.Drawing.Point(480, 25)
+$lblFilterExample.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblFilterExample.ForeColor = [System.Drawing.Color]::Gray
+$dhcpFilterGroupBox.Controls.Add($lblFilterExample)
+
 $txtScopeFilter = New-Object System.Windows.Forms.TextBox
-$txtScopeFilter.Size = New-Object System.Drawing.Size(600, 20)
-$txtScopeFilter.Location = New-Object System.Drawing.Point(20, 115)
-$txtScopeFilter.MaxLength = 500  # Limit total input length
-$dhcpGroupBox.Controls.Add($txtScopeFilter)
+$txtScopeFilter.Size = New-Object System.Drawing.Size(1100, 20)
+$txtScopeFilter.Location = New-Object System.Drawing.Point(15, 50)
+$txtScopeFilter.MaxLength = 500
+$dhcpFilterGroupBox.Controls.Add($txtScopeFilter)
 
-# Collect DHCP Stats Button
+# Collection Options Group
+$dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
+$dhcpOptionsGroupBox.Text = "Collection Options"
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(1140, 85)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 225)
+$tab2.Controls.Add($dhcpOptionsGroupBox)
+
+$chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
+$chkIncludeDNS.Text = "Include DNS Server Information"
+$chkIncludeDNS.Size = New-Object System.Drawing.Size(250, 20)
+$chkIncludeDNS.Location = New-Object System.Drawing.Point(15, 30)
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeDNS)
+
+$lblDNSWarning = New-Object System.Windows.Forms.Label
+$lblDNSWarning.Text = "(Slower - adds DNS lookup for each scope)"
+$lblDNSWarning.Size = New-Object System.Drawing.Size(300, 20)
+$lblDNSWarning.Location = New-Object System.Drawing.Point(270, 30)
+$lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
+$dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
+
+$chkIncludeBadAddr = New-Object System.Windows.Forms.CheckBox
+$chkIncludeBadAddr.Text = "Track Bad_Address Occurrences"
+$chkIncludeBadAddr.Size = New-Object System.Drawing.Size(250, 20)
+$chkIncludeBadAddr.Location = New-Object System.Drawing.Point(15, 55)
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeBadAddr)
+
+$lblBadAddrWarning = New-Object System.Windows.Forms.Label
+$lblBadAddrWarning.Text = "(Slower - queries lease database for conflicts)"
+$lblBadAddrWarning.Size = New-Object System.Drawing.Size(300, 20)
+$lblBadAddrWarning.Location = New-Object System.Drawing.Point(270, 55)
+$lblBadAddrWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblBadAddrWarning.ForeColor = [System.Drawing.Color]::DarkOrange
+$dhcpOptionsGroupBox.Controls.Add($lblBadAddrWarning)
+
+# Actions Group
+$dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
+$dhcpActionsGroupBox.Text = "Actions"
+$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(1140, 75)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 320)
+$tab2.Controls.Add($dhcpActionsGroupBox)
+
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
 $btnCollectDHCP.Text = "Collect DHCP Statistics"
 $btnCollectDHCP.Size = New-Object System.Drawing.Size(200, 35)
-$btnCollectDHCP.Location = New-Object System.Drawing.Point(20, 150)
-$dhcpGroupBox.Controls.Add($btnCollectDHCP)
+$btnCollectDHCP.Location = New-Object System.Drawing.Point(15, 25)
+$btnCollectDHCP.BackColor = [System.Drawing.Color]::LightGreen
+$dhcpActionsGroupBox.Controls.Add($btnCollectDHCP)
 
-# Export DHCP Results Button
 $btnExportDHCP = New-Object System.Windows.Forms.Button
 $btnExportDHCP.Text = "Export to CSV"
 $btnExportDHCP.Size = New-Object System.Drawing.Size(150, 35)
-$btnExportDHCP.Location = New-Object System.Drawing.Point(240, 150)
+$btnExportDHCP.Location = New-Object System.Drawing.Point(230, 25)
 $btnExportDHCP.Enabled = $false
-$dhcpGroupBox.Controls.Add($btnExportDHCP)
+$dhcpActionsGroupBox.Controls.Add($btnExportDHCP)
+
+$lblExportHint = New-Object System.Windows.Forms.Label
+$lblExportHint.Text = "Results will be automatically exported after collection. Use this button to re-export."
+$lblExportHint.Size = New-Object System.Drawing.Size(700, 20)
+$lblExportHint.Location = New-Object System.Drawing.Point(395, 33)
+$lblExportHint.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblExportHint.ForeColor = [System.Drawing.Color]::Gray
+$dhcpActionsGroupBox.Controls.Add($lblExportHint)
 
 # DHCP Log
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
-$dhcpLogBox.Size = New-Object System.Drawing.Size(1140, 480)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 220)
+$dhcpLogBox.Size = New-Object System.Drawing.Size(1140, 300)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $tab2.Controls.Add($dhcpLogBox)
@@ -2322,8 +3272,8 @@ $dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
 
 # Functions Group
 $dnaFuncGroupBox = New-Object System.Windows.Forms.GroupBox
-$dnaFuncGroupBox.Text = "DNA Center Functions (Click to Execute)"
-$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(1140, 240)
+$dnaFuncGroupBox.Text = "DNA Center Functions - 23 Available (Click to Execute)"
+$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(1140, 250)
 $dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 290)
 $tab3.Controls.Add($dnaFuncGroupBox)
 
@@ -2348,7 +3298,12 @@ $functions = @(
     @{Name="OSPF Neighbors"; Function="Get-OSPFNeighbors"},
     @{Name="CDP Neighbors"; Function="Get-CDPNeighbors"},
     @{Name="LLDP Neighbors"; Function="Get-LLDPNeighbors"},
-    @{Name="Access Points"; Function="Get-AccessPoints"}
+    @{Name="Access Points"; Function="Get-AccessPoints"},
+    @{Name="Path Trace"; Function="Invoke-PathTrace"},
+    @{Name="Last Disconnect Times"; Function="Get-LastDisconnectTime"},
+    @{Name="Availability Events"; Function="Get-LastDeviceAvailabilityEventTime"},
+    @{Name="Last Ping Reachable"; Function="Get-LastPingReachableTime"},
+    @{Name="Execute CLI Commands"; Function="Invoke-CommandRunner"}
 )
 
 $buttonWidth = 170
@@ -2385,8 +3340,8 @@ for ($i = 0; $i -lt $functions.Count; $i++) {
 
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
-$dnaLogBox.Size = New-Object System.Drawing.Size(1140, 210)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 540)
+$dnaLogBox.Size = New-Object System.Drawing.Size(1140, 200)
+$dnaLogBox.Location = New-Object System.Drawing.Point(10, 550)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $tab3.Controls.Add($dnaLogBox)
