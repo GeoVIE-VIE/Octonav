@@ -18,8 +18,33 @@ if ($FilterChoice -eq 'Y' -or $FilterChoice -eq 'y') {
         # Ask if they want to specify specific DHCP servers
         $ServerInput = Read-Host "Enter specific DHCP server names to search (comma separated, or press Enter to search all servers)"
         if (-not [string]::IsNullOrWhiteSpace($ServerInput)) {
-            $SpecificServers = $ServerInput.Split(',') | ForEach-Object { $_.Trim() }
-            Write-Host "Will only search servers: $($SpecificServers -join ', ')" -ForegroundColor Yellow
+            $ServerList = $ServerInput.Split(',') | ForEach-Object { $_.Trim() }
+
+            # Validate server names
+            $ValidServers = @()
+            $InvalidServers = @()
+            foreach ($Server in $ServerList) {
+                # Allow alphanumeric, dots, hyphens, and underscores for FQDNs
+                if ($Server -match '^[a-zA-Z0-9][a-zA-Z0-9.-_]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$') {
+                    $ValidServers += $Server
+                } else {
+                    $InvalidServers += $Server
+                }
+            }
+
+            if ($InvalidServers.Count -gt 0) {
+                Write-Host "Warning: Invalid server name(s) detected and will be skipped:" -ForegroundColor Red
+                foreach ($InvalidServer in $InvalidServers) {
+                    Write-Host "  - '$InvalidServer' (contains invalid characters or format)" -ForegroundColor Red
+                }
+            }
+
+            if ($ValidServers.Count -gt 0) {
+                $SpecificServers = $ValidServers
+                Write-Host "Will search $($ValidServers.Count) valid server(s): $($ValidServers -join ', ')" -ForegroundColor Yellow
+            } else {
+                Write-Host "No valid servers specified. Will search all DHCP servers in domain" -ForegroundColor Yellow
+            }
         } else {
             Write-Host "Will search all DHCP servers in domain" -ForegroundColor Yellow
         }
@@ -87,15 +112,32 @@ $ScriptBlock = {
 
         # Apply filtering if scope filters are provided
         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+            $OriginalScopeCount = $Scopes.Count
+            Write-Output "Found $OriginalScopeCount total scope(s) on $DHCPServerName, applying filters..."
+
             $FilteredScopes = @()
             foreach ($Filter in $ScopeFilters) {
-                $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                # Explicitly case-insensitive matching using .ToUpper() for both sides
+                $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
+                if ($MatchingScopes) {
+                    Write-Output "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                    $FilteredScopes += $MatchingScopes
+                } else {
+                    Write-Output "  Filter '$Filter' matched 0 scopes"
+                }
             }
+
+            # Remove duplicates if a scope matched multiple filters
             $Scopes = $FilteredScopes | Select-Object -Unique
-            
+
             if ($Scopes.Count -eq 0) {
-                Write-Output "No scopes matching filters found on $DHCPServerName"
+                Write-Output "WARNING: No scopes matching filter criteria on $DHCPServerName"
+                Write-Output "  Filters used: $($ScopeFilters -join ', ')"
+                Write-Output "  Available scope names on this server might not contain these strings"
                 return @()
+            } else {
+                Write-Output "After filtering: $($Scopes.Count) scope(s) will be processed on $DHCPServerName"
             }
         }
 
@@ -324,5 +366,28 @@ if ($AllStats.Count -gt 0) {
 
     Write-Host "`nDone! All DHCP scope statistics saved to $OutputPath." -ForegroundColor Green
 } else {
-    Write-Host "No DHCP scopes found matching your criteria." -ForegroundColor Yellow
+    Write-Host "`n=== No Results Found ===" -ForegroundColor Yellow
+    Write-Host "No DHCP scopes were found matching your criteria." -ForegroundColor Yellow
+    Write-Host ""
+
+    if ($ScopeNameSearchStrings.Count -gt 0) {
+        Write-Host "Filters applied:" -ForegroundColor Cyan
+        Write-Host "  Scope name filters: $($ScopeNameSearchStrings -join ', ')" -ForegroundColor White
+        if ($SpecificServers.Count -gt 0) {
+            Write-Host "  Server filters: $($SpecificServers -join ', ')" -ForegroundColor White
+        }
+        Write-Host ""
+        Write-Host "Troubleshooting tips:" -ForegroundColor Cyan
+        Write-Host "  1. Check if scope names actually contain the filter strings" -ForegroundColor White
+        Write-Host "  2. Verify server names are correct and reachable" -ForegroundColor White
+        Write-Host "  3. Try running without filters to see all available scopes" -ForegroundColor White
+        Write-Host "  4. Check if you have permissions to query the DHCP servers" -ForegroundColor White
+    } else {
+        Write-Host "No filters were applied, but no scopes were found on any servers." -ForegroundColor Yellow
+        Write-Host "This might indicate:" -ForegroundColor Cyan
+        Write-Host "  - No DHCP servers are available in the domain" -ForegroundColor White
+        Write-Host "  - You don't have permissions to query DHCP servers" -ForegroundColor White
+        Write-Host "  - DHCP servers are unreachable" -ForegroundColor White
+    }
+    Write-Host ""
 }
