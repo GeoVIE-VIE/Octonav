@@ -2,13 +2,13 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    OctoNav Complete GUI - Unified Network Management Tool (Security Hardened)
+    OctoNav Complete GUI - Unified Network Management Tool (Security Hardened v2)
 .DESCRIPTION
     Comprehensive Windows Forms GUI combining Network Configuration, DHCP Statistics, and DNA Center API functions
 .AUTHOR
     Integrated by Claude - In Memory of Zesty.PS1
 .VERSION
-    1.1 - Security Hardened
+    2.0 - Security Hardened with Enhanced Validation
 #>
 
 # Enable visual styles
@@ -23,18 +23,72 @@ $ErrorActionPreference = "Stop"
 # GLOBAL VARIABLES
 # ============================================
 
-# DNA Center Configuration
-$script:dnaCenterServers = @(
-    [pscustomobject]@{ Name = "Tst DNA Center"; Url = "test" },
-    [pscustomobject]@{ Name = "Tst DNA Center 2"; Url = "test2" }
-)
+# DNA Center Configuration - Load from environment or config file
+# Set environment variables: DNAC_SERVER1_NAME, DNAC_SERVER1_URL, etc.
+# Or create dna_config.json in script directory
+function Get-DNACenterServers {
+    $configFile = Join-Path $PSScriptRoot "dna_config.json"
 
+    # Try to load from config file first
+    if (Test-Path $configFile) {
+        try {
+            $config = Get-Content $configFile -Raw | ConvertFrom-Json
+            if ($config.servers -and $config.servers.Count -gt 0) {
+                Write-Verbose "Loaded DNA Center servers from config file"
+                return $config.servers
+            }
+        } catch {
+            Write-Warning "Failed to load config file: $($_.Exception.Message)"
+        }
+    }
+
+    # Try environment variables
+    $servers = @()
+    for ($i = 1; $i -le 10; $i++) {
+        $nameVar = "DNAC_SERVER${i}_NAME"
+        $urlVar = "DNAC_SERVER${i}_URL"
+
+        $name = [Environment]::GetEnvironmentVariable($nameVar)
+        $url = [Environment]::GetEnvironmentVariable($urlVar)
+
+        if ($name -and $url) {
+            $servers += [pscustomobject]@{ Name = $name; Url = $url }
+        }
+    }
+
+    if ($servers.Count -gt 0) {
+        Write-Verbose "Loaded DNA Center servers from environment variables"
+        return $servers
+    }
+
+    # Fallback to default (prompt user to configure)
+    Write-Warning "No DNA Center servers configured. Please create dna_config.json or set environment variables."
+    return @([pscustomobject]@{ Name = "Please Configure"; Url = "https://your-dnac-server.example.com" })
+}
+
+$script:dnaCenterServers = Get-DNACenterServers
 $script:selectedDnaCenter = $null
 $script:dnaCenterToken = $null
+$script:dnaCenterTokenExpiry = $null
 $script:dnaCenterHeaders = $null
 $script:allDNADevices = @()
 $script:selectedDNADevices = @()
-$script:outputDir = "C:\DNACenter_Reports"
+
+# Output directory - validate and create if needed
+$script:outputDir = if ($env:OCTONAV_OUTPUT_DIR) { $env:OCTONAV_OUTPUT_DIR } else { "C:\DNACenter_Reports" }
+try {
+    if (-not (Test-Path $script:outputDir)) {
+        New-Item -ItemType Directory -Path $script:outputDir -Force -ErrorAction Stop | Out-Null
+    }
+    # Test write permissions
+    $testFile = Join-Path $script:outputDir ".writetest"
+    "test" | Out-File -FilePath $testFile -ErrorAction Stop
+    Remove-Item $testFile -ErrorAction SilentlyContinue
+} catch {
+    Write-Warning "Cannot write to output directory: $script:outputDir. Using temp directory."
+    $script:outputDir = Join-Path $env:TEMP "OctoNav_Reports"
+    New-Item -ItemType Directory -Path $script:outputDir -Force -ErrorAction SilentlyContinue | Out-Null
+}
 
 # Network Configuration Variables (XFER)
 $script:OriginalConfig = $null
@@ -90,19 +144,93 @@ function Get-SafeFileName {
     )
 
     if ([string]::IsNullOrWhiteSpace($InputName)) {
-        $InputName = $Fallback
+        return $Fallback
     }
 
-    # Remove invalid characters and path traversal attempts
-    $safeName = $InputName -replace '[\\/:*?"<>|]', '_'
-    $safeName = $safeName -replace '\.\.', '_'
+    # Get only the filename component, stripping any path separators
+    # This prevents path traversal by removing directory components
+    try {
+        $safeName = [System.IO.Path]::GetFileName($InputName)
+    } catch {
+        # If GetFileName fails, use the input but sanitize it
+        $safeName = $InputName
+    }
+
+    # Remove ALL invalid filename characters using .NET
+    $invalidChars = [System.IO.Path]::GetInvalidFileNameChars()
+    foreach ($char in $invalidChars) {
+        $safeName = $safeName.Replace($char, '_')
+    }
+
+    # Additional sanitization - remove path traversal attempts
+    $safeName = $safeName -replace '\.\.+', '_'  # Multiple dots
+    $safeName = $safeName -replace '^\.+', ''     # Leading dots
     $safeName = $safeName.Trim()
 
+    # Ensure we don't have an empty or whitespace-only result
     if ([string]::IsNullOrWhiteSpace($safeName)) {
-        $safeName = $Fallback
+        return $Fallback
+    }
+
+    # Limit length to prevent filesystem issues (max 255 chars for most filesystems)
+    if ($safeName.Length -gt 200) {
+        $safeName = $safeName.Substring(0, 200)
     }
 
     return $safeName
+}
+
+function Test-ServerName {
+    param([string]$ServerName)
+
+    if ([string]::IsNullOrWhiteSpace($ServerName)) {
+        return $false
+    }
+
+    $trimmed = $ServerName.Trim()
+
+    # Check length (max DNS name length is 253 characters)
+    if ($trimmed.Length -gt 253) {
+        return $false
+    }
+
+    # Validate DNS hostname format (RFC 1123)
+    # Allows: alphanumeric, hyphens, and dots
+    # Each label must start/end with alphanumeric
+    # Max label length is 63 characters
+    if ($trimmed -notmatch '^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$') {
+        return $false
+    }
+
+    # Additional check: no consecutive dots or hyphens at start/end of labels
+    if ($trimmed -match '\.\.' -or $trimmed -match '\.-' -or $trimmed -match '-\.') {
+        return $false
+    }
+
+    return $true
+}
+
+function Test-ScopeFilter {
+    param([string]$FilterValue)
+
+    if ([string]::IsNullOrWhiteSpace($FilterValue)) {
+        return $true
+    }
+
+    $trimmed = $FilterValue.Trim()
+
+    # Limit length
+    if ($trimmed.Length -gt 128) {
+        return $false
+    }
+
+    # Only allow safe characters for scope names
+    # Alphanumeric, spaces, underscores, hyphens, dots
+    if ($trimmed -notmatch '^[a-zA-Z0-9_.\-\s]+$') {
+        return $false
+    }
+
+    return $true
 }
 
 function Test-DnaFilterInput {
@@ -119,12 +247,12 @@ function Test-DnaFilterInput {
     $trimmed = $Value.Trim()
 
     if ($trimmed.Length -gt 128) {
-        Write-Log -Message "$FieldName is too long" -Color "Red" -LogBox $LogBox
+        Write-Log -Message "$FieldName is too long (max 128 characters)" -Color "Red" -LogBox $LogBox
         return $false
     }
 
     if ($trimmed -notmatch '^[a-zA-Z0-9_.:\-\s]+$') {
-        Write-Log -Message "$FieldName contains invalid characters" -Color "Red" -LogBox $LogBox
+        Write-Log -Message "$FieldName contains invalid characters (only alphanumeric, dots, colons, hyphens, underscores allowed)" -Color "Red" -LogBox $LogBox
         return $false
     }
 
@@ -134,6 +262,39 @@ function Test-DnaFilterInput {
 # ============================================
 # HELPER FUNCTIONS - GENERAL
 # ============================================
+
+function Get-SanitizedErrorMessage {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+
+    if (-not $ErrorRecord) {
+        return "An unknown error occurred"
+    }
+
+    # Get base error message without sensitive details
+    $message = $ErrorRecord.Exception.Message
+
+    # Remove potentially sensitive information
+    # Remove file paths
+    $message = $message -replace '[A-Z]:\\[^\s]+', '[PATH]'
+    $message = $message -replace '/[^\s]+', '[PATH]'
+
+    # Remove IP addresses (both IPv4 and IPv6)
+    $message = $message -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[IP]'
+    $message = $message -replace '\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b', '[IPv6]'
+
+    # Remove usernames (common patterns)
+    $message = $message -replace 'user(name)?[:\s]+[^\s]+', 'user: [REDACTED]'
+
+    # Remove stack trace information
+    $message = $message -split "`n" | Select-Object -First 1
+
+    # Limit length
+    if ($message.Length -gt 200) {
+        $message = $message.Substring(0, 197) + "..."
+    }
+
+    return $message
+}
 
 function Write-Log {
     param(
@@ -346,6 +507,24 @@ function Initialize-DNACenter {
     }
 }
 
+function Test-DNACTokenValid {
+    # Check if token exists and is not expired
+    if (-not $script:dnaCenterToken) {
+        return $false
+    }
+
+    if ($script:dnaCenterTokenExpiry) {
+        # Check if token has expired (with 5 minute buffer)
+        $expiryWithBuffer = $script:dnaCenterTokenExpiry.AddMinutes(-5)
+        if ((Get-Date) -gt $expiryWithBuffer) {
+            Write-Verbose "DNA Center token has expired"
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Connect-DNACenter {
     param(
         [string]$DnaCenter,
@@ -353,6 +532,8 @@ function Connect-DNACenter {
         [string]$Password,
         [System.Windows.Forms.RichTextBox]$LogBox
     )
+
+    $base64AuthInfo = $null
 
     try {
         # Validate inputs
@@ -375,6 +556,10 @@ function Connect-DNACenter {
         if ($response -and $response.Token) {
             Write-Log -Message "Authentication successful!" -Color "Green" -LogBox $LogBox
             $script:dnaCenterToken = $response.Token
+
+            # DNA Center tokens typically expire after 1 hour
+            $script:dnaCenterTokenExpiry = (Get-Date).AddHours(1)
+
             $script:dnaCenterHeaders = @{
                 "X-Auth-Token" = $response.Token
                 "Content-Type" = "application/json"
@@ -385,12 +570,19 @@ function Connect-DNACenter {
             return $false
         }
     } catch {
-        Write-Log -Message "Authentication failed: $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Authentication failed: $sanitizedError" -Color "Red" -LogBox $LogBox
         return $false
     } finally {
-        # Clear sensitive data
-        $base64AuthInfo = $null
-        $Password = $null
+        # Clear sensitive data from memory
+        if ($base64AuthInfo) {
+            $base64AuthInfo = $null
+        }
+        if ($Password) {
+            $Password = $null
+        }
+        # Force garbage collection to clear sensitive data
+        [System.GC]::Collect()
     }
 }
 
@@ -663,19 +855,46 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
+        # Validate scope filters
+        foreach ($filter in $ScopeFilters) {
+            if (-not (Test-ScopeFilter -FilterValue $filter)) {
+                Write-Log -Message "Invalid scope filter detected: contains unsafe characters" -Color "Red" -LogBox $LogBox
+                return @()
+            }
+        }
+
         # Get DHCP servers
         if ($SpecificServers.Count -gt 0) {
             Write-Log -Message "Using specified DHCP servers..." -Color "Cyan" -LogBox $LogBox
-            $DHCPServers = $SpecificServers | ForEach-Object {
+
+            # Validate all server names before processing
+            $validServers = @()
+            foreach ($server in $SpecificServers) {
+                $trimmedServer = $server.Trim()
+                if (Test-ServerName -ServerName $trimmedServer) {
+                    $validServers += $trimmedServer
+                } else {
+                    Write-Log -Message "Invalid DHCP server name skipped: $trimmedServer" -Color "Yellow" -LogBox $LogBox
+                }
+            }
+
+            if ($validServers.Count -eq 0) {
+                Write-Log -Message "No valid DHCP server names provided" -Color "Red" -LogBox $LogBox
+                return @()
+            }
+
+            $DHCPServers = $validServers | ForEach-Object {
                 [PSCustomObject]@{ DnsName = $_ }
             }
+            Write-Log -Message "Validated $($DHCPServers.Count) DHCP server name(s)" -Color "Green" -LogBox $LogBox
         } else {
             Write-Log -Message "Discovering DHCP servers in domain..." -Color "Cyan" -LogBox $LogBox
             try {
                 $DHCPServers = Get-DhcpServerInDC
                 Write-Log -Message "Found $($DHCPServers.Count) DHCP servers" -Color "Green" -LogBox $LogBox
             } catch {
-                Write-Log -Message "Failed to get DHCP servers: $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+                Write-Log -Message "Failed to get DHCP servers: $sanitizedError" -Color "Red" -LogBox $LogBox
                 return @()
             }
         }
@@ -1852,6 +2071,7 @@ $dhcpGroupBox.Controls.Add($lblScopeFilter)
 $txtScopeFilter = New-Object System.Windows.Forms.TextBox
 $txtScopeFilter.Size = New-Object System.Drawing.Size(600, 20)
 $txtScopeFilter.Location = New-Object System.Drawing.Point(20, 115)
+$txtScopeFilter.MaxLength = 500  # Limit total input length
 $dhcpGroupBox.Controls.Add($txtScopeFilter)
 
 # Collect DHCP Stats Button
@@ -1882,15 +2102,32 @@ $btnCollectDHCP.Add_Click({
     try {
         $btnCollectDHCP.Enabled = $false
 
+        # Validate and parse scope filters
         $scopeFilters = @()
         if (-not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
-            $scopeFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim().ToUpper() }
+            $rawFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() }
+
+            # Validate each filter
+            foreach ($filter in $rawFilters) {
+                if (-not [string]::IsNullOrWhiteSpace($filter)) {
+                    if (Test-ScopeFilter -FilterValue $filter) {
+                        $scopeFilters += $filter.ToUpper()
+                    } else {
+                        Write-Log -Message "Invalid scope filter: '$filter' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
+                        [System.Windows.Forms.MessageBox]::Show("Invalid scope filter: '$filter'`n`nOnly alphanumeric characters, spaces, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                        return
+                    }
+                }
+            }
         }
 
         $includeDNS = $chkIncludeDNS.Checked
         $includeBad = $chkIncludeBadAddr.Checked
 
         Write-Log -Message "Starting DHCP statistics collection..." -Color "Cyan" -LogBox $dhcpLogBox
+        if ($scopeFilters.Count -gt 0) {
+            Write-Log -Message "Applying filters: $($scopeFilters -join ', ')" -Color "Yellow" -LogBox $dhcpLogBox
+        }
 
         $script:dhcpResults = Get-DHCPScopeStatistics -ScopeFilters $scopeFilters -IncludeDNS $includeDNS -IncludeBadAddresses $includeBad -LogBox $dhcpLogBox
 
@@ -1898,10 +2135,11 @@ $btnCollectDHCP.Add_Click({
             $btnExportDHCP.Enabled = $true
             Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes" -Color "Green" -LogBox $dhcpLogBox
         } else {
-            Write-Log -Message "No DHCP scopes found" -Color "Yellow" -LogBox $dhcpLogBox
+            Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox
         }
     } catch {
-        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
+        $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
+        Write-Log -Message "Error: $sanitizedError" -Color "Red" -LogBox $dhcpLogBox
     } finally {
         $btnCollectDHCP.Enabled = $true
     }

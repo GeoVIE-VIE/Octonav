@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "Name": "Production DNA Center",
+      "Url": "https://dnac-prod.example.com"
+    },
+    {
+      "Name": "Development DNA Center",
+      "Url": "https://dnac-dev.example.com"
+    }
+  ]
+}
