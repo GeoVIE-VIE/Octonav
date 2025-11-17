@@ -3197,61 +3197,72 @@ $btnCollectDHCP.Add_Click({
                     return $ServerStats
                 }
 
-                $Jobs = @()
                 $AllStats = @()
-                $MaxJobs = 20
+                $MaxConcurrentJobs = 20
                 $TotalServers = $DHCPServers.Count
 
-                for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxJobs) {
-                    $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxJobs - 1, $DHCPServers.Count - 1))]
+                # Create queue of servers to process
+                $ServerQueue = New-Object System.Collections.Queue
+                foreach ($Server in $DHCPServers) {
+                    $ServerQueue.Enqueue($Server)
+                }
 
-                    foreach ($Server in $Batch) {
-                        $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                        $Jobs += @{
-                            Job = $Job
-                            ServerName = $Server.DnsName
-                            Processed = $false
-                        }
+                # Active jobs dictionary
+                $ActiveJobs = @{}
+
+                # Start initial batch of jobs (up to MaxConcurrentJobs)
+                $initialCount = [Math]::Min($MaxConcurrentJobs, $ServerQueue.Count)
+                for ($i = 0; $i -lt $initialCount; $i++) {
+                    $Server = $ServerQueue.Dequeue()
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                    $ActiveJobs[$Job.Id] = @{
+                        Job = $Job
+                        ServerName = $Server.DnsName
                     }
+                }
 
-                    while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
-                        Start-Sleep -Seconds 2
+                # Process jobs - maintain pool of MaxConcurrentJobs until all done
+                while ($ActiveJobs.Count -gt 0) {
+                    Start-Sleep -Milliseconds 500
 
-                        $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                        foreach ($CompletedJob in $CompletedInBatch) {
-                            $CompletedJob.Processed = $true
+                    # Check for completed or failed jobs
+                    $JobsToRemove = @()
+                    foreach ($JobId in $ActiveJobs.Keys) {
+                        $JobInfo = $ActiveJobs[$JobId]
+                        $Job = $JobInfo.Job
+
+                        if ($Job.State -eq 'Completed') {
                             try {
-                                $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
+                                $Result = Receive-Job -Job $Job -ErrorAction Stop
                                 if ($Result) {
                                     $AllStats += $Result
                                 }
                             } catch {
                                 # Failed to receive job result
                             }
-                            Remove-Job -Job $CompletedJob.Job -Force
+                            Remove-Job -Job $Job -Force
+                            $JobsToRemove += $JobId
                         }
-
-                        $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                        foreach ($FailedJob in $FailedInBatch) {
-                            $FailedJob.Processed = $true
-                            Remove-Job -Job $FailedJob.Job -Force
+                        elseif ($Job.State -eq 'Failed') {
+                            Remove-Job -Job $Job -Force
+                            $JobsToRemove += $JobId
                         }
                     }
-                }
 
-                $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
-                foreach ($RemainingJob in $RemainingJobs) {
-                    if ($RemainingJob.Job.State -eq 'Completed') {
-                        try {
-                            $Result = Receive-Job -Job $RemainingJob.Job
-                            if ($Result) {
-                                $AllStats += $Result
+                    # Remove completed/failed jobs and start new ones
+                    foreach ($JobId in $JobsToRemove) {
+                        $ActiveJobs.Remove($JobId)
+
+                        # Start a new job if servers remain in queue
+                        if ($ServerQueue.Count -gt 0) {
+                            $Server = $ServerQueue.Dequeue()
+                            $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                            $ActiveJobs[$NewJob.Id] = @{
+                                Job = $NewJob
+                                ServerName = $Server.DnsName
                             }
-                        } catch {
-                            # Failed to receive job result
                         }
                     }
-                    Remove-Job -Job $RemainingJob.Job -Force
                 }
 
                 return @{
