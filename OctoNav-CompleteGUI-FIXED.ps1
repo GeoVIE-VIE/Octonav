@@ -105,6 +105,32 @@ function Get-SafeFileName {
     return $safeName
 }
 
+function Test-DnaFilterInput {
+    param(
+        [string]$Value,
+        [string]$FieldName,
+        [System.Windows.Forms.RichTextBox]$LogBox
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $true
+    }
+
+    $trimmed = $Value.Trim()
+
+    if ($trimmed.Length -gt 128) {
+        Write-Log -Message "$FieldName is too long" -Color "Red" -LogBox $LogBox
+        return $false
+    }
+
+    if ($trimmed -notmatch '^[a-zA-Z0-9_.:\-\s]+$') {
+        Write-Log -Message "$FieldName contains invalid characters" -Color "Red" -LogBox $LogBox
+        return $false
+    }
+
+    return $true
+}
+
 # ============================================
 # HELPER FUNCTIONS - GENERAL
 # ============================================
@@ -428,6 +454,66 @@ function Load-AllDNADevices {
         Write-Log -Message "Failed to load devices: $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
         return $false
     }
+}
+
+function Filter-DNADevices {
+    param(
+        [string]$Hostname,
+        [string]$IPAddress,
+        [string]$Role,
+        [string]$Family,
+        [System.Windows.Forms.RichTextBox]$LogBox
+    )
+
+    if (-not $script:allDNADevices -or $script:allDNADevices.Count -eq 0) {
+        Write-Log -Message "No devices loaded" -Color "Red" -LogBox $LogBox
+        return @()
+    }
+
+    if (-not (Test-DnaFilterInput -Value $Hostname -FieldName "Hostname" -LogBox $LogBox)) { return @() }
+    if (-not (Test-DnaFilterInput -Value $Role -FieldName "Role" -LogBox $LogBox)) { return @() }
+    if (-not (Test-DnaFilterInput -Value $Family -FieldName "Family" -LogBox $LogBox)) { return @() }
+
+    if (-not [string]::IsNullOrWhiteSpace($IPAddress)) {
+        $trimmedIp = $IPAddress.Trim()
+        if (-not (Test-IPAddress -IPAddress $trimmedIp)) {
+            Write-Log -Message "Invalid IP address filter" -Color "Red" -LogBox $LogBox
+            return @()
+        }
+        $IPAddress = $trimmedIp
+    }
+
+    $hostPattern = if (-not [string]::IsNullOrWhiteSpace($Hostname)) { [regex]::Escape($Hostname.Trim()) } else { $null }
+    $rolePattern = if (-not [string]::IsNullOrWhiteSpace($Role)) { [regex]::Escape($Role.Trim()) } else { $null }
+    $familyPattern = if (-not [string]::IsNullOrWhiteSpace($Family)) { [regex]::Escape($Family.Trim()) } else { $null }
+
+    $filtered = $script:allDNADevices | Where-Object {
+        ($null -eq $hostPattern -or ($_.hostname -and $_.hostname -match $hostPattern)) -and
+        ([string]::IsNullOrWhiteSpace($IPAddress) -or ($_.managementIpAddress -eq $IPAddress)) -and
+        ($null -eq $rolePattern -or ($_.role -and $_.role -match $rolePattern)) -and
+        ($null -eq $familyPattern -or ($_.family -and $_.family -match $familyPattern))
+    }
+
+    $script:selectedDNADevices = $filtered
+
+    $targetDescription = @()
+    if ($hostPattern) { $targetDescription += "Hostname" }
+    if ($IPAddress) { $targetDescription += "IP" }
+    if ($rolePattern) { $targetDescription += "Role" }
+    if ($familyPattern) { $targetDescription += "Family" }
+
+    $criteria = if ($targetDescription.Count -gt 0) { $targetDescription -join ", " } else { "No" }
+
+    Write-Log -Message "Applied $criteria filter(s). Selected $($filtered.Count) device(s)." -Color "Green" -LogBox $LogBox
+
+    return $filtered
+}
+
+function Reset-DNADeviceSelection {
+    param([System.Windows.Forms.RichTextBox]$LogBox)
+
+    $script:selectedDNADevices = $script:allDNADevices
+    Write-Log -Message "Device selection reset to all devices" -Color "Yellow" -LogBox $LogBox
 }
 
 # ============================================
@@ -1917,11 +2003,90 @@ $btnLoadDevices.Location = New-Object System.Drawing.Point(480, 68)
 $btnLoadDevices.Enabled = $false
 $dnaConnGroupBox.Controls.Add($btnLoadDevices)
 
+# Device Filters
+$dnaFilterGroupBox = New-Object System.Windows.Forms.GroupBox
+$dnaFilterGroupBox.Text = "Device Filters"
+$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(1140, 110)
+$dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 170)
+$tab3.Controls.Add($dnaFilterGroupBox)
+
+$lblFilterHostname = New-Object System.Windows.Forms.Label
+$lblFilterHostname.Text = "Hostname contains:"
+$lblFilterHostname.Size = New-Object System.Drawing.Size(130, 20)
+$lblFilterHostname.Location = New-Object System.Drawing.Point(20, 30)
+$dnaFilterGroupBox.Controls.Add($lblFilterHostname)
+
+$txtFilterHostname = New-Object System.Windows.Forms.TextBox
+$txtFilterHostname.Size = New-Object System.Drawing.Size(220, 20)
+$txtFilterHostname.Location = New-Object System.Drawing.Point(160, 28)
+$txtFilterHostname.MaxLength = 128
+$txtFilterHostname.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($txtFilterHostname)
+
+$lblFilterIP = New-Object System.Windows.Forms.Label
+$lblFilterIP.Text = "Management IP:"
+$lblFilterIP.Size = New-Object System.Drawing.Size(120, 20)
+$lblFilterIP.Location = New-Object System.Drawing.Point(400, 30)
+$dnaFilterGroupBox.Controls.Add($lblFilterIP)
+
+$txtFilterIPAddress = New-Object System.Windows.Forms.TextBox
+$txtFilterIPAddress.Size = New-Object System.Drawing.Size(180, 20)
+$txtFilterIPAddress.Location = New-Object System.Drawing.Point(520, 28)
+$txtFilterIPAddress.MaxLength = 64
+$txtFilterIPAddress.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($txtFilterIPAddress)
+
+$lblFilterRole = New-Object System.Windows.Forms.Label
+$lblFilterRole.Text = "Role contains:"
+$lblFilterRole.Size = New-Object System.Drawing.Size(110, 20)
+$lblFilterRole.Location = New-Object System.Drawing.Point(20, 65)
+$dnaFilterGroupBox.Controls.Add($lblFilterRole)
+
+$txtFilterRole = New-Object System.Windows.Forms.TextBox
+$txtFilterRole.Size = New-Object System.Drawing.Size(220, 20)
+$txtFilterRole.Location = New-Object System.Drawing.Point(160, 63)
+$txtFilterRole.MaxLength = 128
+$txtFilterRole.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($txtFilterRole)
+
+$lblFilterFamily = New-Object System.Windows.Forms.Label
+$lblFilterFamily.Text = "Family contains:"
+$lblFilterFamily.Size = New-Object System.Drawing.Size(110, 20)
+$lblFilterFamily.Location = New-Object System.Drawing.Point(400, 65)
+$dnaFilterGroupBox.Controls.Add($lblFilterFamily)
+
+$txtFilterFamily = New-Object System.Windows.Forms.TextBox
+$txtFilterFamily.Size = New-Object System.Drawing.Size(180, 20)
+$txtFilterFamily.Location = New-Object System.Drawing.Point(520, 63)
+$txtFilterFamily.MaxLength = 128
+$txtFilterFamily.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($txtFilterFamily)
+
+$btnApplyDeviceFilter = New-Object System.Windows.Forms.Button
+$btnApplyDeviceFilter.Text = "Apply Filters"
+$btnApplyDeviceFilter.Size = New-Object System.Drawing.Size(120, 30)
+$btnApplyDeviceFilter.Location = New-Object System.Drawing.Point(730, 28)
+$btnApplyDeviceFilter.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($btnApplyDeviceFilter)
+
+$btnResetDeviceFilter = New-Object System.Windows.Forms.Button
+$btnResetDeviceFilter.Text = "Reset Selection"
+$btnResetDeviceFilter.Size = New-Object System.Drawing.Size(120, 30)
+$btnResetDeviceFilter.Location = New-Object System.Drawing.Point(870, 28)
+$btnResetDeviceFilter.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($btnResetDeviceFilter)
+
+$lblDeviceSelectionStatus = New-Object System.Windows.Forms.Label
+$lblDeviceSelectionStatus.Text = "Selected devices: None loaded"
+$lblDeviceSelectionStatus.Size = New-Object System.Drawing.Size(260, 20)
+$lblDeviceSelectionStatus.Location = New-Object System.Drawing.Point(730, 70)
+$dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
+
 # Functions Group
 $dnaFuncGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFuncGroupBox.Text = "DNA Center Functions (Click to Execute)"
-$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(1140, 300)
-$dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 170)
+$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(1140, 240)
+$dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 290)
 $tab3.Controls.Add($dnaFuncGroupBox)
 
 # Create buttons for DNA Center functions in a grid layout
@@ -1983,7 +2148,7 @@ for ($i = 0; $i -lt $functions.Count; $i++) {
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
 $dnaLogBox.Size = New-Object System.Drawing.Size(1140, 210)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 480)
+$dnaLogBox.Location = New-Object System.Drawing.Point(10, 540)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $tab3.Controls.Add($dnaLogBox)
@@ -2038,6 +2203,12 @@ $btnLoadDevices.Add_Click({
                 }
             }
 
+            foreach ($control in @($txtFilterHostname, $txtFilterIPAddress, $txtFilterRole, $txtFilterFamily, $btnApplyDeviceFilter, $btnResetDeviceFilter)) {
+                $control.Enabled = $true
+            }
+
+            $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
+
             [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($script:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
             [System.Windows.Forms.MessageBox]::Show("Failed to load devices", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -2045,6 +2216,39 @@ $btnLoadDevices.Add_Click({
     } catch {
         Write-Log -Message "Error loading devices: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
         [System.Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+})
+
+$btnApplyDeviceFilter.Add_Click({
+    try {
+        $result = Filter-DNADevices -Hostname $txtFilterHostname.Text -IPAddress $txtFilterIPAddress.Text -Role $txtFilterRole.Text -Family $txtFilterFamily.Text -LogBox $dnaLogBox
+
+        if ($result.Count -eq 0) {
+            $lblDeviceSelectionStatus.Text = "Selected devices: 0 of $($script:allDNADevices.Count)"
+            [System.Windows.Forms.MessageBox]::Show("No devices matched the provided filters.", "No Results", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } else {
+            $lblDeviceSelectionStatus.Text = "Selected devices: $($result.Count) of $($script:allDNADevices.Count)"
+            [System.Windows.Forms.MessageBox]::Show("Filters applied successfully.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    } catch {
+        Write-Log -Message "Error applying filters: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        [System.Windows.Forms.MessageBox]::Show("Error applying filters: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+})
+
+$btnResetDeviceFilter.Add_Click({
+    try {
+        Reset-DNADeviceSelection -LogBox $dnaLogBox
+        $txtFilterHostname.Clear()
+        $txtFilterIPAddress.Clear()
+        $txtFilterRole.Clear()
+        $txtFilterFamily.Clear()
+
+        $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
+        [System.Windows.Forms.MessageBox]::Show("Device selection reset to all loaded devices.", "Reset", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } catch {
+        Write-Log -Message "Error resetting filters: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        [System.Windows.Forms.MessageBox]::Show("Error resetting filters: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
 
