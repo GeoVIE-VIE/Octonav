@@ -934,14 +934,32 @@ function Get-DHCPScopeStatistics {
 
                 # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                    $OriginalScopeCount = $Scopes.Count
+                    Write-Output "Found $OriginalScopeCount total scope(s) on $DHCPServerName, applying filters..."
+
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
-                        $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                        # Explicitly case-insensitive matching using .ToUpper() for both sides
+                        $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
+                        if ($MatchingScopes) {
+                            Write-Output "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                            $FilteredScopes += $MatchingScopes
+                        } else {
+                            Write-Output "  Filter '$Filter' matched 0 scopes"
+                        }
                     }
+
+                    # Remove duplicates if a scope matched multiple filters
                     $Scopes = $FilteredScopes | Select-Object -Unique
 
                     if ($Scopes.Count -eq 0) {
+                        Write-Output "WARNING: No scopes matching filter criteria on $DHCPServerName"
+                        Write-Output "  Filters used: $($ScopeFilters -join ', ')"
+                        Write-Output "  Available scope names on this server might not contain these strings"
                         return @()
+                    } else {
+                        Write-Output "After filtering: $($Scopes.Count) scope(s) will be processed on $DHCPServerName"
                     }
                 }
 
@@ -3117,18 +3135,33 @@ $btnCollectDHCP.Add_Click({
         if (-not [string]::IsNullOrWhiteSpace($txtSpecificServers.Text)) {
             $rawServers = $txtSpecificServers.Text.Split(',') | ForEach-Object { $_.Trim() }
 
+            $validServers = @()
+            $invalidServers = @()
+
             foreach ($server in $rawServers) {
                 if (-not [string]::IsNullOrWhiteSpace($server)) {
-                    if ($server -match '^[a-zA-Z0-9\.\-_]+$') {
-                        $specificServers += $server
+                    # Allow alphanumeric, dots, hyphens, and underscores for FQDNs
+                    if ($server -match '^[a-zA-Z0-9][a-zA-Z0-9.\-_]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$') {
+                        $validServers += $server
                     } else {
-                        Write-Log -Message "Invalid server name: '$server' - contains unsafe characters" -Color "Red" -LogBox $dhcpLogBox
-                        [System.Windows.Forms.MessageBox]::Show("Invalid server name: '$server'`n`nOnly alphanumeric characters, dots, hyphens, and underscores are allowed.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                        $btnCollectDHCP.Enabled = $true
-                        return
+                        $invalidServers += $server
                     }
                 }
             }
+
+            if ($invalidServers.Count -gt 0) {
+                $invalidList = $invalidServers -join ', '
+                Write-Log -Message "Warning: Invalid server name(s) detected and will be skipped: $invalidList" -Color "Red" -LogBox $dhcpLogBox
+                [System.Windows.Forms.MessageBox]::Show("Warning: The following server name(s) contain invalid characters and will be skipped:`n`n$invalidList`n`nOnly alphanumeric characters, dots, hyphens, and underscores are allowed.", "Validation Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            }
+
+            if ($validServers.Count -eq 0 -and $invalidServers.Count -gt 0) {
+                Write-Log -Message "Error: No valid servers specified. Operation cancelled." -Color "Red" -LogBox $dhcpLogBox
+                $btnCollectDHCP.Enabled = $true
+                return
+            }
+
+            $specificServers = $validServers
         }
 
         $includeDNS = $chkIncludeDNS.Checked
@@ -3231,14 +3264,32 @@ $btnCollectDHCP.Add_Click({
 
                         # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                            $OriginalScopeCount = $Scopes.Count
+                            Add-ScopedLog "Found $OriginalScopeCount total scope(s) on $dhcpName, applying filters..."
+
                             $FilteredScopes = @()
                             foreach ($Filter in $ScopeFilters) {
-                                $FilteredScopes += $Scopes | Where-Object { $_.Name -like "*$Filter*" }
+                                # Explicitly case-insensitive matching using .ToUpper() for both sides
+                                $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
+                                if ($MatchingScopes) {
+                                    Add-ScopedLog "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                                    $FilteredScopes += $MatchingScopes
+                                } else {
+                                    Add-ScopedLog "  Filter '$Filter' matched 0 scopes"
+                                }
                             }
+
+                            # Remove duplicates if a scope matched multiple filters
                             $Scopes = $FilteredScopes | Select-Object -Unique
+
                             if ($Scopes.Count -eq 0) {
-                                Add-ScopedLog "No scopes matching filters found on $dhcpName"
+                                Add-ScopedLog "WARNING: No scopes matching filter criteria on $dhcpName"
+                                Add-ScopedLog "  Filters used: $($ScopeFilters -join ', ')"
+                                Add-ScopedLog "  Available scope names on this server might not contain these strings"
                                 continue
+                            } else {
+                                Add-ScopedLog "After filtering: $($Scopes.Count) scope(s) will be processed on $dhcpName"
                             }
                         }
 
@@ -3281,7 +3332,7 @@ $btnCollectDHCP.Add_Click({
                     }
                 }
 
-                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer }
+                return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
             } catch {
                 return @{ Success = $false; Error = $_.Exception.Message; Results = @(); Logs = $LogBuffer }
             }
@@ -3314,7 +3365,22 @@ $btnCollectDHCP.Add_Click({
                             $btnExportDHCP.Enabled = $true
                             Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes from $($result.ServerCount) servers" -Color "Green" -LogBox $dhcpLogBox
                         } else {
-                            Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                            Write-Log -Message "=== No Results Found ===" -Color "Yellow" -LogBox $dhcpLogBox
+                            Write-Log -Message "No DHCP scopes were found matching your criteria" -Color "Yellow" -LogBox $dhcpLogBox
+
+                            if ($result.Filters -and $result.Filters.Count -gt 0) {
+                                Write-Log -Message "Filters applied: $($result.Filters -join ', ')" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "Troubleshooting tips:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  1. Check if scope names actually contain the filter strings" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  2. Verify server names are correct and reachable" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  3. Try running without filters to see all available scopes" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  4. Check if you have permissions to query the DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                            } else {
+                                Write-Log -Message "No filters were applied. This might indicate:" -Color "Cyan" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - No DHCP servers are available in the domain" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - You don't have permissions to query DHCP servers" -Color "White" -LogBox $dhcpLogBox
+                                Write-Log -Message "  - DHCP servers are unreachable" -Color "White" -LogBox $dhcpLogBox
+                            }
                         }
                     } else {
                         Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
