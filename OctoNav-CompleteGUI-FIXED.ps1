@@ -3458,64 +3458,66 @@ $btnCollectDHCP.Add_Click({
 
                 $AllStats = @()
                 $TotalServers = $DHCPServers.Count
+                $MaxConcurrentJobs = 20
 
-                foreach ($Server in $DHCPServers) {
-                    $dhcpName = $Server.DnsName
-                    Add-ScopedLog "Querying DHCP Server: $dhcpName"
+                Add-ScopedLog "Starting parallel processing of $TotalServers DHCP servers (maintaining $MaxConcurrentJobs concurrent jobs)..."
+
+                # Script block for processing a single DHCP server
+                $ServerScriptBlock = {
+                    param($DHCPServerName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses)
+
+                    $ServerStats = @()
+                    $ServerLogs = @()
 
                     try {
-                        $Scopes = Get-DhcpServerv4Scope -ComputerName $dhcpName -ErrorAction Stop
+                        $ServerLogs += "Querying DHCP Server: $DHCPServerName"
 
-                        # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
+                        $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
+
+                        # Apply filtering if scope filters are provided
                         if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                             $OriginalScopeCount = $Scopes.Count
-                            Add-ScopedLog "Found $OriginalScopeCount total scope(s) on $dhcpName, applying filters..."
+                            $ServerLogs += "Found $OriginalScopeCount total scope(s) on $DHCPServerName, applying filters..."
 
                             $FilteredScopes = @()
                             foreach ($Filter in $ScopeFilters) {
-                                # Explicitly case-insensitive matching using .ToUpper() for both sides
                                 $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
 
                                 if ($MatchingScopes) {
-                                    Add-ScopedLog "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                                    $ServerLogs += "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
                                     $FilteredScopes += $MatchingScopes
                                 } else {
-                                    Add-ScopedLog "  Filter '$Filter' matched 0 scopes"
+                                    $ServerLogs += "  Filter '$Filter' matched 0 scopes"
                                 }
                             }
 
-                            # Remove duplicates if a scope matched multiple filters
                             $Scopes = $FilteredScopes | Select-Object -Unique
 
                             if ($Scopes.Count -eq 0) {
-                                Add-ScopedLog "WARNING: No scopes matching filter criteria on $dhcpName"
-                                Add-ScopedLog "  Filters used: $($ScopeFilters -join ', ')"
-                                Add-ScopedLog "  Available scope names on this server might not contain these strings"
-                                continue
+                                $ServerLogs += "WARNING: No scopes matching filter criteria on $DHCPServerName"
+                                return @{ Stats = @(); Logs = $ServerLogs; Success = $false }
                             } else {
-                                Add-ScopedLog "After filtering: $($Scopes.Count) scope(s) will be processed on $dhcpName"
+                                $ServerLogs += "After filtering: $($Scopes.Count) scope(s) will be processed on $DHCPServerName"
                             }
                         }
 
-                        $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $dhcpName -ErrorAction Stop
+                        $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $DHCPServerName -ErrorAction Stop
 
                         $DNSServerMap = @{}
                         if ($IncludeDNS) {
                             foreach ($Scope in $Scopes) {
                                 try {
-                                    $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $dhcpName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
+                                    $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
                                     if ($DNSOption) { $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ',' }
                                 } catch { }
                             }
                         }
 
-                        # OPTIMIZED: BadAddress tracking with parallel lease queries
                         $BadAddressMap = @{}
                         if ($IncludeBadAddresses) {
                             try {
-                                Add-ScopedLog "Retrieving Bad_Address information from $dhcpName (using parallel queries)..."
+                                $ServerLogs += "Retrieving Bad_Address information from $DHCPServerName (using parallel queries)..."
 
-                                # Parallel lease queries (PowerShell 5.1 compatible)
                                 $leaseJobs = @()
                                 foreach ($Scope in $Scopes) {
                                     $job = Start-Job -ScriptBlock {
@@ -3530,17 +3532,15 @@ $btnCollectDHCP.Add_Click({
                                         } catch {
                                             return @{ ScopeId = $scopeId; Count = 0 }
                                         }
-                                    } -ArgumentList $dhcpName, $Scope.ScopeId
+                                    } -ArgumentList $DHCPServerName, $Scope.ScopeId
 
                                     $leaseJobs += $job
 
-                                    # Throttle to 10 concurrent lease queries per server
                                     while ((Get-Job -State Running | Where-Object { $leaseJobs.Id -contains $_.Id }).Count -ge 10) {
                                         Start-Sleep -Milliseconds 100
                                     }
                                 }
 
-                                # Wait and collect results
                                 $leaseJobs | Wait-Job -Timeout 300 | ForEach-Object {
                                     $result = Receive-Job -Job $_
                                     if ($result) {
@@ -3549,31 +3549,121 @@ $btnCollectDHCP.Add_Click({
                                     Remove-Job -Job $_ -Force
                                 }
 
-                                # Clean up any remaining jobs
                                 $leaseJobs | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force
 
-                                Add-ScopedLog "  Bad_Address retrieval complete for $dhcpName"
+                                $ServerLogs += "  Bad_Address retrieval complete for $DHCPServerName"
                             } catch {
-                                Add-ScopedLog "Warning: Could not retrieve Bad_Address information for $dhcpName : $($_.Exception.Message)"
+                                $ServerLogs += "Warning: Could not retrieve Bad_Address information for $DHCPServerName : $($_.Exception.Message)"
                             }
                         }
 
                         foreach ($Scope in $Scopes) {
                             $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
                             if ($Stats) {
-                                $AllStats += $Stats | Select-Object *,
-                                    @{Name='DHCPServer'; Expression={$dhcpName}},
+                                $ServerStats += $Stats | Select-Object *,
+                                    @{Name='DHCPServer'; Expression={$DHCPServerName}},
                                     @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
                                     @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}},
                                     @{Name='BadAddressCount'; Expression={$BadAddressMap[$Scope.ScopeId]}}
                             }
                         }
 
-                        Add-ScopedLog "Collected $($Scopes.Count) scope(s) from $dhcpName"
+                        $ServerLogs += "Collected $($Scopes.Count) scope(s) from $DHCPServerName"
+                        return @{ Stats = $ServerStats; Logs = $ServerLogs; Success = $true }
                     } catch {
-                        Add-ScopedLog "Error querying $dhcpName : $($_.Exception.Message)"
+                        $ServerLogs += "Error querying $DHCPServerName : $($_.Exception.Message)"
+                        return @{ Stats = @(); Logs = $ServerLogs; Success = $false; Error = $_.Exception.Message }
                     }
                 }
+
+                # Start parallel job processing
+                $Jobs = @()
+                $ServerIndex = 0
+                $CompletedJobs = 0
+
+                # Start initial batch of jobs
+                while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server.DnsName
+                        Processed = $false
+                    }
+                    Add-ScopedLog "Started job for: $($Server.DnsName)"
+                    $ServerIndex++
+                }
+
+                # Process jobs as they complete
+                while ($CompletedJobs -lt $TotalServers) {
+                    Start-Sleep -Milliseconds 500
+
+                    # Check for completed jobs
+                    $CompletedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+                    foreach ($CompletedJob in $CompletedInRound) {
+                        $CompletedJobs++
+                        $CompletedJob.Processed = $true
+
+                        try {
+                            $result = Receive-Job -Job $CompletedJob.Job
+
+                            # Add logs from this server
+                            if ($result.Logs) {
+                                foreach ($log in $result.Logs) {
+                                    Add-ScopedLog $log
+                                }
+                            }
+
+                            # Collect statistics
+                            if ($result.Stats) {
+                                $AllStats += $result.Stats
+                            }
+
+                            Add-ScopedLog "[$CompletedJobs/$TotalServers] Completed: $($CompletedJob.ServerName)"
+                        } catch {
+                            Add-ScopedLog "[$CompletedJobs/$TotalServers] Failed to receive results from $($CompletedJob.ServerName): $($_.Exception.Message)"
+                        }
+
+                        Remove-Job -Job $CompletedJob.Job -Force
+
+                        # Start next job to maintain pool
+                        if ($ServerIndex -lt $TotalServers) {
+                            $Server = $DHCPServers[$ServerIndex]
+                            $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                            $Jobs += @{
+                                Job = $Job
+                                ServerName = $Server.DnsName
+                                Processed = $false
+                            }
+                            Add-ScopedLog "Started job for: $($Server.DnsName)"
+                            $ServerIndex++
+                        }
+                    }
+
+                    # Check for failed jobs
+                    $FailedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+                    foreach ($FailedJob in $FailedInRound) {
+                        $CompletedJobs++
+                        $FailedJob.Processed = $true
+                        Add-ScopedLog "[$CompletedJobs/$TotalServers] Failed: $($FailedJob.ServerName)"
+                        Remove-Job -Job $FailedJob.Job -Force
+
+                        # Start next job to maintain pool
+                        if ($ServerIndex -lt $TotalServers) {
+                            $Server = $DHCPServers[$ServerIndex]
+                            $Job = Start-Job -ScriptBlock $ServerScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
+                            $Jobs += @{
+                                Job = $Job
+                                ServerName = $Server.DnsName
+                                Processed = $false
+                            }
+                            Add-ScopedLog "Started job for: $($Server.DnsName)"
+                            $ServerIndex++
+                        }
+                    }
+                }
+
+                Add-ScopedLog "All server jobs completed!"
 
                 return @{ Success = $true; Error = $null; Results = $AllStats; ServerCount = $TotalServers; Logs = $LogBuffer; Filters = $ScopeFilters }
             } catch {
