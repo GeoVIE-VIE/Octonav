@@ -6,7 +6,7 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 - DHCP scope statistics collection
 - Cisco DNA Center API integration
 
-**Current Version**: 2.0 - Security Hardened with Enhanced Validation
+**Current Version**: 2.1 - Security Hardened + DNACAPEiv6 Integration
 
 ---
 
@@ -51,10 +51,11 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 |------|--------|----------------|-------|
 | XFER | ✅ Merged | Tab 1: Network Configuration | 387 |
 | Merged-DHCPScopeStats.ps1 | ✅ Merged | Tab 2: DHCP Statistics | 329 |
-| DNA Center (Basic) | ✅ Merged | Tab 3: DNA Center (20 functions) | - |
-| DNACAPEiv6_COMPLETE(1).txt | ⚠️ NOT Merged | Standalone CLI script | 3,943 |
+| DNA Center (Core API) | ✅ Merged | Tab 3: DNA Center (23 functions) | - |
+| DNACAPEiv6 Advanced Functions | ✅ Merged | Tab 3: Path Trace, Availability Events, Last Disconnect | 469 |
+| DNACAPEiv6_COMPLETE(1).txt | ✅ Kept as Standalone | CLI script with interactive menus | 3,943 |
 
-**Note**: DNACAPEiv6_COMPLETE(1).txt provides a richer command-line experience with additional functionality not available in the GUI. Both can coexist.
+**Note**: DNACAPEiv6_COMPLETE(1).txt remains available as a standalone CLI tool with interactive menus, ASCII banners, and CLI command execution features. The core API functions have been merged into the GUI.
 
 ---
 
@@ -152,20 +153,33 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 4. (Optional) Apply device filters
 5. Click any function button to execute and export data
 
-**Available Functions** (20 total):
+**Available Functions** (23 total):
+
+**Core Device Information:**
 - Device Information (Basic & Detailed)
 - Device Inventory Count
 - Device Configurations
 - Device Interfaces & Modules
-- Network & Client Health
 - Device Reachability
+
+**Network Health & Monitoring:**
+- Network & Client Health
 - Compliance Status
-- VLANs, Templates, Sites
+- Last Disconnect Times (NEW - from DNACAPEiv6)
+- Availability Events (NEW - from DNACAPEiv6)
+
+**Topology & Neighbors:**
 - Physical Topology
 - OSPF, CDP, LLDP Neighbors
+
+**Network Services:**
+- VLANs, Templates, Sites
 - Access Points
-- Issues/Events
 - Software Images
+- Issues/Events
+
+**Advanced Analysis:**
+- Path Trace (NEW - from DNACAPEiv6) - Interactive network path analysis
 
 **Security Note**: Credentials cleared from memory after authentication. Tokens expire after 1 hour.
 
@@ -232,6 +246,9 @@ All exports are CSV files saved to the configured output directory:
 - `Issues_YYYYMMDD_HHMMSS.csv`
 - `AccessPoints_YYYYMMDD_HHMMSS.csv`
 - `DeviceConfigurations_YYYYMMDD_HHMMSS/` (folder with individual config files)
+- `DeviceLastDisconnect_YYYYMMDD_HHMMSS.csv` (NEW - last disconnect times)
+- `DeviceAvailabilityEvents_YYYYMMDD_HHMMSS.csv` (NEW - availability event timestamps)
+- `PathTrace_SOURCE_to_DEST_YYYYMMDD_HHMMSS.csv` (NEW - network path trace results)
 
 ---
 
@@ -283,7 +300,16 @@ This provides:
 
 ## Version History
 
-### v2.0 (Current)
+### v2.1 (Current)
+- **MAJOR**: Merged DNACAPEiv6 advanced functions into GUI
+- Added Path Trace function with interactive dialog
+- Added Last Disconnect Times function
+- Added Availability Events function
+- Increased DNA Center functions from 20 to 23
+- All security hardening from v2.0 maintained
+- DNACAPEiv6_COMPLETE kept as standalone CLI tool
+
+### v2.0
 - Enhanced input validation (server names, scope filters)
 - Strengthened path traversal protection
 - Configuration file support (JSON + environment variables)
