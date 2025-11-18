@@ -50,6 +50,42 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
 
 # ============================================
+# CERTIFICATE VALIDATION BYPASS & TLS SETUP
+# ============================================
+# Required for DNA Center API calls with self-signed certificates
+if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type) {
+    $certCallback = @"
+    using System;
+    using System.Net;
+    using System.Net.Security;
+    using System.Security.Cryptography.X509Certificates;
+    public class ServerCertificateValidationCallback
+    {
+        public static void Ignore()
+        {
+            if(ServicePointManager.ServerCertificateValidationCallback == null)
+            {
+                ServicePointManager.ServerCertificateValidationCallback +=
+                    delegate
+                    (
+                        Object obj,
+                        X509Certificate certificate,
+                        X509Chain chain,
+                        SslPolicyErrors errors
+                    )
+                    {
+                        return true;
+                    };
+            }
+        }
+    }
+"@
+    Add-Type $certCallback
+}
+[ServerCertificateValidationCallback]::Ignore()
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# ============================================
 # MODULE IMPORTS
 # ============================================
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
