@@ -546,6 +546,8 @@ $netLogBox.Size = New-Object System.Drawing.Size(940, 310)
 $netLogBox.Location = New-Object System.Drawing.Point(10, 300)
 $netLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $netLogBox.ReadOnly = $true
+$netLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
+$netLogBox.WordWrap = $false
 $tab1.Controls.Add($netLogBox)
 
 # Event Handlers for Tab 1
@@ -560,19 +562,20 @@ $btnFindNetwork.Add_Click({
                 DHCP = (Get-NetIPInterface -InterfaceIndex $script:TargetAdapter.ifIndex -AddressFamily IPv4).Dhcp
             }
 
-            Write-Log -Message "Adapter found and ready for configuration" -Color "Green" -LogBox $netLogBox
+            Write-Log -Message "Adapter found and ready for configuration" -Color "Success" -LogBox $netLogBox -Theme $script:CurrentTheme
         } else {
-            Write-Log -Message "No unidentified network found" -Color "Red" -LogBox $netLogBox
+            Write-Log -Message "No unidentified network found" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
         }
     } catch {
-        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $netLogBox
+        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
     }
 })
 
 $btnApplyConfig.Add_Click({
     try {
         if (-not $script:TargetAdapter) {
-            Write-Log -Message "Please find a network adapter first" -Color "Red" -LogBox $netLogBox
+            Write-Log -Message "Please find a network adapter first" -Color "Warning" -LogBox $netLogBox -Theme $script:CurrentTheme
+            [System.Windows.Forms.MessageBox]::Show("Please find a network adapter first using the 'Find Unidentified Network' button", "No Adapter", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
@@ -582,21 +585,21 @@ $btnApplyConfig.Add_Click({
 
         # Validate IP address
         if (-not (Test-IPAddress -IPAddress $ip)) {
-            Write-Log -Message 'Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)' -Color 'Red' -LogBox $netLogBox
+            Write-Log -Message 'Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)' -Color 'Error' -LogBox $netLogBox -Theme $script:CurrentTheme
             [System.Windows.Forms.MessageBox]::Show("Invalid IP address format!", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
         # Validate gateway
         if (-not (Test-IPAddress -IPAddress $gateway)) {
-            Write-Log -Message "Invalid gateway format. Please enter a valid IPv4 address" -Color "Red" -LogBox $netLogBox
+            Write-Log -Message "Invalid gateway format. Please enter a valid IPv4 address" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
             [System.Windows.Forms.MessageBox]::Show("Invalid gateway format!", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
         # Validate prefix
         if (-not (Test-PrefixLength -Prefix $prefixText)) {
-            Write-Log -Message "Invalid prefix length. Must be between 0 and 32" -Color "Red" -LogBox $netLogBox
+            Write-Log -Message "Invalid prefix length. Must be between 0 and 32" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
             [System.Windows.Forms.MessageBox]::Show("Invalid prefix length! Must be between 0 and 32", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
@@ -611,17 +614,32 @@ $btnApplyConfig.Add_Click({
             [System.Windows.Forms.MessageBox]::Show("Network configuration applied successfully!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
     } catch {
-        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $netLogBox
+        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Error applying configuration: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
 
 $btnRestoreDefaults.Add_Click({
     try {
-        Restore-NetworkDefaults -LogBox $netLogBox
-        [System.Windows.Forms.MessageBox]::Show("Network defaults restored!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        # Confirm before restoring
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "This will restore network adapter to DHCP and remove static IP configuration. Continue?",
+            "Confirm Restore Defaults",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Restore-NetworkDefaults -LogBox $netLogBox
+            [System.Windows.Forms.MessageBox]::Show("Network defaults restored!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+            # Clear the target adapter
+            $script:TargetAdapter = $null
+            $script:OriginalConfig = $null
+        }
     } catch {
-        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $netLogBox
+        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
+        [System.Windows.Forms.MessageBox]::Show("Error restoring defaults: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
 
