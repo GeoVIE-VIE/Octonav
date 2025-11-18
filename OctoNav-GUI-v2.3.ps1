@@ -56,20 +56,20 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 try {
     # Core modules
-    Import-Module "$scriptPath\modules\SettingsManager.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ThemeManager.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ValidationFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\HelperFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ExportManager.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SettingsManager.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ThemeManager.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ValidationFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\HelperFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -ErrorAction Stop
 
     # UI modules
-    Import-Module "$scriptPath\modules\SettingsDialog.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DashboardComponents.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SettingsDialog.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DashboardComponents.psm1" -Force -ErrorAction Stop
 
     # Function modules
-    Import-Module "$scriptPath\modules\DNACenterFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DHCPFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\NetworkConfigFunctions.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DNACenterFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -ErrorAction Stop
 
     Write-Host "All modules loaded successfully" -ForegroundColor Green
 } catch {
