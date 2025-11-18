@@ -891,8 +891,9 @@ $btnCollectDHCP.Add_Click({
                         New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
                     }
 
-                    Export-ToCSV -Data $script:dhcpResults -OutputPath $exportPath -Settings $script:Settings
-                    Write-Log -Message "Auto-exported to: $exportPath" -Color "Cyan" -LogBox $dhcpLogBox
+                    $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+                    Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
+                    Write-Log -Message "Auto-exported to: $exportedPath" -Color "Cyan" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
             } else {
                 Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox

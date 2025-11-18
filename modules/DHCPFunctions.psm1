@@ -172,7 +172,8 @@ function Get-DHCPScopeStatistics {
         [string[]]$ScopeFilters = @(),
         [string[]]$SpecificServers = @(),
         [bool]$IncludeDNS = $false,
-        [System.Windows.Forms.RichTextBox]$LogBox
+        [System.Windows.Forms.RichTextBox]$LogBox,
+        [scriptblock]$StatusBarCallback = $null
     )
 
     try {
@@ -193,7 +194,11 @@ function Get-DHCPScopeStatistics {
 
             if ($validServers.Count -eq 0) {
                 Write-Log -Message "No valid DHCP server names provided" -Color "Red" -LogBox $LogBox
-                return @()
+                return @{
+                    Success = $false
+                    Results = @()
+                    Error = "No valid DHCP server names provided"
+                }
             }
 
             $DHCPServers = $validServers | ForEach-Object {
@@ -208,7 +213,11 @@ function Get-DHCPScopeStatistics {
             } catch {
                 $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
                 Write-Log -Message "Failed to get DHCP servers: $sanitizedError" -Color "Red" -LogBox $LogBox
-                return @()
+                return @{
+                    Success = $false
+                    Results = @()
+                    Error = "Failed to get DHCP servers: $sanitizedError"
+                }
             }
         }
 
@@ -349,10 +358,19 @@ function Get-DHCPScopeStatistics {
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
 
-        return $AllStats
+        return @{
+            Success = $true
+            Results = $AllStats
+            Error = $null
+        }
     } catch {
-        Write-Log -Message "DHCP collection error: $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
-        return @()
+        $errorMessage = $_.Exception.Message
+        Write-Log -Message "DHCP collection error: $errorMessage" -Color "Red" -LogBox $LogBox
+        return @{
+            Success = $false
+            Results = @()
+            Error = $errorMessage
+        }
     }
 }
 
