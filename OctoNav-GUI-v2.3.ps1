@@ -83,6 +83,51 @@ try {
 }
 
 # ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+function Get-DNACenterServers {
+    <#
+    .SYNOPSIS
+        Loads DNA Center server configurations from JSON file or environment variables
+    #>
+    $configFile = Join-Path $scriptPath "dna_config.json"
+
+    # Try to load from config file first (silently)
+    if (Test-Path $configFile) {
+        try {
+            $config = Get-Content $configFile -Raw | ConvertFrom-Json
+            if ($config.servers -and $config.servers.Count -gt 0) {
+                return $config.servers
+            }
+        } catch {
+            # Silently continue if config file is invalid
+        }
+    }
+
+    # Try environment variables
+    $servers = @()
+    for ($i = 1; $i -le 10; $i++) {
+        $nameVar = "DNAC_SERVER${i}_NAME"
+        $urlVar = "DNAC_SERVER${i}_URL"
+
+        $name = [Environment]::GetEnvironmentVariable($nameVar)
+        $url = [Environment]::GetEnvironmentVariable($urlVar)
+
+        if ($name -and $url) {
+            $servers += [pscustomobject]@{ Name = $name; Url = $url }
+        }
+    }
+
+    if ($servers.Count -gt 0) {
+        return $servers
+    }
+
+    # Fallback to default (user will see this in the GUI dropdown)
+    return @([pscustomobject]@{ Name = "Please Configure"; Url = "https://your-dnac-server.example.com" })
+}
+
+# ============================================
 # INITIALIZE SETTINGS & GLOBAL VARIABLES
 # ============================================
 
