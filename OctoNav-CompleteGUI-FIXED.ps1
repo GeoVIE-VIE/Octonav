@@ -3650,7 +3650,14 @@ $btnExportDHCP.Add_Click({
             New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
         }
 
-        $script:dhcpResults | Export-Csv -Path $csvPath -NoTypeInformation
+        # Format columns in the requested order: Scope ID, DHCP Server, Description, Addresses Free, Addresses in use, Percentage in use, DNS IP/information
+        if ($script:dhcpResults[0].PSObject.Properties.Name -contains 'DNSServers') {
+            $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers |
+                Export-Csv -Path $csvPath -NoTypeInformation
+        } else {
+            $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse |
+                Export-Csv -Path $csvPath -NoTypeInformation
+        }
 
         Write-Log -Message "DHCP statistics exported to: $csvPath" -Color "Green" -LogBox $dhcpLogBox
         [System.Windows.Forms.MessageBox]::Show("DHCP statistics exported successfully to:`n$csvPath", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)

@@ -347,11 +347,12 @@ if ($AllStats.Count -gt 0) {
     # Export to CSV
     $OutputPath = "DHCPScopeStats_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
 
+    # Format columns in the requested order: Scope ID, DHCP Server, Description, Addresses Free, Addresses in use, Percentage in use, DNS IP/information
     if ($IncludeDNS) {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse, DNSServers |
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers |
             Export-Csv -Path $OutputPath -NoTypeInformation -Force
     } else {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse |
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse |
             Export-Csv -Path $OutputPath -NoTypeInformation -Force
     }
 
