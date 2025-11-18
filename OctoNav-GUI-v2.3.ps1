@@ -56,20 +56,20 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 try {
     # Core modules
-    Import-Module "$scriptPath\modules\SettingsManager.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ThemeManager.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ValidationFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\HelperFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ExportManager.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SettingsManager.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ThemeManager.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ValidationFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\HelperFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -ErrorAction Stop
 
     # UI modules
-    Import-Module "$scriptPath\modules\SettingsDialog.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DashboardComponents.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SettingsDialog.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DashboardComponents.psm1" -Force -ErrorAction Stop
 
     # Function modules
-    Import-Module "$scriptPath\modules\DNACenterFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DHCPFunctions.ps1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\NetworkConfigFunctions.ps1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DNACenterFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -ErrorAction Stop
 
     Write-Host "All modules loaded successfully" -ForegroundColor Green
 } catch {
@@ -80,6 +80,51 @@ try {
         [System.Windows.Forms.MessageBoxIcon]::Error
     )
     exit 1
+}
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+function Get-DNACenterServers {
+    <#
+    .SYNOPSIS
+        Loads DNA Center server configurations from JSON file or environment variables
+    #>
+    $configFile = Join-Path $scriptPath "dna_config.json"
+
+    # Try to load from config file first (silently)
+    if (Test-Path $configFile) {
+        try {
+            $config = Get-Content $configFile -Raw | ConvertFrom-Json
+            if ($config.servers -and $config.servers.Count -gt 0) {
+                return $config.servers
+            }
+        } catch {
+            # Silently continue if config file is invalid
+        }
+    }
+
+    # Try environment variables
+    $servers = @()
+    for ($i = 1; $i -le 10; $i++) {
+        $nameVar = "DNAC_SERVER${i}_NAME"
+        $urlVar = "DNAC_SERVER${i}_URL"
+
+        $name = [Environment]::GetEnvironmentVariable($nameVar)
+        $url = [Environment]::GetEnvironmentVariable($urlVar)
+
+        if ($name -and $url) {
+            $servers += [pscustomobject]@{ Name = $name; Url = $url }
+        }
+    }
+
+    if ($servers.Count -gt 0) {
+        return $servers
+    }
+
+    # Fallback to default (user will see this in the GUI dropdown)
+    return @([pscustomobject]@{ Name = "Please Configure"; Url = "https://your-dnac-server.example.com" })
 }
 
 # ============================================
