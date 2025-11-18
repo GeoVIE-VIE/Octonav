@@ -548,6 +548,9 @@ $netLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $netLogBox.ReadOnly = $true
 $netLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
 $netLogBox.WordWrap = $false
+$netLogBox.HideSelection = $false
+$netLogBox.DetectUrls = $false
+$netLogBox.Multiline = $true
 $tab1.Controls.Add($netLogBox)
 
 # Event Handlers for Tab 1
@@ -781,6 +784,9 @@ $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
 $dhcpLogBox.WordWrap = $false
+$dhcpLogBox.HideSelection = $false
+$dhcpLogBox.DetectUrls = $false
+$dhcpLogBox.Multiline = $true
 $tab2.Controls.Add($dhcpLogBox)
 
 # Event Handlers for Tab 2
@@ -1163,8 +1169,11 @@ $dnaLogBox.Size = New-Object System.Drawing.Size(940, 90)
 $dnaLogBox.Location = New-Object System.Drawing.Point(10, 550)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
-$dnaLogBox.ScrollBars = "Vertical"
+$dnaLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
 $dnaLogBox.WordWrap = $false
+$dnaLogBox.HideSelection = $false
+$dnaLogBox.DetectUrls = $false
+$dnaLogBox.Multiline = $true
 $tab3.Controls.Add($dnaLogBox)
 
 # TreeView double-click event handler
