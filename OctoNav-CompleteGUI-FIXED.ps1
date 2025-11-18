@@ -999,7 +999,6 @@ function Get-DHCPScopeStatistics {
         [string[]]$ScopeFilters = @(),
         [string[]]$SpecificServers = @(),
         [bool]$IncludeDNS = $false,
-        [bool]$IncludeBadAddresses = $false,
         [System.Windows.Forms.RichTextBox]$LogBox
     )
 
@@ -1042,28 +1041,21 @@ function Get-DHCPScopeStatistics {
 
         # Script block for parallel processing
         $ScriptBlock = {
-            param($DHCPServerName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses)
+            param($DHCPServerName, $ScopeFilters, $IncludeDNS)
 
-            $ServerStats = @()
+            $ServerStats = New-Object System.Collections.ArrayList
 
             try {
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
 
-                # Apply filtering if scope filters are provided - matches Merged-DHCPScopeStats.ps1
+                # Apply filtering if scope filters are provided
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
-                    $OriginalScopeCount = $Scopes.Count
-                    Write-Output "Found $OriginalScopeCount total scope(s) on $DHCPServerName, applying filters..."
-
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
-                        # Explicitly case-insensitive matching using .ToUpper() for both sides
+                        # Case-insensitive matching
                         $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
-
                         if ($MatchingScopes) {
-                            Write-Output "  Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
                             $FilteredScopes += $MatchingScopes
-                        } else {
-                            Write-Output "  Filter '$Filter' matched 0 scopes"
                         }
                     }
 
@@ -1072,11 +1064,7 @@ function Get-DHCPScopeStatistics {
 
                     if ($Scopes.Count -eq 0) {
                         Write-Output "WARNING: No scopes matching filter criteria on $DHCPServerName"
-                        Write-Output "  Filters used: $($ScopeFilters -join ', ')"
-                        Write-Output "  Available scope names on this server might not contain these strings"
                         return @()
-                    } else {
-                        Write-Output "After filtering: $($Scopes.Count) scope(s) will be processed on $DHCPServerName"
                     }
                 }
 
@@ -1096,64 +1084,16 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
-                # OPTIMIZED: BadAddress tracking with parallel lease queries
-                $BadAddressMap = @{}
-                if ($IncludeBadAddresses) {
-                    try {
-                        Write-Output "Retrieving Bad_Address information from $DHCPServerName (using parallel queries)..."
-
-                        # Parallel lease queries (PowerShell 5.1 compatible)
-                        $leaseJobs = @()
-                        foreach ($Scope in $Scopes) {
-                            $job = Start-Job -ScriptBlock {
-                                param($server, $scopeId)
-                                try {
-                                    $badLeases = Get-DhcpServerv4Lease -ComputerName $server -ScopeId $scopeId -ErrorAction SilentlyContinue |
-                                        Where-Object { $_.HostName -eq "BAD_ADDRESS" }
-                                    return @{
-                                        ScopeId = $scopeId
-                                        Count = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
-                                    }
-                                } catch {
-                                    return @{ ScopeId = $scopeId; Count = 0 }
-                                }
-                            } -ArgumentList $DHCPServerName, $Scope.ScopeId
-
-                            $leaseJobs += $job
-
-                            # Throttle to 10 concurrent lease queries per server
-                            while ((Get-Job -State Running | Where-Object { $leaseJobs.Id -contains $_.Id }).Count -ge 10) {
-                                Start-Sleep -Milliseconds 100
-                            }
-                        }
-
-                        # Wait and collect results
-                        $leaseJobs | Wait-Job -Timeout 300 | ForEach-Object {
-                            $result = Receive-Job -Job $_
-                            if ($result) {
-                                $BadAddressMap[$result.ScopeId] = $result.Count
-                            }
-                            Remove-Job -Job $_ -Force
-                        }
-
-                        # Clean up any remaining jobs
-                        $leaseJobs | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force
-
-                        Write-Output "  Bad_Address retrieval complete for $DHCPServerName"
-                    } catch {
-                        Write-Output "Warning: Could not retrieve Bad_Address information for $DHCPServerName : $($_.Exception.Message)"
-                    }
-                }
-
                 foreach ($Scope in $Scopes) {
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
                     if ($Stats) {
-                        $ServerStats += $Stats | Select-Object *,
+                        $obj = $Stats | Select-Object *,
                             @{Name='DHCPServer'; Expression={$DHCPServerName}},
                             @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
-                            @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}},
-                            @{Name='BadAddressCount'; Expression={$BadAddressMap[$Scope.ScopeId]}}
+                            @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
+
+                        [void]$ServerStats.Add($obj)
                     }
                 }
             } catch {
@@ -1163,81 +1103,76 @@ function Get-DHCPScopeStatistics {
             return $ServerStats
         }
 
-        # Process servers in parallel - maintain constant pool of 20 running jobs
-        $Jobs = @()
-        $AllStats = @()
+        # Process servers in parallel using Runspaces (5-10x faster than Start-Job)
+        $AllStats = New-Object System.Collections.ArrayList
         $MaxConcurrentJobs = 20
+        $CheckIntervalMs = 500
         $TotalServers = $DHCPServers.Count
-        $ServerIndex = 0
 
-        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (maintaining 20 concurrent jobs)..." -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Runspace Pool)..." -Color "Cyan" -LogBox $LogBox
 
-        # Start initial batch of jobs (up to 20)
-        while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
-            $Server = $DHCPServers[$ServerIndex]
-            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-            $Jobs += @{
-                Job = $Job
+        # Create runspace pool
+        $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxConcurrentJobs)
+        $RunspacePool.Open()
+
+        # Track runspaces
+        $Runspaces = New-Object System.Collections.ArrayList
+        $CompletedCount = 0
+
+        # Start all runspaces
+        foreach ($Server in $DHCPServers) {
+            $PowerShell = [powershell]::Create()
+            $PowerShell.RunspacePool = $RunspacePool
+
+            [void]$PowerShell.AddScript($ScriptBlock)
+            [void]$PowerShell.AddArgument($Server.DnsName)
+            [void]$PowerShell.AddArgument($ScopeFilters)
+            [void]$PowerShell.AddArgument($IncludeDNS)
+
+            $AsyncResult = $PowerShell.BeginInvoke()
+
+            [void]$Runspaces.Add([PSCustomObject]@{
+                PowerShell = $PowerShell
+                AsyncResult = $AsyncResult
                 ServerName = $Server.DnsName
-                Processed = $false
-            }
-            $ServerIndex++
+                Completed = $false
+            })
         }
 
-        # Process jobs and maintain constant pool of 20
-        while ($Jobs | Where-Object { -not $_.Processed }) {
-            Start-Sleep -Seconds 2
+        # Monitor runspaces
+        while ($Runspaces | Where-Object { -not $_.Completed }) {
+            Start-Sleep -Milliseconds $CheckIntervalMs
 
-            # Handle completed jobs
-            $CompletedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-            foreach ($CompletedJob in $CompletedJobs) {
-                $CompletedJob.Processed = $true
-                Write-Log -Message "Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
+            foreach ($Runspace in ($Runspaces | Where-Object { -not $_.Completed })) {
+                if ($Runspace.AsyncResult.IsCompleted) {
+                    $CompletedCount++
+                    $Runspace.Completed = $true
 
-                try {
-                    $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
-                    if ($Result) {
-                        $AllStats += $Result
+                    Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName)" -Color "Green" -LogBox $LogBox
+
+                    try {
+                        $result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
+
+                        if ($result) {
+                            # Add items individually to avoid type casting issues
+                            foreach ($item in $result) {
+                                if ($item) {
+                                    [void]$AllStats.Add($item)
+                                }
+                            }
+                        }
+                    } catch {
+                        Write-Log -Message "Failed to receive from $($Runspace.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                    } finally {
+                        $Runspace.PowerShell.Dispose()
                     }
-                } catch {
-                    Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
-                }
-
-                Remove-Job -Job $CompletedJob.Job -Force
-
-                # Start new job if more servers remain
-                if ($ServerIndex -lt $TotalServers) {
-                    $Server = $DHCPServers[$ServerIndex]
-                    $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                    $Jobs += @{
-                        Job = $NewJob
-                        ServerName = $Server.DnsName
-                        Processed = $false
-                    }
-                    $ServerIndex++
-                }
-            }
-
-            # Handle failed jobs
-            $FailedJobs = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-            foreach ($FailedJob in $FailedJobs) {
-                $FailedJob.Processed = $true
-                Write-Log -Message "Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
-                Remove-Job -Job $FailedJob.Job -Force
-
-                # Start new job if more servers remain
-                if ($ServerIndex -lt $TotalServers) {
-                    $Server = $DHCPServers[$ServerIndex]
-                    $NewJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses
-                    $Jobs += @{
-                        Job = $NewJob
-                        ServerName = $Server.DnsName
-                        Processed = $false
-                    }
-                    $ServerIndex++
                 }
             }
         }
+
+        # Cleanup
+        $RunspacePool.Close()
+        $RunspacePool.Dispose()
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
 
@@ -3261,20 +3196,6 @@ $lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing
 $lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
 $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
 
-$chkIncludeBadAddr = New-Object System.Windows.Forms.CheckBox
-$chkIncludeBadAddr.Text = "Track Bad_Address Occurrences"
-$chkIncludeBadAddr.Size = New-Object System.Drawing.Size(250, 20)
-$chkIncludeBadAddr.Location = New-Object System.Drawing.Point(15, 55)
-$dhcpOptionsGroupBox.Controls.Add($chkIncludeBadAddr)
-
-$lblBadAddrWarning = New-Object System.Windows.Forms.Label
-$lblBadAddrWarning.Text = "(Slower - queries lease database for conflicts)"
-$lblBadAddrWarning.Size = New-Object System.Drawing.Size(300, 20)
-$lblBadAddrWarning.Location = New-Object System.Drawing.Point(270, 55)
-$lblBadAddrWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblBadAddrWarning.ForeColor = [System.Drawing.Color]::DarkOrange
-$dhcpOptionsGroupBox.Controls.Add($lblBadAddrWarning)
-
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
@@ -3360,7 +3281,6 @@ $btnCollectDHCP.Add_Click({
         }
 
         $includeDNS = $chkIncludeDNS.Checked
-        $includeBad = $chkIncludeBadAddr.Checked
 
         Write-Log -Message "Starting DHCP statistics collection..." -Color "Cyan" -LogBox $dhcpLogBox
         Update-StatusBar -Status "Starting DHCP statistics collection..." -ProgressValue 0 -ProgressMax 100 -ProgressText "Initializing..."
@@ -3384,7 +3304,6 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpRunspace.SessionStateProxy.SetVariable("ScopeFilters", $scopeFilters)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("SpecificServers", $specificServers)
         $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeDNS", $includeDNS)
-        $script:dhcpRunspace.SessionStateProxy.SetVariable("IncludeBadAddresses", $includeBad)
 
         # Create PowerShell instance
         $script:dhcpPowerShell = [powershell]::Create()
@@ -3432,9 +3351,9 @@ $btnCollectDHCP.Add_Click({
 
                 # Script block for processing a single DHCP server
                 $ServerScriptBlock = {
-                    param($DHCPServerName, $ScopeFilters, $IncludeDNS, $IncludeBadAddresses)
+                    param($DHCPServerName, $ScopeFilters, $IncludeDNS)
 
-                    $ServerStats = @()
+                    $ServerStats = New-Object System.Collections.ArrayList
                     $ServerLogs = @()
 
                     try {
@@ -3481,36 +3400,15 @@ $btnCollectDHCP.Add_Click({
                             }
                         }
 
-                        $BadAddressMap = @{}
-                        if ($IncludeBadAddresses) {
-                            try {
-                                $ServerLogs += "Retrieving Bad_Address information from $DHCPServerName (sequential queries)..."
-
-                                # Use sequential queries to avoid nested runspace/job issues
-                                foreach ($Scope in $Scopes) {
-                                    try {
-                                        $badLeases = Get-DhcpServerv4Lease -ComputerName $DHCPServerName -ScopeId $Scope.ScopeId -ErrorAction SilentlyContinue |
-                                            Where-Object { $_.HostName -eq "BAD_ADDRESS" }
-                                        $BadAddressMap[$Scope.ScopeId] = if ($badLeases) { ($badLeases | Measure-Object).Count } else { 0 }
-                                    } catch {
-                                        $BadAddressMap[$Scope.ScopeId] = 0
-                                    }
-                                }
-
-                                $ServerLogs += "  Bad_Address retrieval complete for $DHCPServerName"
-                            } catch {
-                                $ServerLogs += "Warning: Could not retrieve Bad_Address information for $DHCPServerName : $($_.Exception.Message)"
-                            }
-                        }
-
                         foreach ($Scope in $Scopes) {
                             $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
                             if ($Stats) {
-                                $ServerStats += $Stats | Select-Object *,
+                                $obj = $Stats | Select-Object *,
                                     @{Name='DHCPServer'; Expression={$DHCPServerName}},
                                     @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
-                                    @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}},
-                                    @{Name='BadAddressCount'; Expression={$BadAddressMap[$Scope.ScopeId]}}
+                                    @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
+
+                                [void]$ServerStats.Add($obj)
                             }
                         }
 
@@ -3537,7 +3435,6 @@ $btnCollectDHCP.Add_Click({
                     [void]$PowerShell.AddArgument($Server.DnsName)
                     [void]$PowerShell.AddArgument($ScopeFilters)
                     [void]$PowerShell.AddArgument($IncludeDNS)
-                    [void]$PowerShell.AddArgument($IncludeBadAddresses)
 
                     $Runspaces += [PSCustomObject]@{
                         PowerShell = $PowerShell
