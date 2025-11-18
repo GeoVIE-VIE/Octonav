@@ -127,6 +127,21 @@ function Get-DNACenterServers {
     return @([pscustomobject]@{ Name = "Please Configure"; Url = "https://your-dnac-server.example.com" })
 }
 
+function Add-DNATreeNode {
+    <#
+    .SYNOPSIS
+        Helper function to add TreeNode with Tag property to parent node
+    #>
+    param(
+        [System.Windows.Forms.TreeNode]$ParentNode,
+        [string]$Text,
+        [string]$Tag
+    )
+    $node = New-Object System.Windows.Forms.TreeNode($Text)
+    $node.Tag = $Tag
+    $ParentNode.Nodes.Add($node) | Out-Null
+}
+
 # ============================================
 # INITIALIZE SETTINGS & GLOBAL VARIABLES
 # ============================================
@@ -1037,14 +1052,6 @@ $script:dnaTreeView.ShowRootLines = $true
 $dnaTreeGroupBox.Controls.Add($script:dnaTreeView)
 
 # Populate TreeView with DNA Center functions
-# Helper function to add child nodes with tags
-function Add-DNATreeNode {
-    param($ParentNode, $Text, $Tag)
-    $node = New-Object System.Windows.Forms.TreeNode($Text)
-    $node.Tag = $Tag
-    $ParentNode.Nodes.Add($node) | Out-Null
-}
-
 # Device Information category
 $nodeDeviceInfo = New-Object System.Windows.Forms.TreeNode("Device Information")
 Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Basic Information" -Tag "Get-NetworkDevicesBasic"
