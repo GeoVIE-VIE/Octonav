@@ -31,22 +31,22 @@ $ErrorActionPreference = "Stop"
 
 # These should be set by the caller before using these functions
 if (-not (Get-Variable -Name "script:dnaCenterToken" -ErrorAction SilentlyContinue)) {
-    $script:dnaCenterToken = $null
+    $global:dnaCenterToken = $null
 }
 if (-not (Get-Variable -Name "script:dnaCenterTokenExpiry" -ErrorAction SilentlyContinue)) {
-    $script:dnaCenterTokenExpiry = $null
+    $global:dnaCenterTokenExpiry = $null
 }
 if (-not (Get-Variable -Name "script:dnaCenterHeaders" -ErrorAction SilentlyContinue)) {
-    $script:dnaCenterHeaders = $null
+    $global:dnaCenterHeaders = $null
 }
 if (-not (Get-Variable -Name "script:selectedDnaCenter" -ErrorAction SilentlyContinue)) {
-    $script:selectedDnaCenter = $null
+    $global:selectedDnaCenter = $null
 }
 if (-not (Get-Variable -Name "script:allDNADevices" -ErrorAction SilentlyContinue)) {
-    $script:allDNADevices = @()
+    $global:allDNADevices = @()
 }
 if (-not (Get-Variable -Name "script:selectedDNADevices" -ErrorAction SilentlyContinue)) {
-    $script:selectedDNADevices = @()
+    $global:selectedDNADevices = @()
 }
 if (-not (Get-Variable -Name "script:outputDir" -ErrorAction SilentlyContinue)) {
     $script:outputDir = if ($env:OCTONAV_OUTPUT_DIR) { $env:OCTONAV_OUTPUT_DIR } else { "C:\DNACenter_Reports" }
@@ -386,13 +386,13 @@ function Test-DNACTokenValid {
         Boolean - $true if token is valid, $false otherwise
     #>
     # Check if token exists and is not expired
-    if (-not $script:dnaCenterToken) {
+    if (-not $global:dnaCenterToken) {
         return $false
     }
 
-    if ($script:dnaCenterTokenExpiry) {
+    if ($global:dnaCenterTokenExpiry) {
         # Check if token has expired (with 5 minute buffer)
-        $expiryWithBuffer = $script:dnaCenterTokenExpiry.AddMinutes(-5)
+        $expiryWithBuffer = $global:dnaCenterTokenExpiry.AddMinutes(-5)
         if ((Get-Date) -gt $expiryWithBuffer) {
             Write-Verbose "DNA Center token has expired"
             return $false
@@ -448,12 +448,12 @@ function Connect-DNACenter {
 
         if ($response -and $response.Token) {
             Write-Log -Message "Authentication successful!" -Color "Green" -LogBox $LogBox
-            $script:dnaCenterToken = $response.Token
+            $global:dnaCenterToken = $response.Token
 
             # DNA Center tokens typically expire after 1 hour
-            $script:dnaCenterTokenExpiry = (Get-Date).AddHours(1)
+            $global:dnaCenterTokenExpiry = (Get-Date).AddHours(1)
 
-            $script:dnaCenterHeaders = @{
+            $global:dnaCenterHeaders = @{
                 "X-Auth-Token" = $response.Token
                 "Content-Type" = "application/json"
             }
@@ -492,7 +492,7 @@ function Load-AllDNADevices {
     #>
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
-    if (-not $script:dnaCenterHeaders) {
+    if (-not $global:dnaCenterHeaders) {
         Write-Log -Message "Not authenticated to DNA Center" -Color "Red" -LogBox $LogBox
         return $false
     }
@@ -506,8 +506,8 @@ function Load-AllDNADevices {
         $aggregatedDevices = [System.Collections.Generic.List[object]]::new()
 
         while ($true) {
-            $uri = "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device?offset=$offset&limit=$pageSize"
-            $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 60
+            $uri = "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device?offset=$offset&limit=$pageSize"
+            $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 60
 
             $pageDevices = @()
             if ($response -and $response.response) {
@@ -538,9 +538,9 @@ function Load-AllDNADevices {
         }
 
         if ($aggregatedDevices.Count -gt 0) {
-            $script:allDNADevices = $aggregatedDevices.ToArray()
-            $script:selectedDNADevices = @()
-            Write-Log -Message "Loaded $($script:allDNADevices.Count) devices" -Color "Green" -LogBox $LogBox
+            $global:allDNADevices = $aggregatedDevices.ToArray()
+            $global:selectedDNADevices = @()
+            Write-Log -Message "Loaded $($global:allDNADevices.Count) devices" -Color "Green" -LogBox $LogBox
             return $true
         }
 
@@ -578,7 +578,7 @@ function Filter-DNADevices {
         [System.Windows.Forms.RichTextBox]$LogBox
     )
 
-    if (-not $script:allDNADevices -or $script:allDNADevices.Count -eq 0) {
+    if (-not $global:allDNADevices -or $global:allDNADevices.Count -eq 0) {
         Write-Log -Message "No devices loaded" -Color "Red" -LogBox $LogBox
         return @()
     }
@@ -600,14 +600,14 @@ function Filter-DNADevices {
     $rolePattern = if (-not [string]::IsNullOrWhiteSpace($Role)) { [regex]::Escape($Role.Trim()) } else { $null }
     $familyPattern = if (-not [string]::IsNullOrWhiteSpace($Family)) { [regex]::Escape($Family.Trim()) } else { $null }
 
-    $filtered = $script:allDNADevices | Where-Object {
+    $filtered = $global:allDNADevices | Where-Object {
         ($null -eq $hostPattern -or ($_.hostname -and $_.hostname -match $hostPattern)) -and
         ([string]::IsNullOrWhiteSpace($IPAddress) -or ($_.managementIpAddress -eq $IPAddress)) -and
         ($null -eq $rolePattern -or ($_.role -and $_.role -match $rolePattern)) -and
         ($null -eq $familyPattern -or ($_.family -and $_.family -match $familyPattern))
     }
 
-    $script:selectedDNADevices = $filtered
+    $global:selectedDNADevices = $filtered
 
     $targetDescription = @()
     if ($hostPattern) { $targetDescription += "Hostname" }
@@ -638,7 +638,7 @@ function Get-NetworkDevicesBasic {
     Write-Log -Message "Fetching network devices (basic info)..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -683,7 +683,7 @@ function Get-NetworkDevicesDetailed {
     Write-Log -Message "Fetching network devices (detailed info)..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -732,7 +732,7 @@ function Get-DeviceInventoryCount {
     Write-Log -Message "Calculating device inventory counts..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -782,7 +782,7 @@ function Get-NetworkHealth {
 
     try {
         $timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-health?timestamp=$timestamp_ms" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-health?timestamp=$timestamp_ms" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $healthList = @()
         if ($response -and $response.response) {
@@ -819,7 +819,7 @@ function Get-ClientHealth {
 
     try {
         $timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/client-health?timestamp=$timestamp_ms" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/client-health?timestamp=$timestamp_ms" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $clientList = @()
         if ($response -and $response.response) {
@@ -856,7 +856,7 @@ function Get-DeviceReachability {
     Write-Log -Message "Fetching device reachability status..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -895,7 +895,7 @@ function Get-SitesLocations {
     Write-Log -Message "Fetching sites and locations..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/site" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/site" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $siteList = @()
         if ($response -and $response.response) {
@@ -930,7 +930,7 @@ function Get-ComplianceStatus {
     Write-Log -Message "Fetching compliance status..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -941,7 +941,7 @@ function Get-ComplianceStatus {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/compliance/$($device.id)" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/compliance/$($device.id)" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     $complianceList += [PSCustomObject]@{
@@ -981,7 +981,7 @@ function Get-Templates {
     Write-Log -Message "Fetching configuration templates..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/template-programmer/template" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/template-programmer/template" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $templateList = @()
         $templates = if ($response.response) { $response.response } else { $response }
@@ -1016,7 +1016,7 @@ function Get-PhysicalTopology {
     Write-Log -Message "Fetching physical topology..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/topology/physical-topology" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/topology/physical-topology" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $linkList = @()
         if ($response -and $response.response -and $response.response.links) {
@@ -1051,7 +1051,7 @@ function Get-OSPFNeighbors {
     Write-Log -Message "Fetching OSPF neighbors..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1062,7 +1062,7 @@ function Get-OSPFNeighbors {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/ospf-neighbor" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/ospf-neighbor" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     foreach ($neighbor in $response.response) {
@@ -1100,7 +1100,7 @@ function Get-CDPNeighbors {
     Write-Log -Message "Fetching CDP neighbors..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1111,7 +1111,7 @@ function Get-CDPNeighbors {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/neighbor" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/neighbor" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     foreach ($neighbor in $response.response) {
@@ -1151,7 +1151,7 @@ function Get-LLDPNeighbors {
     Write-Log -Message "Fetching LLDP neighbors..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1162,7 +1162,7 @@ function Get-LLDPNeighbors {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/interface/lldp" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/interface/lldp" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     foreach ($neighbor in $response.response) {
@@ -1200,7 +1200,7 @@ function Get-AccessPoints {
     Write-Log -Message "Fetching access points..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/wireless/access-point" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/wireless/access-point" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $apList = @()
         if ($response -and $response.response) {
@@ -1237,7 +1237,7 @@ function Get-IssuesEvents {
     Write-Log -Message "Fetching issues and events..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/issues" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/issues" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $issueList = @()
         if ($response -and $response.response) {
@@ -1274,7 +1274,7 @@ function Get-SoftwareImageInfo {
     Write-Log -Message "Fetching software/image information..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/image/importation" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/image/importation" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
         $imageList = @()
         if ($response -and $response.response) {
@@ -1310,7 +1310,7 @@ function Get-VLANs {
     Write-Log -Message "Fetching VLANs..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1321,7 +1321,7 @@ function Get-VLANs {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     $vlans = $response.response | Where-Object { $_.vlanId -and $_.vlanId -ne "N/A" } | Select-Object -Property vlanId -Unique
@@ -1359,7 +1359,7 @@ function Get-DeviceModules {
     Write-Log -Message "Fetching device module information..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1370,7 +1370,7 @@ function Get-DeviceModules {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/module?deviceId=$($device.id)" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/module?deviceId=$($device.id)" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     foreach ($module in $response.response) {
@@ -1408,7 +1408,7 @@ function Get-DeviceInterfaces {
     Write-Log -Message "Fetching device interfaces..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1419,7 +1419,7 @@ function Get-DeviceInterfaces {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 15
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/interface/network-device/$($device.id)" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 15
 
                 if ($response -and $response.response) {
                     foreach ($interface in $response.response) {
@@ -1459,7 +1459,7 @@ function Get-DeviceConfigurations {
     Write-Log -Message "Fetching device configurations..." -Color "Yellow" -LogBox $LogBox
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1480,7 +1480,7 @@ function Get-DeviceConfigurations {
 
         foreach ($device in $devices) {
             try {
-                $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/config" -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+                $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/config" -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
                 $configContent = if ($response.response) { $response.response } else { $response }
 
@@ -1540,7 +1540,7 @@ function Get-EventSeriesLastTimestamp {
         return $null
     }
 
-    $baseUrl = "$($script:selectedDnaCenter)/dna/data/api/v1/event/event-series"
+    $baseUrl = "$($global:selectedDnaCenter)/dna/data/api/v1/event/event-series"
     $queryParts = @()
 
     if ($EventId) {
@@ -1573,7 +1573,7 @@ function Get-EventSeriesLastTimestamp {
     $requestUrl = if ($queryString) { "$baseUrl?$queryString" } else { $baseUrl }
 
     try {
-        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+        $response = Invoke-RestMethod -Uri $requestUrl -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
     } catch {
         return $null
     }
@@ -1619,7 +1619,7 @@ function Get-LastDeviceAvailabilityEventTime {
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1661,7 +1661,7 @@ function Get-LastDisconnectTime {
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1676,10 +1676,10 @@ function Get-LastDisconnectTime {
         $disconnectList = @()
 
         foreach ($device in $devices) {
-            $enrichmentUrl = "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/enrichment-details"
+            $enrichmentUrl = "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$($device.id)/enrichment-details"
 
             try {
-                $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+                $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
                 $lastDisconnect = $null
                 if ($response) {
@@ -1739,7 +1739,7 @@ function Get-LastPingReachableTime {
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
     try {
-        $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+        $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
         if (-not $devices -or $devices.Count -eq 0) {
             Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -1763,8 +1763,8 @@ function Get-LastPingReachableTime {
 
             if ($deviceId) {
                 try {
-                    $enrichmentUrl = "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device/$deviceId"
-                    $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $script:dnaCenterHeaders -TimeoutSec 30
+                    $enrichmentUrl = "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device/$deviceId"
+                    $response = Invoke-RestMethod -Uri $enrichmentUrl -Method Get -Headers $global:dnaCenterHeaders -TimeoutSec 30
 
                     if ($response -and $response.response) {
                         $deviceData = $response.response
@@ -2009,9 +2009,9 @@ function Invoke-PathTrace {
 
         $requestJson = $requestBody | ConvertTo-Json -Depth 10
 
-        $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/flow-analysis" `
+        $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/flow-analysis" `
             -Method Post `
-            -Headers $script:dnaCenterHeaders `
+            -Headers $global:dnaCenterHeaders `
             -Body $requestJson `
             -ContentType "application/json" `
             -TimeoutSec 30
@@ -2029,9 +2029,9 @@ function Invoke-PathTrace {
                 Start-Sleep -Seconds 2
                 $attempts++
 
-                $statusResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/flow-analysis/$flowAnalysisId" `
+                $statusResponse = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/flow-analysis/$flowAnalysisId" `
                     -Method Get `
-                    -Headers $script:dnaCenterHeaders `
+                    -Headers $global:dnaCenterHeaders `
                     -TimeoutSec 30
 
                 if ($statusResponse -and $statusResponse.response) {
@@ -2124,7 +2124,7 @@ function Invoke-CommandRunner {
         return
     }
 
-    $devices = if ($script:selectedDNADevices.Count -gt 0) { $script:selectedDNADevices } else { $script:allDNADevices }
+    $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
 
     if (-not $devices -or $devices.Count -eq 0) {
         Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
@@ -2275,9 +2275,9 @@ function Invoke-CommandRunner {
                 } | ConvertTo-Json -Depth 10
 
                 try {
-                    $response = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/network-device-poller/cli/read-request" `
+                    $response = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/network-device-poller/cli/read-request" `
                         -Method Post `
-                        -Headers $script:dnaCenterHeaders `
+                        -Headers $global:dnaCenterHeaders `
                         -Body $requestBody `
                         -ContentType "application/json" `
                         -TimeoutSec 30
@@ -2294,9 +2294,9 @@ function Invoke-CommandRunner {
                             Start-Sleep -Seconds 2
                             $waited += 2
 
-                            $taskResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/task/$taskId" `
+                            $taskResponse = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/task/$taskId" `
                                 -Method Get `
-                                -Headers $script:dnaCenterHeaders `
+                                -Headers $global:dnaCenterHeaders `
                                 -TimeoutSec 30
 
                             if ($taskResponse -and $taskResponse.response) {
@@ -2328,9 +2328,9 @@ function Invoke-CommandRunner {
 
                         if ($fileId) {
                             # Retrieve output
-                            $fileResponse = Invoke-RestMethod -Uri "$($script:selectedDnaCenter)/dna/intent/api/v1/file/$fileId" `
+                            $fileResponse = Invoke-RestMethod -Uri "$($global:selectedDnaCenter)/dna/intent/api/v1/file/$fileId" `
                                 -Method Get `
-                                -Headers $script:dnaCenterHeaders `
+                                -Headers $global:dnaCenterHeaders `
                                 -TimeoutSec 30
 
                             $outputText = ""

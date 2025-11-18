@@ -22,6 +22,9 @@ function Write-Log {
     if ($LogBox) {
         try {
             $LogBox.Invoke([Action]{
+                # Suspend layout for better performance during rapid updates
+                $LogBox.SuspendLayout()
+
                 $LogBox.SelectionStart = $LogBox.TextLength
                 $LogBox.SelectionLength = 0
 
@@ -50,7 +53,12 @@ function Write-Log {
                 $timestamp = Get-Date -Format "HH:mm:ss"
                 $LogBox.AppendText("[$timestamp] $Message`r`n")
                 $LogBox.SelectionColor = $LogBox.ForeColor
+
+                # Resume layout and force scroll to bottom
+                $LogBox.ResumeLayout()
+                $LogBox.SelectionStart = $LogBox.TextLength
                 $LogBox.ScrollToCaret()
+                $LogBox.Refresh()
             })
         } catch {
             # Silently fail if log box is not available
