@@ -439,7 +439,7 @@ function Update-Dashboard {
         $script:lstRecentActivity.Items.Clear()
         $recentActivities = Get-RecentActivity -Settings $script:Settings -Count 10
         foreach ($activity in $recentActivities) {
-            $script:lstRecentActivity.Items.Add($activity)
+            $script:lstRecentActivity.Items.Add($activity) | Out-Null
         }
 
     } catch {
