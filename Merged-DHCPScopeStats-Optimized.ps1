@@ -420,14 +420,15 @@ if ($AllStats.Count -gt 0) {
     # Output to CSV
     $OutputPath = Join-Path $OutputDir "DHCPScopeStats_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
 
+    # Format columns in the requested order: Scope ID, DHCP Server, Description, Addresses Free, Addresses in use, Percentage in use, DNS IP/information
     if ($IncludeDNS -and $IncludeBadAddresses) {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse, BadAddressCount, DNSServers | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, BadAddressCount, DNSServers | Export-Csv -Path $OutputPath -NoTypeInformation -Force
     } elseif ($IncludeBadAddresses) {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse, BadAddressCount | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, BadAddressCount | Export-Csv -Path $OutputPath -NoTypeInformation -Force
     } elseif ($IncludeDNS) {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse, DNSServers | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers | Export-Csv -Path $OutputPath -NoTypeInformation -Force
     } else {
-        $AllStats | Select-Object DHCPServer, Description, ScopeId, AddressesFree, AddressesInUse, PercentageInUse | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        $AllStats | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse | Export-Csv -Path $OutputPath -NoTypeInformation -Force
     }
 
     # Create separate bad address summary CSV
