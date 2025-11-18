@@ -402,11 +402,11 @@ $lblAdminStatus.Location = New-Object System.Drawing.Point(10, 10)
 $lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblAdminStatus.TextAlign = "MiddleLeft"
 if ($script:IsRunningAsAdmin) {
-    $lblAdminStatus.Text = "✓ Administrator Privileges: ACTIVE - Network configuration enabled"
+    $lblAdminStatus.Text = "[OK] Administrator Privileges: ACTIVE - Network configuration enabled"
     $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
     $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)  # Light green
 } else {
-    $lblAdminStatus.Text = "⚠ Administrator Required - Right-click and select 'Run as Administrator' to enable this tab"
+    $lblAdminStatus.Text = "[!] Administrator Required - Right-click and select 'Run as Administrator' to enable this tab"
     $lblAdminStatus.ForeColor = [System.Drawing.Color]::DarkOrange
     $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(255, 245, 230)  # Light orange
 }
@@ -522,7 +522,7 @@ $btnApplyConfig.Add_Click({
 
         # Validate IP address
         if (-not (Test-IPAddress -IPAddress $ip)) {
-            Write-Log -Message "Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)" -Color "Red" -LogBox $netLogBox
+            Write-Log -Message 'Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)' -Color 'Red' -LogBox $netLogBox
             [System.Windows.Forms.MessageBox]::Show("Invalid IP address format!", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
@@ -590,7 +590,7 @@ $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab2.Controls.Add($dhcpServerGroupBox)
 
 $lblServerInfo = New-Object System.Windows.Forms.Label
-$lblServerInfo.Text = "Specify DHCP servers (comma-separated, leave blank to auto-discover from domain):"
+$lblServerInfo.Text = 'Specify DHCP servers (comma-separated, leave blank to auto-discover from domain):'
 $lblServerInfo.Location = New-Object System.Drawing.Point(15, 25)
 $lblServerInfo.Size = New-Object System.Drawing.Size(550, 20)
 $lblServerInfo.ForeColor = [System.Drawing.Color]::DarkGreen
@@ -626,7 +626,7 @@ $dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
 $tab2.Controls.Add($dhcpFilterGroupBox)
 
 $lblScopeFilter = New-Object System.Windows.Forms.Label
-$lblScopeFilter.Text = "Filter by scope names (comma-separated, leave blank for all scopes):"
+$lblScopeFilter.Text = 'Filter by scope names (comma-separated, leave blank for all scopes):'
 $lblScopeFilter.Size = New-Object System.Drawing.Size(450, 20)
 $lblScopeFilter.Location = New-Object System.Drawing.Point(15, 25)
 $dhcpFilterGroupBox.Controls.Add($lblScopeFilter)
@@ -1008,7 +1008,7 @@ $nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device R
 $nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Compliance Status"))).Tag = "Get-ComplianceStatus"
 $script:dnaTreeView.Nodes.Add($nodeNetworkHealth)
 
-$nodeTopology = New-Object System.Windows.Forms.TreeNode("Topology & Neighbors")
+$nodeTopology = New-Object System.Windows.Forms.TreeNode("Topology and Neighbors")
 $nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Physical Topology"))).Tag = "Get-PhysicalTopology"
 $nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("OSPF Neighbors"))).Tag = "Get-OSPFNeighbors"
 $nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("CDP Neighbors"))).Tag = "Get-CDPNeighbors"
@@ -1022,7 +1022,7 @@ $nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Sites/
 $nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Access Points"))).Tag = "Get-AccessPoints"
 $script:dnaTreeView.Nodes.Add($nodeNetworkServices)
 
-$nodeSoftwareIssues = New-Object System.Windows.Forms.TreeNode("Software & Issues")
+$nodeSoftwareIssues = New-Object System.Windows.Forms.TreeNode("Software and Issues")
 $nodeSoftwareIssues.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Software Images"))).Tag = "Get-SoftwareImageInfo"
 $nodeSoftwareIssues.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Issues/Events"))).Tag = "Get-IssuesEvents"
 $script:dnaTreeView.Nodes.Add($nodeSoftwareIssues)
@@ -1243,7 +1243,7 @@ $mainForm.Add_FormClosing({
             }
             $script:Settings.WindowMaximized = $false
         } else {
-            $script:Settings.WindowMaximized = ($mainForm.WindowState -eq "Maximized")
+            $script:Settings.WindowMaximized = ($mainForm.WindowState -eq [System.Windows.Forms.FormWindowState]::Maximized)
         }
 
         Save-OctoNavSettings -Settings $script:Settings
