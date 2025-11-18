@@ -1037,48 +1037,62 @@ $script:dnaTreeView.ShowRootLines = $true
 $dnaTreeGroupBox.Controls.Add($script:dnaTreeView)
 
 # Populate TreeView with DNA Center functions
+# Helper function to add child nodes with tags
+function Add-DNATreeNode {
+    param($ParentNode, $Text, $Tag)
+    $node = New-Object System.Windows.Forms.TreeNode($Text)
+    $node.Tag = $Tag
+    $ParentNode.Nodes.Add($node) | Out-Null
+}
+
+# Device Information category
 $nodeDeviceInfo = New-Object System.Windows.Forms.TreeNode("Device Information")
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Basic Information"))).Tag = "Get-NetworkDevicesBasic"
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Detailed Information"))).Tag = "Get-NetworkDevicesDetailed"
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device Count"))).Tag = "Get-DeviceInventoryCount"
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device Modules"))).Tag = "Get-DeviceModules"
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device Interfaces"))).Tag = "Get-DeviceInterfaces"
-$nodeDeviceInfo.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device Configurations"))).Tag = "Get-DeviceConfigurations"
-$script:dnaTreeView.Nodes.Add($nodeDeviceInfo)
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Basic Information" -Tag "Get-NetworkDevicesBasic"
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Detailed Information" -Tag "Get-NetworkDevicesDetailed"
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Device Count" -Tag "Get-DeviceInventoryCount"
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Device Modules" -Tag "Get-DeviceModules"
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Device Interfaces" -Tag "Get-DeviceInterfaces"
+Add-DNATreeNode -ParentNode $nodeDeviceInfo -Text "Device Configurations" -Tag "Get-DeviceConfigurations"
+$script:dnaTreeView.Nodes.Add($nodeDeviceInfo) | Out-Null
 
+# Network Health category
 $nodeNetworkHealth = New-Object System.Windows.Forms.TreeNode("Network Health")
-$nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Overall Network Health"))).Tag = "Get-NetworkHealth"
-$nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Client Health"))).Tag = "Get-ClientHealth"
-$nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Device Reachability"))).Tag = "Get-DeviceReachability"
-$nodeNetworkHealth.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Compliance Status"))).Tag = "Get-ComplianceStatus"
-$script:dnaTreeView.Nodes.Add($nodeNetworkHealth)
+Add-DNATreeNode -ParentNode $nodeNetworkHealth -Text "Overall Network Health" -Tag "Get-NetworkHealth"
+Add-DNATreeNode -ParentNode $nodeNetworkHealth -Text "Client Health" -Tag "Get-ClientHealth"
+Add-DNATreeNode -ParentNode $nodeNetworkHealth -Text "Device Reachability" -Tag "Get-DeviceReachability"
+Add-DNATreeNode -ParentNode $nodeNetworkHealth -Text "Compliance Status" -Tag "Get-ComplianceStatus"
+$script:dnaTreeView.Nodes.Add($nodeNetworkHealth) | Out-Null
 
+# Topology and Neighbors category
 $nodeTopology = New-Object System.Windows.Forms.TreeNode("Topology and Neighbors")
-$nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Physical Topology"))).Tag = "Get-PhysicalTopology"
-$nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("OSPF Neighbors"))).Tag = "Get-OSPFNeighbors"
-$nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("CDP Neighbors"))).Tag = "Get-CDPNeighbors"
-$nodeTopology.Nodes.Add((New-Object System.Windows.Forms.TreeNode("LLDP Neighbors"))).Tag = "Get-LLDPNeighbors"
-$script:dnaTreeView.Nodes.Add($nodeTopology)
+Add-DNATreeNode -ParentNode $nodeTopology -Text "Physical Topology" -Tag "Get-PhysicalTopology"
+Add-DNATreeNode -ParentNode $nodeTopology -Text "OSPF Neighbors" -Tag "Get-OSPFNeighbors"
+Add-DNATreeNode -ParentNode $nodeTopology -Text "CDP Neighbors" -Tag "Get-CDPNeighbors"
+Add-DNATreeNode -ParentNode $nodeTopology -Text "LLDP Neighbors" -Tag "Get-LLDPNeighbors"
+$script:dnaTreeView.Nodes.Add($nodeTopology) | Out-Null
 
+# Network Services category
 $nodeNetworkServices = New-Object System.Windows.Forms.TreeNode("Network Services")
-$nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("VLANs"))).Tag = "Get-VLANs"
-$nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Templates"))).Tag = "Get-Templates"
-$nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Sites/Locations"))).Tag = "Get-SitesLocations"
-$nodeNetworkServices.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Access Points"))).Tag = "Get-AccessPoints"
-$script:dnaTreeView.Nodes.Add($nodeNetworkServices)
+Add-DNATreeNode -ParentNode $nodeNetworkServices -Text "VLANs" -Tag "Get-VLANs"
+Add-DNATreeNode -ParentNode $nodeNetworkServices -Text "Templates" -Tag "Get-Templates"
+Add-DNATreeNode -ParentNode $nodeNetworkServices -Text "Sites/Locations" -Tag "Get-SitesLocations"
+Add-DNATreeNode -ParentNode $nodeNetworkServices -Text "Access Points" -Tag "Get-AccessPoints"
+$script:dnaTreeView.Nodes.Add($nodeNetworkServices) | Out-Null
 
+# Software and Issues category
 $nodeSoftwareIssues = New-Object System.Windows.Forms.TreeNode("Software and Issues")
-$nodeSoftwareIssues.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Software Images"))).Tag = "Get-SoftwareImageInfo"
-$nodeSoftwareIssues.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Issues/Events"))).Tag = "Get-IssuesEvents"
-$script:dnaTreeView.Nodes.Add($nodeSoftwareIssues)
+Add-DNATreeNode -ParentNode $nodeSoftwareIssues -Text "Software Images" -Tag "Get-SoftwareImageInfo"
+Add-DNATreeNode -ParentNode $nodeSoftwareIssues -Text "Issues/Events" -Tag "Get-IssuesEvents"
+$script:dnaTreeView.Nodes.Add($nodeSoftwareIssues) | Out-Null
 
+# Advanced Tools category
 $nodeAdvanced = New-Object System.Windows.Forms.TreeNode("Advanced Tools")
-$nodeAdvanced.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Path Trace"))).Tag = "Invoke-PathTrace"
-$nodeAdvanced.Nodes.Add((New-Object System.Windows.Forms.TreeNode("CLI Command Runner"))).Tag = "Invoke-CommandRunner"
-$nodeAdvanced.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Last Disconnect Times"))).Tag = "Get-LastDisconnectTime"
-$nodeAdvanced.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Availability Events"))).Tag = "Get-LastDeviceAvailabilityEventTime"
-$nodeAdvanced.Nodes.Add((New-Object System.Windows.Forms.TreeNode("Last Ping Reachable"))).Tag = "Get-LastPingReachableTime"
-$script:dnaTreeView.Nodes.Add($nodeAdvanced)
+Add-DNATreeNode -ParentNode $nodeAdvanced -Text "Path Trace" -Tag "Invoke-PathTrace"
+Add-DNATreeNode -ParentNode $nodeAdvanced -Text "CLI Command Runner" -Tag "Invoke-CommandRunner"
+Add-DNATreeNode -ParentNode $nodeAdvanced -Text "Last Disconnect Times" -Tag "Get-LastDisconnectTime"
+Add-DNATreeNode -ParentNode $nodeAdvanced -Text "Availability Events" -Tag "Get-LastDeviceAvailabilityEventTime"
+Add-DNATreeNode -ParentNode $nodeAdvanced -Text "Last Ping Reachable" -Tag "Get-LastPingReachableTime"
+$script:dnaTreeView.Nodes.Add($nodeAdvanced) | Out-Null
 
 # Expand all nodes by default
 $script:dnaTreeView.ExpandAll()
