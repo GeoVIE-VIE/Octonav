@@ -761,7 +761,7 @@ $dhcpLogBox.Size = New-Object System.Drawing.Size(940, 220)
 $dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
-$dhcpLogBox.ScrollBars = "Vertical"
+$dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
 $dhcpLogBox.WordWrap = $false
 $tab2.Controls.Add($dhcpLogBox)
 
@@ -863,12 +863,15 @@ $btnExportDHCP.Add_Click({
             New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
         }
 
-        Export-ToCSV -Data $script:dhcpResults -OutputPath $csvPath -Settings $script:Settings
-        Write-Log -Message "Exported to: $csvPath" -Color "Green" -LogBox $dhcpLogBox
-        [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$csvPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+        Write-Log -Message "Exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$exportedPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+        # Add to export history
+        Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
 
     } catch {
-        Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
+        Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Error exporting: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
@@ -1178,21 +1181,20 @@ $btnDNAConnect.Add_Click({
             return
         }
 
-        Initialize-DNACenter -LogBox $dnaLogBox
-        Update-StatusBar -Status "Connecting to DNA Center..."
+        Update-StatusBar -Status "Connecting to DNA Center..." -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
 
         $success = Connect-DNACenter -DnaCenter $script:selectedDnaCenter -Username $username -Password $password -LogBox $dnaLogBox
 
         if ($success) {
             $btnLoadDevices.Enabled = $true
-            Update-StatusBar -Status "Ready - Connected to DNA Center"
+            Update-StatusBar -Status "Ready - Connected to DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
             [System.Windows.Forms.MessageBox]::Show("Successfully connected to DNA Center!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
-            Update-StatusBar -Status "Ready - Failed to connect to DNA Center"
+            Update-StatusBar -Status "Ready - Failed to connect to DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
             [System.Windows.Forms.MessageBox]::Show("Failed to connect to DNA Center", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {
-        Write-Log -Message "Connection error: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        Write-Log -Message "Connection error: $($_.Exception.Message)" -Color "Error" -LogBox $dnaLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Connection error: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     } finally {
         # Clear password from memory
@@ -1203,7 +1205,7 @@ $btnDNAConnect.Add_Click({
 
 $btnLoadDevices.Add_Click({
     try {
-        Update-StatusBar -Status "Loading devices from DNA Center..."
+        Update-StatusBar -Status "Loading devices from DNA Center..." -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
         $success = Load-AllDNADevices -LogBox $dnaLogBox
 
         if ($success) {
@@ -1213,15 +1215,15 @@ $btnLoadDevices.Add_Click({
             }
 
             $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
-            Update-StatusBar -Status "Ready - Loaded $($script:allDNADevices.Count) devices from DNA Center"
+            Update-StatusBar -Status "Ready - Loaded $($script:allDNADevices.Count) devices from DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
 
             [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($script:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
-            Update-StatusBar -Status "Ready - Failed to load devices"
+            Update-StatusBar -Status "Ready - Failed to load devices" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
             [System.Windows.Forms.MessageBox]::Show("Failed to load devices", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {
-        Write-Log -Message "Error loading devices: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        Write-Log -Message "Error loading devices: $($_.Exception.Message)" -Color "Error" -LogBox $dnaLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
