@@ -152,14 +152,14 @@ $script:Settings = Get-OctoNavSettings
 # Get initial theme
 $script:CurrentTheme = Get-Theme -ThemeName $script:Settings.Theme
 
-# Initialize global variables for DNA Center
-$script:dnaCenterToken = $null
-$script:dnaCenterTokenExpiry = $null
-$script:dnaCenterHeaders = $null
-$script:selectedDnaCenter = $null
-$script:allDNADevices = @()
-$script:selectedDNADevices = @()
-$script:dnaCenterServers = @()
+# Initialize global variables for DNA Center (use global scope for module access)
+$global:dnaCenterToken = $null
+$global:dnaCenterTokenExpiry = $null
+$global:dnaCenterHeaders = $null
+$global:selectedDnaCenter = $null
+$global:allDNADevices = @()
+$global:selectedDNADevices = @()
+$global:dnaCenterServers = @()
 
 # Initialize global variables for DHCP
 $script:dhcpResults = @()
@@ -184,7 +184,7 @@ $script:outputDir = if ($script:Settings.DefaultExportPath) {
 }
 
 # Load DNA Center servers from config
-$script:dnaCenterServers = Get-DNACenterServers
+$global:dnaCenterServers = Get-DNACenterServers
 
 # ============================================
 # CREATE MAIN FORM
@@ -921,7 +921,7 @@ $comboDNAServer = New-Object System.Windows.Forms.ComboBox
 $comboDNAServer.Size = New-Object System.Drawing.Size(350, 20)
 $comboDNAServer.Location = New-Object System.Drawing.Point(150, 28)
 $comboDNAServer.DropDownStyle = "DropDownList"
-foreach ($server in $script:dnaCenterServers) {
+foreach ($server in $global:dnaCenterServers) {
     $comboDNAServer.Items.Add("$($server.Name) - $($server.Url)") | Out-Null
 }
 if ($comboDNAServer.Items.Count -gt 0) {
@@ -1172,12 +1172,27 @@ $script:dnaTreeView.Add_NodeMouseDoubleClick({
     param($sender, $e)
     try {
         if ($e.Node.Tag) {
+            # Check if connected first
+            if (-not $global:dnaCenterToken) {
+                Write-Log -Message "Please connect to DNA Center first" -Color "Warning" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+                [System.Windows.Forms.MessageBox]::Show("Please connect to DNA Center first", "Not Connected", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            # Check if devices are loaded
+            if (-not $global:allDNADevices -or $global:allDNADevices.Count -eq 0) {
+                Write-Log -Message "Please load devices first using the 'Load Devices' button" -Color "Warning" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+                [System.Windows.Forms.MessageBox]::Show("Please load devices first using the 'Load Devices' button", "No Devices", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
             $functionName = $e.Node.Tag
-            Write-Log -Message "Executing: $($e.Node.Text)" -Color "Cyan" -LogBox $dnaLogBox
+            Write-Log -Message "Executing: $($e.Node.Text)" -Color "Info" -LogBox $dnaLogBox -Theme $script:CurrentTheme
             & $functionName -LogBox $dnaLogBox
         }
     } catch {
-        Write-Log -Message "Error executing function: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        Write-Log -Message "Error executing function: $($_.Exception.Message)" -Color "Error" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+        [System.Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)", "Execution Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
 
@@ -1190,7 +1205,7 @@ $btnDNAConnect.Add_Click({
             return
         }
 
-        $script:selectedDnaCenter = $script:dnaCenterServers[$selectedIndex].Url
+        $global:selectedDnaCenter = $global:dnaCenterServers[$selectedIndex].Url
         $username = $txtDNAUser.Text.Trim()
         $password = $txtDNAPass.Text
 
@@ -1201,7 +1216,7 @@ $btnDNAConnect.Add_Click({
 
         Update-StatusBar -Status "Connecting to DNA Center..." -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
 
-        $success = Connect-DNACenter -DnaCenter $script:selectedDnaCenter -Username $username -Password $password -LogBox $dnaLogBox
+        $success = Connect-DNACenter -DnaCenter $global:selectedDnaCenter -Username $username -Password $password -LogBox $dnaLogBox
 
         if ($success) {
             $btnLoadDevices.Enabled = $true
@@ -1232,10 +1247,10 @@ $btnLoadDevices.Add_Click({
                 $control.Enabled = $true
             }
 
-            $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
-            Update-StatusBar -Status "Ready - Loaded $($script:allDNADevices.Count) devices from DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+            $lblDeviceSelectionStatus.Text = "Selected devices: All ($($global:allDNADevices.Count))"
+            Update-StatusBar -Status "Ready - Loaded $($global:allDNADevices.Count) devices from DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
 
-            [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($script:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($global:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
             Update-StatusBar -Status "Ready - Failed to load devices" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
             [System.Windows.Forms.MessageBox]::Show("Failed to load devices", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -1251,10 +1266,10 @@ $btnApplyDeviceFilter.Add_Click({
         $result = Filter-DNADevices -Hostname $txtFilterHostname.Text -IPAddress $txtFilterIPAddress.Text -Role $txtFilterRole.Text -Family $txtFilterFamily.Text -LogBox $dnaLogBox
 
         if ($result.Count -eq 0) {
-            $lblDeviceSelectionStatus.Text = "Selected devices: 0 of $($script:allDNADevices.Count)"
+            $lblDeviceSelectionStatus.Text = "Selected devices: 0 of $($global:allDNADevices.Count)"
             [System.Windows.Forms.MessageBox]::Show("No devices matched the provided filters.", "No Results", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
-            $lblDeviceSelectionStatus.Text = "Selected devices: $($result.Count) of $($script:allDNADevices.Count)"
+            $lblDeviceSelectionStatus.Text = "Selected devices: $($result.Count) of $($global:allDNADevices.Count)"
             [System.Windows.Forms.MessageBox]::Show("Filters applied successfully.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
     } catch {
@@ -1271,7 +1286,7 @@ $btnResetDeviceFilter.Add_Click({
         $txtFilterRole.Clear()
         $txtFilterFamily.Clear()
 
-        $lblDeviceSelectionStatus.Text = "Selected devices: All ($($script:allDNADevices.Count))"
+        $lblDeviceSelectionStatus.Text = "Selected devices: All ($($global:allDNADevices.Count))"
         [System.Windows.Forms.MessageBox]::Show("Device selection reset to all loaded devices.", "Reset", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     } catch {
         Write-Log -Message "Error resetting filters: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
@@ -1348,8 +1363,8 @@ $mainForm.Add_FormClosing({
         }
 
         # Clear sensitive data
-        $script:dnaCenterToken = $null
-        $script:dnaCenterHeaders = $null
+        $global:dnaCenterToken = $null
+        $global:dnaCenterHeaders = $null
     } catch {
         # Silently cleanup
     }
