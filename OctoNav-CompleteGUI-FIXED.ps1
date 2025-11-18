@@ -3346,8 +3346,10 @@ $btnCollectDHCP.Add_Click({
                 $AllStats = New-Object System.Collections.ArrayList
                 $TotalServers = $DHCPServers.Count
                 $MaxConcurrentRunspaces = 20
+                $ServerTimeoutMinutes = 5
 
                 Add-ScopedLog "Processing $TotalServers DHCP servers..."
+                Add-ScopedLog "Servers exceeding $ServerTimeoutMinutes minute(s) will be skipped."
 
                 # Script block for processing a single DHCP server
                 $ServerScriptBlock = {
@@ -3436,11 +3438,15 @@ $btnCollectDHCP.Add_Click({
                     [void]$PowerShell.AddArgument($ScopeFilters)
                     [void]$PowerShell.AddArgument($IncludeDNS)
 
+                    Add-ScopedLog "Started processing: $($Server.DnsName)"
+
                     $Runspaces += [PSCustomObject]@{
                         PowerShell = $PowerShell
                         Handle = $PowerShell.BeginInvoke()
                         ServerName = $Server.DnsName
                         Completed = $false
+                        StartTime = Get-Date
+                        Warned = $false
                     }
                 }
 
@@ -3475,6 +3481,21 @@ $btnCollectDHCP.Add_Click({
                                 Add-ScopedLog "[$CompletedServers/$TotalServers] Error from $($Runspace.ServerName): $($_.Exception.Message)"
                             } finally {
                                 $Runspace.PowerShell.Dispose()
+                            }
+                        } else {
+                            $elapsed = (Get-Date) - $Runspace.StartTime
+                            if ($elapsed.TotalMinutes -ge $ServerTimeoutMinutes) {
+                                Add-ScopedLog "[timeout] $($Runspace.ServerName) exceeded $ServerTimeoutMinutes minute(s); moving on without results."
+                                try { $Runspace.PowerShell.Stop() } catch { }
+                                $Runspace.Completed = $true
+                                $CompletedServers++
+                                try { $Runspace.PowerShell.Dispose() } catch { }
+                                continue
+                            }
+                            if (-not $Runspace.Warned -and $elapsed.TotalMinutes -ge 1) {
+                                $rounded = [Math]::Round($elapsed.TotalMinutes, 2)
+                                Add-ScopedLog "Still waiting on $($Runspace.ServerName) after $rounded minute(s)..."
+                                $Runspace.Warned = $true
                             }
                         }
                     }
