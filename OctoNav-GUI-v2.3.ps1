@@ -94,26 +94,30 @@ try {
     # Remove all custom modules from session to ensure clean reload
     Get-Module | Where-Object { $_.Path -like "$scriptPath\modules\*" } | Remove-Module -Force -ErrorAction SilentlyContinue
 
-    # Core modules
-    Import-Module "$scriptPath\modules\SettingsManager.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ThemeManager.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ValidationFunctions.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\HelperFunctions.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -ErrorAction Stop
+    # Core modules (import with -Global to ensure functions are available)
+    Import-Module "$scriptPath\modules\SettingsManager.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ThemeManager.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ValidationFunctions.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\HelperFunctions.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -Global -ErrorAction Stop
 
     # UI modules
-    Import-Module "$scriptPath\modules\UIEnhancements.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\SettingsDialog.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DashboardComponents.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\UIEnhancements.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SettingsDialog.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DashboardComponents.psm1" -Force -Global -ErrorAction Stop
 
     # Function modules
-    Import-Module "$scriptPath\modules\DNACenterFunctions.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -ErrorAction Stop
-    Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DNACenterFunctions.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -Global -ErrorAction Stop
 
     # Verify critical functions are available
     $criticalFunctions = @('Write-Log', 'Invoke-BackgroundOperation', 'New-EnhancedStatusBar')
     $missingFunctions = @()
+
+    # Get loaded module info for debugging
+    $helperModule = Get-Module | Where-Object { $_.Path -like "*HelperFunctions.psm1" }
+
     foreach ($func in $criticalFunctions) {
         if (-not (Get-Command $func -ErrorAction SilentlyContinue)) {
             $missingFunctions += $func
@@ -121,7 +125,18 @@ try {
     }
 
     if ($missingFunctions.Count -gt 0) {
-        throw "Critical functions not loaded: $($missingFunctions -join ', '). Please restart PowerShell and try again."
+        $debugInfo = "Critical functions not loaded: $($missingFunctions -join ', ').`n`n"
+
+        if ($helperModule) {
+            $exportedFunctions = $helperModule.ExportedFunctions.Keys -join ', '
+            $debugInfo += "HelperFunctions module IS loaded.`n"
+            $debugInfo += "Exported functions: $exportedFunctions`n`n"
+        } else {
+            $debugInfo += "HelperFunctions module NOT loaded!`n`n"
+        }
+
+        $debugInfo += "Please close PowerShell completely and start a fresh session, then run the script again."
+        throw $debugInfo
     }
 
     Write-Host "All modules loaded successfully" -ForegroundColor Green
