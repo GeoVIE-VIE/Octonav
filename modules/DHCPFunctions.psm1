@@ -3,25 +3,18 @@
     DHCP Functions Module - Provides DHCP scope statistics collection and management.
 
 .DESCRIPTION
-    This module contains functions for gathering DHCP scope statistics from one or more
-    DHCP servers. It supports auto-discovery of DHCP servers, manual server specification,
-    scope filtering, DNS information collection, and parallel processing using runspace pools
-    for optimal performance.
-
-.VERSION
-    2.2
-
-.AUTHOR
-    OctoNav (Original), AI Assistant (Refined)
+    Collects DHCP scope statistics from one or more DHCP servers using parallel processing.
+    Supports:
+    - Auto-discovery of DHCP servers (Get-DhcpServerInDC)
+    - Manual server list
+    - Scope name filtering
+    - Optional DNS option (ID 6) lookup
+    - Parallel processing via runspace pool
+    - UI integration via RichTextBox logging and StatusBar callback
 
 .NOTES
-    Requires: PowerShell 5.0+
+    Requires: PowerShell 5.1+
     Module Dependencies: DHCP Server PowerShell Module (DhcpServer)
-
-    REFINEMENTS:
-    - Added StatusBarCallback parameter to Get-DHCPScopeStatistics to avoid "parameter cannot be found" errors.
-    - Introduced Invoke-StatusBar helper to safely call status bar callbacks.
-    - Minor robustness tweaks around collections and error handling.
 #>
 
 function Test-ServerName {
@@ -45,7 +38,7 @@ function Test-ServerName {
         return $false
     }
 
-    # Basic RFC1123 host/FDQN validation
+    # Basic RFC1123 host/FQDN validation
     if ($trimmed -notmatch '^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$') {
         return $false
     }
@@ -92,71 +85,10 @@ function Get-SanitizedErrorMessage {
     return $message
 }
 
-function Write-Log {
-    <#
-    .SYNOPSIS
-        Writes colored log messages to a RichTextBox with timestamps.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-
-        [Parameter(Mandatory = $false)]
-        [string]$Color = 'Black',
-
-        [Parameter(Mandatory = $false)]
-        [System.Windows.Forms.RichTextBox]$LogBox
-    )
-
-    if (-not $LogBox) { return }
-
-    try {
-        # Make sure assemblies are loaded if the hosting app hasn't already
-        Add-Type -AssemblyName System.Windows.Forms, System.Drawing -ErrorAction SilentlyContinue | Out-Null
-    } catch { }
-
-    try {
-        $action = [Action]{
-            $LogBox.SuspendLayout()
-
-            $LogBox.SelectionStart  = $LogBox.TextLength
-            $LogBox.SelectionLength = 0
-            $LogBox.SelectionColor  = switch ($Color) {
-                'Green'   { [System.Drawing.Color]::Green }
-                'Red'     { [System.Drawing.Color]::Red }
-                'Yellow'  { [System.Drawing.Color]::DarkOrange }
-                'Cyan'    { [System.Drawing.Color]::DarkCyan }
-                'Magenta' { [System.Drawing.Color]::Magenta }
-                default   { [System.Drawing.Color]::Black }
-            }
-
-            $timestamp = Get-Date -Format 'HH:mm:ss'
-            $LogBox.AppendText("[$timestamp] $Message`r`n")
-
-            # Reset color and scroll
-            $LogBox.SelectionColor = $LogBox.ForeColor
-            $LogBox.ResumeLayout()
-            $LogBox.SelectionStart = $LogBox.TextLength
-            $LogBox.ScrollToCaret()
-            $LogBox.Refresh()
-        }
-
-        # If called from a different thread, use Invoke
-        if ($LogBox.InvokeRequired) {
-            $LogBox.Invoke($action)
-        } else {
-            & $action
-        }
-    } catch {
-        # Silently fail if log box is not available or disposed
-    }
-}
-
 function Invoke-StatusBar {
     <#
     .SYNOPSIS
-        Safely invokes a status bar update callback.
+        Safely invokes a status bar update callback (status, progress, progressText).
     #>
     [CmdletBinding()]
     param(
@@ -164,15 +96,21 @@ function Invoke-StatusBar {
         [scriptblock]$Callback,
 
         [Parameter(Mandatory = $true)]
-        [string]$Message
+        [string]$Status,
+
+        [Parameter(Mandatory = $false)]
+        [int]$Progress = 0,
+
+        [Parameter(Mandatory = $false)]
+        [string]$ProgressText = $Status
     )
 
     if (-not $Callback) { return }
 
     try {
-        & $Callback.Invoke($Message)
+        & $Callback.Invoke($Status, $Progress, $ProgressText)
     } catch {
-        # Do not let UI callback errors break the main logic
+        # Never let UI callback errors break main logic
     }
 }
 
@@ -182,44 +120,40 @@ function Get-DHCPScopeStatistics {
         Collects DHCP scope statistics from one or more DHCP servers using parallel processing.
 
     .DESCRIPTION
-        This function retrieves DHCP scope statistics from specified or auto-discovered DHCP servers.
-        It uses PowerShell runspace pools for optimal performance, supports scope filtering, and
-        optional DNS server information retrieval. This version provides enhanced error reporting
-        to diagnose connectivity and permission issues.
+        Retrieves DHCP scope statistics from specified or auto-discovered DHCP servers.
+        Uses runspace pools for performance, supports scope filtering, and optional
+        DNS server (Option ID 6) lookup. Integrates with OctoNav GUI via logging
+        and status bar callback.
 
     .PARAMETER ScopeFilters
-        Array of scope name filters to apply. Case-insensitive partial matching. If empty,
-        all scopes are returned.
+        Array of scope name filters to apply. Case-insensitive partial matching.
+        If empty, all scopes are returned.
 
     .PARAMETER SpecificServers
-        Array of specific DHCP server names to query. If empty, auto-discovers servers in domain.
+        Array of specific DHCP server names to query. If empty, auto-discovers
+        servers from the domain with Get-DhcpServerInDC.
 
     .PARAMETER IncludeDNS
         Boolean flag to include DNS server information (Option ID 6) for each scope.
 
     .PARAMETER LogBox
-        Optional RichTextBox control for logging output with timestamps and colors.
+        Optional RichTextBox control for logging output.
 
     .PARAMETER ThrottleLimit
-        The maximum number of concurrent server operations. Default is 20.
+        Maximum number of concurrent server operations. Default is 20.
 
     .PARAMETER StopToken
-        Reference to a boolean flag to enable job cancellation.
+        Reference to a boolean flag for cancellation. Set to $true to request stop.
 
     .PARAMETER StatusBarCallback
-        Optional scriptblock that receives status text for UI status bar updates.
+        Scriptblock callback used by the GUI status bar.
+        Signature: param($status, $progress, $progressText)
 
     .OUTPUTS
         PSCustomObject:
         - Success (bool)
         - Results (ArrayList of scope objects)
         - Error (string)
-
-    .EXAMPLE
-        Get-DHCPScopeStatistics -SpecificServers 'DHCP-Server01' -LogBox $richTextBox1
-
-    .EXAMPLE
-        Get-DHCPScopeStatistics -ScopeFilters @('Production', 'Test') -IncludeDNS $true
     #>
     [CmdletBinding()]
     param(
@@ -246,25 +180,29 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
-        # Determine servers
+        # -------------------------
+        # Determine DHCP servers
+        # -------------------------
         if ($SpecificServers -and $SpecificServers.Count -gt 0) {
-            Invoke-StatusBar -Callback $StatusBarCallback -Message 'Using specified DHCP servers...'
-            Write-Log -Message 'Using specified DHCP servers...' -Color 'Cyan' -LogBox $LogBox
+            Invoke-StatusBar -Callback $StatusBarCallback -Status 'Using specified DHCP servers...' -Progress 5 -ProgressText 'Validating server names...'
+            Write-Log -Message 'Using specified DHCP servers...' -Color 'Info' -LogBox $LogBox -Theme $null
 
             $validServers = @()
             foreach ($server in $SpecificServers) {
                 $trimmedServer = $server.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmedServer)) { continue }
+
                 if (Test-ServerName -ServerName $trimmedServer) {
                     $validServers += $trimmedServer
                 } else {
-                    Write-Log -Message "Invalid DHCP server name skipped: $trimmedServer" -Color 'Yellow' -LogBox $LogBox
+                    Write-Log -Message "Invalid DHCP server name skipped: $trimmedServer" -Color 'Warning' -LogBox $LogBox -Theme $null
                 }
             }
 
             if ($validServers.Count -eq 0) {
                 $msg = 'No valid DHCP server names provided.'
-                Write-Log -Message $msg -Color 'Red' -LogBox $LogBox
-                Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+                Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+                Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
                 return [PSCustomObject]@{
                     Success = $false
                     Results = @()
@@ -275,17 +213,19 @@ function Get-DHCPScopeStatistics {
             $DHCPServers = $validServers
         }
         else {
-            Invoke-StatusBar -Callback $StatusBarCallback -Message 'Discovering DHCP servers in domain...'
-            Write-Log -Message 'Discovering DHCP servers in domain...' -Color 'Cyan' -LogBox $LogBox
+            Invoke-StatusBar -Callback $StatusBarCallback -Status 'Discovering DHCP servers...' -Progress 5 -ProgressText 'Discovering DHCP servers in domain...'
+            Write-Log -Message 'Discovering DHCP servers in domain...' -Color 'Info' -LogBox $LogBox -Theme $null
+
             try {
                 $DHCPServers = (Get-DhcpServerInDC).DnsName
-                Write-Log -Message "Found $($DHCPServers.Count) DHCP servers." -Color 'Green' -LogBox $LogBox
-                Invoke-StatusBar -Callback $StatusBarCallback -Message "Found $($DHCPServers.Count) DHCP servers."
+                $countMsg = "Found $($DHCPServers.Count) DHCP servers."
+                Write-Log -Message $countMsg -Color 'Success' -LogBox $LogBox -Theme $null
+                Invoke-StatusBar -Callback $StatusBarCallback -Status $countMsg -Progress 10 -ProgressText $countMsg
             } catch {
                 $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
                 $msg = "Failed to get DHCP servers: $sanitizedError"
-                Write-Log -Message $msg -Color 'Red' -LogBox $LogBox
-                Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+                Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+                Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
                 return [PSCustomObject]@{
                     Success = $false
                     Results = @()
@@ -294,25 +234,48 @@ function Get-DHCPScopeStatistics {
             }
         }
 
-        # Pre-flight connectivity check
+        if (-not $DHCPServers -or $DHCPServers.Count -eq 0) {
+            $msg = 'No DHCP servers available.'
+            Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+            Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
+            return [PSCustomObject]@{
+                Success = $false
+                Results = @()
+                Error   = $msg
+            }
+        }
+
+        # -------------------------
+        # Pre-flight connectivity
+        # -------------------------
+        Write-Log -Message 'Performing pre-flight connectivity checks...' -Color 'Info' -LogBox $LogBox -Theme $null
+        Invoke-StatusBar -Callback $StatusBarCallback -Status 'Validating server connectivity...' -Progress 15 -ProgressText 'Pinging DHCP servers...'
+
         $OnlineServers = @()
+        $totalServers  = $DHCPServers.Count
+        $i             = 0
+
         foreach ($server in $DHCPServers) {
             if ($StopToken -and $StopToken.Value) { break }
 
-            Write-Log -Message "Pinging $server..." -Color 'Cyan' -LogBox $LogBox
-            Invoke-StatusBar -Callback $StatusBarCallback -Message "Pinging $server..."
+            $i++
+            $pct = 15 + [int](($i / [double]$totalServers) * 10)  # 15–25%
+
+            $pingMsg = "Pinging $server..."
+            Write-Log -Message $pingMsg -Color 'Info' -LogBox $LogBox -Theme $null
+            Invoke-StatusBar -Callback $StatusBarCallback -Status $pingMsg -Progress $pct -ProgressText $pingMsg
 
             if (Test-Connection -ComputerName $server -Count 1 -Quiet) {
                 $OnlineServers += $server
             } else {
-                Write-Log -Message "Server $server is offline or not responding to ping. Skipping." -Color 'Red' -LogBox $LogBox
+                Write-Log -Message "Server $server is offline or not responding to ping. Skipping." -Color 'Error' -LogBox $LogBox -Theme $null
             }
         }
 
         if ($OnlineServers.Count -eq 0) {
             $msg = 'No DHCP servers are online. Aborting.'
-            Write-Log -Message $msg -Color 'Red' -LogBox $LogBox
-            Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+            Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+            Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
             return [PSCustomObject]@{
                 Success = $false
                 Results = @()
@@ -322,7 +285,9 @@ function Get-DHCPScopeStatistics {
 
         $DHCPServers = $OnlineServers
 
-        # Scriptblock to run per server
+        # -------------------------
+        # Per-server script block
+        # -------------------------
         $ScriptBlock = {
             param(
                 [string]$ServerName,
@@ -348,14 +313,16 @@ function Get-DHCPScopeStatistics {
                     return $ResultObject
                 }
 
-                # Scope filtering by name
+                # Scope name filtering
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
+                        if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
                         $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$FilterUpper*" }
                         $FilteredScopes += $MatchingScopes
                     }
+
                     $Scopes = $FilteredScopes | Select-Object -Unique
                     if (-not $Scopes -or $Scopes.Count -eq 0) {
                         $ResultObject.Message = 'No scopes matched the provided filter(s).'
@@ -411,11 +378,13 @@ function Get-DHCPScopeStatistics {
             }
         }
 
-        $serverCountMsg = "Starting parallel processing of $($DHCPServers.Count) DHCP servers (Throttle: $ThrottleLimit)..."
-        Write-Log -Message $serverCountMsg -Color 'Cyan' -LogBox $LogBox
-        Invoke-StatusBar -Callback $StatusBarCallback -Message $serverCountMsg
+        # -------------------------
+        # Parallel processing
+        # -------------------------
+        $startMsg = "Starting parallel processing of $($DHCPServers.Count) DHCP servers (Throttle: $ThrottleLimit)..."
+        Write-Log -Message $startMsg -Color 'Info' -LogBox $LogBox -Theme $null
+        Invoke-StatusBar -Callback $StatusBarCallback -Status $startMsg -Progress 25 -ProgressText $startMsg
 
-        # Runspace pool setup
         $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $ThrottleLimit)
         $RunspacePool.Open()
 
@@ -448,10 +417,12 @@ function Get-DHCPScopeStatistics {
                     $CompletedCount++
                     $ServerResult = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
 
+                    $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)  # 25–100%
+
                     if ($ServerResult.Success) {
                         $msg = "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName) - $($ServerResult.Message)"
-                        Write-Log -Message $msg -Color 'Green' -LogBox $LogBox
-                        Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+                        Write-Log -Message $msg -Color 'Success' -LogBox $LogBox -Theme $null
+                        Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
 
                         if ($ServerResult.Scopes) {
                             [void]$AllStats.AddRange($ServerResult.Scopes)
@@ -459,8 +430,8 @@ function Get-DHCPScopeStatistics {
                     }
                     else {
                         $msg = "[$CompletedCount/$TotalServers] Failed: $($Runspace.ServerName) - $($ServerResult.Message)"
-                        Write-Log -Message $msg -Color 'Red' -LogBox $LogBox
-                        Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+                        Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+                        Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
                     }
 
                     $Runspace.PowerShell.Dispose()
@@ -470,8 +441,8 @@ function Get-DHCPScopeStatistics {
 
             if ($StopToken -and $StopToken.Value) {
                 $msg = "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation."
-                Write-Log -Message $msg -Color 'Yellow' -LogBox $LogBox
-                Invoke-StatusBar -Callback $StatusBarCallback -Message $msg
+                Write-Log -Message $msg -Color 'Warning' -LogBox $LogBox -Theme $null
+                Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
                 return [PSCustomObject]@{
                     Success = $false
                     Results = $AllStats
@@ -485,8 +456,8 @@ function Get-DHCPScopeStatistics {
         }
 
         $completeMsg = "Collection complete. Found $($AllStats.Count) total DHCP scopes."
-        Write-Log -Message $completeMsg -Color 'Green' -LogBox $LogBox
-        Invoke-StatusBar -Callback $StatusBarCallback -Message $completeMsg
+        Write-Log -Message $completeMsg -Color 'Success' -LogBox $LogBox -Theme $null
+        Invoke-StatusBar -Callback $StatusBarCallback -Status $completeMsg -Progress 100 -ProgressText $completeMsg
 
         return [PSCustomObject]@{
             Success = $true
@@ -496,9 +467,9 @@ function Get-DHCPScopeStatistics {
     }
     catch {
         $errorMessage = $_.Exception.Message
-        $fatalMsg     = "FATAL ERROR in main function: $errorMessage"
-        Write-Log -Message $fatalMsg -Color 'Red' -LogBox $LogBox
-        Invoke-StatusBar -Callback $StatusBarCallback -Message $fatalMsg
+        $fatalMsg     = "FATAL ERROR in Get-DHCPScopeStatistics: $errorMessage"
+        Write-Log -Message $fatalMsg -Color 'Error' -LogBox $LogBox -Theme $null
+        Invoke-StatusBar -Callback $StatusBarCallback -Status $fatalMsg -Progress 0 -ProgressText $fatalMsg
 
         return [PSCustomObject]@{
             Success = $false
@@ -508,11 +479,9 @@ function Get-DHCPScopeStatistics {
     }
 }
 
-# Export module members
 Export-ModuleMember -Function @(
     'Get-DHCPScopeStatistics',
     'Test-ServerName',
-    'Write-Log',
     'Get-SanitizedErrorMessage',
     'Invoke-StatusBar'
 )
