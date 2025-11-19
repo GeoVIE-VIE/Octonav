@@ -361,17 +361,17 @@ function Get-DHCPScopeStatistics {
                         # Match against Description (case-insensitive partial match)
                         $MatchingScopes = $Scopes | Where-Object {
                             $desc = if ($_.Description) { $_.Description.ToUpper() } else { "" }
-                            $match = $desc -like "*$FilterUpper*"
-                            if ($match) {
-                                $scriptDebug += "[SB-$ServerName]    MATCH: '$desc' contains '$FilterUpper'"
-                            }
-                            $match
+                            $desc -like "*$FilterUpper*"
                         }
 
-                        if ($MatchingScopes) {
-                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)"
+                        $matchCount = @($MatchingScopes).Count
+                        if ($matchCount -gt 0) {
+                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched $matchCount scope(s)"
+                            foreach ($ms in $MatchingScopes) {
+                                $scriptDebug += "[SB-$ServerName]    - MATCH: ScopeId=$($ms.ScopeId), Desc='$($ms.Description)'"
+                            }
                         } else {
-                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched 0 scopes - none of the descriptions contain '$FilterUpper'"
+                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched 0 scopes"
                         }
                         $FilteredScopes += $MatchingScopes
                     }

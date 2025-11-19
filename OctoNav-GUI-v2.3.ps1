@@ -1181,27 +1181,39 @@ $btnCollectDHCP.Add_Click({
 
             # Debug: Log result structure
             if ($actualResult) {
-                Write-Log -Message "Collection returned: Success=$($actualResult.Success), Results Count=$($actualResult.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                Write-Log -Message "DEBUG: Results type: $($actualResult.Results.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                if ($actualResult.Results.Count -gt 0) {
-                    Write-Log -Message "DEBUG: First result type: $($actualResult.Results[0].GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    Write-Log -Message "DEBUG: First result properties: $($actualResult.Results[0].PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult.Success = $($actualResult.Success)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult.Results type = $($actualResult.Results.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult.Results.Count = $($actualResult.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+                if ($actualResult.Results -and $actualResult.Results.Count -gt 0) {
+                    Write-Log -Message "DEBUG: Listing all $($actualResult.Results.Count) scope(s) returned:" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    for ($i = 0; $i -lt $actualResult.Results.Count; $i++) {
+                        $scope = $actualResult.Results[$i]
+                        Write-Log -Message "DEBUG:   [$($i+1)] ScopeId=$($scope.ScopeId), Server=$($scope.DHCPServer), Desc='$($scope.Description)'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    }
                 }
             } else {
-                Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult is NULL" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
 
             if ($actualResult -and $actualResult.Success) {
-            # Ensure Results is an array (even if empty)
-            $script:dhcpResults = if ($actualResult.Results) {
-                @($actualResult.Results)
-            } else {
-                @()
-            }
+                Write-Log -Message "DEBUG: Entering Success=true branch" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-            if ($script:dhcpResults.Count -gt 0) {
-                $btnExportDHCP.Enabled = $true
-                Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                # Ensure Results is an array (even if empty)
+                $script:dhcpResults = if ($actualResult.Results) {
+                    @($actualResult.Results)
+                } else {
+                    @()
+                }
+
+                Write-Log -Message "DEBUG: Assigned to script:dhcpResults, count = $($script:dhcpResults.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: btnExportDHCP state BEFORE enable = $($btnExportDHCP.Enabled)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+                if ($script:dhcpResults.Count -gt 0) {
+                    Write-Log -Message "DEBUG: Count > 0, enabling export button..." -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $btnExportDHCP.Enabled = $true
+                    Write-Log -Message "DEBUG: btnExportDHCP state AFTER enable = $($btnExportDHCP.Enabled)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                 # Auto-export if enabled
                 if ($script:Settings.AutoExportAfterCollection) {
