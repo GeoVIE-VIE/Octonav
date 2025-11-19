@@ -287,17 +287,28 @@ function Get-DHCPScopeStatistics {
                 }
 
                 foreach ($Scope in $Scopes) {
+                    Write-Output "DEBUG: Processing scope: $($Scope.Name) ($($Scope.ScopeId)) from $DHCPServerName"
+
+                    # Find corresponding statistics
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
                     if ($Stats) {
+                        Write-Output "DEBUG: Found statistics for scope $($Scope.ScopeId)"
+
                         $obj = $Stats | Select-Object *,
                             @{Name='DHCPServer'; Expression={$DHCPServerName}},
                             @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
                             @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
 
                         [void]$ServerStats.Add($obj)
+                        Write-Output "DEBUG: Added scope $($Scope.ScopeId) to results (ServerStats count: $($ServerStats.Count))"
+                    } else {
+                        Write-Output "WARNING: No statistics found for scope $($Scope.ScopeId) - it may be inactive"
                     }
                 }
+
+                Write-Output "DEBUG: Collected $($ServerStats.Count) scope(s) from $DHCPServerName - returning to main thread"
+
             } catch {
                 Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
             }
