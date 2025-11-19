@@ -887,21 +887,34 @@ $btnCollectDHCP.Add_Click({
 
         $includeDNS = $chkIncludeDNS.Checked
 
-        # Call DHCP collection function from module with stop token
-        Write-Log -Message "Starting DHCP statistics collection..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        $result = Get-DHCPScopeStatistics -ScopeFilters $scopeFilters -SpecificServers $specificServers -IncludeDNS $includeDNS -LogBox $dhcpLogBox -StopToken ([ref]$script:dhcpStopRequested) -StatusBarCallback {
-            param($status, $progress, $progressText)
-            Update-StatusBar -Status $status -ProgressValue $progress -ProgressMax 100 -ProgressText $progressText
-        }
+        # Call DHCP collection function in background to keep UI responsive
+        Write-Log -Message "Starting DHCP statistics collection in background..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-        # Debug: Log result structure
-        if ($result) {
-            Write-Log -Message "Collection returned: Success=$($result.Success), Results Count=$($result.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        } else {
-            Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        }
+        # Run collection in background
+        $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
+            param($filters, $servers, $dns, $stopRef)
 
-        if ($result -and $result.Success) {
+            # Import required module in background runspace
+            Import-Module "$using:scriptPath\modules\DHCPFunctions.psm1" -Force
+
+            # Call collection function
+            Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+
+        } -ArgumentList @($scopeFilters, $specificServers, $includeDNS, ([ref]$script:dhcpStopRequested)) -OnComplete {
+            param($result)
+
+            # Re-enable buttons
+            $btnCollectDHCP.Enabled = $true
+            $btnStopDHCP.Enabled = $false
+
+            # Debug: Log result structure
+            if ($result) {
+                Write-Log -Message "Collection returned: Success=$($result.Success), Results Count=$($result.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            } else {
+                Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+
+            if ($result -and $result.Success) {
             # Ensure Results is an array (even if empty)
             $script:dhcpResults = if ($result.Results) {
                 @($result.Results)
@@ -949,13 +962,16 @@ $btnCollectDHCP.Add_Click({
             [System.Windows.Forms.MessageBox]::Show("DHCP collection failed - no data returned", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
 
+            # Update status bar
+            Update-StatusBar -Status "Ready" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+            Hide-Progress -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+
+        } -Form $mainForm
+
     } catch {
         Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-    } finally {
         $btnCollectDHCP.Enabled = $true
         $btnStopDHCP.Enabled = $false
-        Update-StatusBar -Status "Ready" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
-        Hide-Progress -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
     }
 })
 
