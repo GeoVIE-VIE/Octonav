@@ -158,6 +158,12 @@ function Write-Log {
 .PARAMETER LogBox
     Optional RichTextBox control for logging output with timestamps and colors.
 
+.PARAMETER UseRunspaces
+    Use runspace pools instead of Start-Job (faster but requires proper serialization)
+
+.PARAMETER StopToken
+    Reference to a boolean flag to enable job cancellation
+
 .OUTPUTS
     System.Collections.ArrayList of custom objects containing DHCP scope statistics
 
@@ -173,7 +179,9 @@ function Get-DHCPScopeStatistics {
         [string[]]$SpecificServers = @(),
         [bool]$IncludeDNS = $false,
         [System.Windows.Forms.RichTextBox]$LogBox,
-        [scriptblock]$StatusBarCallback = $null
+        [scriptblock]$StatusBarCallback = $null,
+        [switch]$UseRunspaces = $false,
+        [ref]$StopToken = $null
     )
 
     try {
@@ -245,8 +253,9 @@ function Get-DHCPScopeStatistics {
                     foreach ($Filter in $ScopeFilters) {
                         Write-Output "DEBUG: Testing filter '$Filter' against scope names..."
 
-                        # Case-insensitive matching
-                        $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+                        # Case-insensitive matching - convert both filter and scope name to uppercase
+                        $FilterUpper = $Filter.ToUpper()
+                        $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$FilterUpper*" }
 
                         if ($MatchingScopes) {
                             Write-Output "DEBUG: Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
@@ -316,34 +325,175 @@ function Get-DHCPScopeStatistics {
             return $ServerStats
         }
 
-        # Process servers in parallel using Start-Job (better serialization than runspaces)
-        $Jobs = @()
+        # Check if stop was requested before starting
+        if ($StopToken -and $StopToken.Value) {
+            Write-Log -Message "Operation cancelled before starting" -Color "Yellow" -LogBox $LogBox
+            return @{
+                Success = $false
+                Results = @()
+                Error = "Operation cancelled by user"
+            }
+        }
+
         $AllStats = @()
-        $MaxConcurrentJobs = 20
         $CompletedCount = 0
         $TotalServers = $DHCPServers.Count
 
-        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Start-Job with batching)..." -Color "Cyan" -LogBox $LogBox
+        # Choose processing method based on UseRunspaces switch
+        if ($UseRunspaces) {
+            # RUNSPACE POOL IMPLEMENTATION - Proper serialization approach
+            Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Runspace Pool)..." -Color "Cyan" -LogBox $LogBox
 
-        # Process servers in batches
-        for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxConcurrentJobs) {
-            $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxConcurrentJobs - 1, $DHCPServers.Count - 1))]
+            # Create runspace pool
+            $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 20)
+            $RunspacePool.Open()
 
-            Write-Log -Message "Starting batch with $($Batch.Count) servers..." -Color "Info" -LogBox $LogBox
+            $Runspaces = @()
 
-            # Start jobs for current batch
-            foreach ($Server in $Batch) {
-                $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS
-                $Jobs += @{
-                    Job = $Job
-                    ServerName = $Server.DnsName
-                    Processed = $false
+            try {
+                # Start all runspaces
+                foreach ($Server in $DHCPServers) {
+                    # Check for stop token
+                    if ($StopToken -and $StopToken.Value) {
+                        Write-Log -Message "Stop requested, cancelling remaining servers..." -Color "Yellow" -LogBox $LogBox
+                        break
+                    }
+
+                    $PowerShell = [powershell]::Create()
+                    $PowerShell.RunspacePool = $RunspacePool
+
+                    # Add script block
+                    [void]$PowerShell.AddScript($ScriptBlock)
+                    [void]$PowerShell.AddArgument($Server.DnsName)
+                    [void]$PowerShell.AddArgument($ScopeFilters)
+                    [void]$PowerShell.AddArgument($IncludeDNS)
+
+                    # Begin invoke
+                    $AsyncResult = $PowerShell.BeginInvoke()
+
+                    $Runspaces += [PSCustomObject]@{
+                        PowerShell = $PowerShell
+                        AsyncResult = $AsyncResult
+                        ServerName = $Server.DnsName
+                        Completed = $false
+                    }
+                }
+
+                # Wait for all runspaces to complete
+                while ($Runspaces | Where-Object { -not $_.Completed }) {
+                    # Check for stop token
+                    if ($StopToken -and $StopToken.Value) {
+                        Write-Log -Message "Stop requested during processing..." -Color "Yellow" -LogBox $LogBox
+                        break
+                    }
+
+                    foreach ($Runspace in $Runspaces | Where-Object { -not $_.Completed }) {
+                        if ($Runspace.AsyncResult.IsCompleted) {
+                            $CompletedCount++
+                            $Runspace.Completed = $true
+
+                            Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName)" -Color "Green" -LogBox $LogBox
+
+                            try {
+                                # CRITICAL: Proper serialization approach for runspaces
+                                # The key is to use CliXml serialization/deserialization to ensure proper object transfer
+                                $Result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
+
+                                if ($Result) {
+                                    # Separate debug strings from data objects
+                                    foreach ($item in $Result) {
+                                        if ($item -is [string]) {
+                                            if ($item -like "DEBUG:*") {
+                                                Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                            } elseif ($item -like "WARNING:*") {
+                                                Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                                            }
+                                        } else {
+                                            # For runspaces, serialize and deserialize to ensure proper object transfer
+                                            # This is the KEY to making runspaces work with Select-Object objects
+                                            $xmlString = [System.Management.Automation.PSSerializer]::Serialize($item)
+                                            $deserializedItem = [System.Management.Automation.PSSerializer]::Deserialize($xmlString)
+                                            $AllStats += $deserializedItem
+                                        }
+                                    }
+                                }
+                            } catch {
+                                Write-Log -Message "Failed to receive from $($Runspace.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                            }
+
+                            # Clean up
+                            $Runspace.PowerShell.Dispose()
+                        }
+                    }
+
+                    Start-Sleep -Milliseconds 500
+                }
+
+                # Handle stop request - clean up remaining runspaces
+                if ($StopToken -and $StopToken.Value) {
+                    foreach ($Runspace in $Runspaces | Where-Object { -not $_.Completed }) {
+                        try {
+                            $Runspace.PowerShell.Stop()
+                            $Runspace.PowerShell.Dispose()
+                        } catch {
+                            # Ignore cleanup errors
+                        }
+                    }
+
+                    Write-Log -Message "Operation cancelled by user" -Color "Yellow" -LogBox $LogBox
+                    return @{
+                        Success = $false
+                        Results = $AllStats
+                        Error = "Operation cancelled by user"
+                    }
+                }
+
+            } finally {
+                # Clean up runspace pool
+                if ($RunspacePool) {
+                    $RunspacePool.Close()
+                    $RunspacePool.Dispose()
                 }
             }
 
-            # Wait for current batch to complete
-            while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
-                Start-Sleep -Seconds 2
+        } else {
+            # START-JOB IMPLEMENTATION - Better built-in serialization
+            Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Start-Job with batching)..." -Color "Cyan" -LogBox $LogBox
+
+            $Jobs = @()
+            $MaxConcurrentJobs = 20
+
+            # Process servers in batches
+            for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxConcurrentJobs) {
+                # Check for stop token before starting new batch
+                if ($StopToken -and $StopToken.Value) {
+                    Write-Log -Message "Stop requested, cancelling remaining batches..." -Color "Yellow" -LogBox $LogBox
+                    break
+                }
+
+                $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxConcurrentJobs - 1, $DHCPServers.Count - 1))]
+
+                Write-Log -Message "Starting batch with $($Batch.Count) servers..." -Color "Info" -LogBox $LogBox
+
+                # Start jobs for current batch
+                foreach ($Server in $Batch) {
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server.DnsName
+                        Processed = $false
+                    }
+                }
+
+                # Wait for current batch to complete
+                while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
+                    # Check for stop token during processing
+                    if ($StopToken -and $StopToken.Value) {
+                        Write-Log -Message "Stop requested during batch processing..." -Color "Yellow" -LogBox $LogBox
+                        break
+                    }
+
+                    Start-Sleep -Seconds 2
 
                 # Check for completed jobs and collect results
                 $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
@@ -388,32 +538,51 @@ function Get-DHCPScopeStatistics {
                     Remove-Job -Job $FailedJob.Job -Force
                 }
             }
-        }
+            }
 
-        # Final cleanup - handle any remaining jobs
-        $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
-        foreach ($RemainingJob in $RemainingJobs) {
-            if ($RemainingJob.Job.State -eq 'Completed') {
-                try {
-                    $Result = Receive-Job -Job $RemainingJob.Job
-                    if ($Result) {
-                        foreach ($item in $Result) {
-                            if ($item -is [string]) {
-                                if ($item -like "DEBUG:*") {
-                                    Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
-                                } elseif ($item -like "WARNING:*") {
-                                    Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
-                                }
-                            } else {
-                                $AllStats += $item
-                            }
-                        }
+            # Handle stop request - clean up all jobs
+            if ($StopToken -and $StopToken.Value) {
+                Write-Log -Message "Stopping all running jobs..." -Color "Yellow" -LogBox $LogBox
+                foreach ($JobInfo in $Jobs) {
+                    if ($JobInfo.Job.State -eq 'Running') {
+                        Stop-Job -Job $JobInfo.Job -ErrorAction SilentlyContinue
                     }
-                } catch {
-                    Write-Log -Message "Failed to receive from $($RemainingJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                    Remove-Job -Job $JobInfo.Job -Force -ErrorAction SilentlyContinue
+                }
+
+                Write-Log -Message "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation." -Color "Yellow" -LogBox $LogBox
+                return @{
+                    Success = $false
+                    Results = $AllStats
+                    Error = "Operation cancelled by user"
                 }
             }
-            Remove-Job -Job $RemainingJob.Job -Force
+
+            # Final cleanup - handle any remaining jobs
+            $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
+            foreach ($RemainingJob in $RemainingJobs) {
+                if ($RemainingJob.Job.State -eq 'Completed') {
+                    try {
+                        $Result = Receive-Job -Job $RemainingJob.Job
+                        if ($Result) {
+                            foreach ($item in $Result) {
+                                if ($item -is [string]) {
+                                    if ($item -like "DEBUG:*") {
+                                        Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                    } elseif ($item -like "WARNING:*") {
+                                        Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                                    }
+                                } else {
+                                    $AllStats += $item
+                                }
+                            }
+                        }
+                    } catch {
+                        Write-Log -Message "Failed to receive from $($RemainingJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                    }
+                }
+                Remove-Job -Job $RemainingJob.Job -Force
+            }
         }
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
