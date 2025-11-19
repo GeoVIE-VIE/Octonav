@@ -475,110 +475,146 @@ function Get-DHCPScopeStatistics {
         }
 
         # -------------------------
-        # Parallel processing
+        # Parallel processing with constant worker pool
         # -------------------------
-        Write-Host "[DHCP-DEBUG] Starting parallel processing of $($DHCPServers.Count) servers" -ForegroundColor Cyan
-        $startMsg = "Starting parallel processing of $($DHCPServers.Count) DHCP servers (Throttle: $ThrottleLimit)..."
+        $MaxConcurrentJobs = if ($DHCPServers.Count -lt $ThrottleLimit) { $DHCPServers.Count } else { $ThrottleLimit }
+
+        Write-Host "[DHCP-DEBUG] Starting constant worker pool with $MaxConcurrentJobs workers" -ForegroundColor Cyan
+        $startMsg = "Starting parallel processing of $($DHCPServers.Count) DHCP servers (maintaining $MaxConcurrentJobs concurrent jobs)..."
         Write-Log -Message $startMsg -Color 'Info' -LogBox $LogBox -Theme $null
         Invoke-StatusBar -Callback $StatusBarCallback -Status $startMsg -Progress 25 -ProgressText $startMsg
 
-        $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $ThrottleLimit)
-        $RunspacePool.Open()
-        Write-Host "[DHCP-DEBUG] Runspace pool created and opened" -ForegroundColor Cyan
+        $Jobs = @()
+        $AllStats = New-Object System.Collections.ArrayList
+        $TotalServers = $DHCPServers.Count
+        $ServerIndex = 0
 
-        $Runspaces = @()
-        $AllStats  = New-Object System.Collections.ArrayList
+        # Start initial batch of jobs
+        while ($ServerIndex -lt $TotalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
+            if ($StopToken -and $StopToken.Value) { break }
 
-        try {
-            foreach ($Server in $DHCPServers) {
-                if ($StopToken -and $StopToken.Value) { break }
+            $Server = $DHCPServers[$ServerIndex]
+            $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
 
-                $PowerShell = [powershell]::Create()
-                # Ensure ScopeFilters is passed as an array (wrap in array to prevent unwrapping)
-                $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
-                $null = $PowerShell.AddScript($ScriptBlock).AddArgument($Server).AddArgument($filtersArg).AddArgument($IncludeDNS)
-                $PowerShell.RunspacePool = $RunspacePool
-
-                $Runspaces += [PSCustomObject]@{
-                    PowerShell  = $PowerShell
-                    AsyncResult = $PowerShell.BeginInvoke()
-                    ServerName  = $Server
-                }
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+            $Jobs += @{
+                Job = $Job
+                ServerName = $Server
+                Processed = $false
             }
+            $ServerIndex++
+        }
 
-            $CompletedCount = 0
-            $TotalServers   = $Runspaces.Count
+        $CompletedCount = 0
 
-            while ($Runspaces.AsyncResult.IsCompleted -contains $false) {
-                if ($StopToken -and $StopToken.Value) { break }
-                Start-Sleep -Milliseconds 200
+        # Monitor and maintain constant pool
+        while ($Jobs | Where-Object { -not $_.Processed }) {
+            if ($StopToken -and $StopToken.Value) { break }
+            Start-Sleep -Milliseconds 500
 
-                foreach ($Runspace in $Runspaces | Where-Object { $_.AsyncResult.IsCompleted -and $_.PowerShell -ne $null }) {
-                    $CompletedCount++
-                    $ServerResult = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
+            # Check for completed jobs
+            $CompletedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+            foreach ($CompletedJob in $CompletedInRound) {
+                $CompletedCount++
+                $CompletedJob.Processed = $true
 
-                    # Debug what EndInvoke actually returned
-                    Write-Host "[DHCP-DEBUG] EndInvoke returned type: $($ServerResult.GetType().FullName)" -ForegroundColor Yellow
-                    Write-Host "[DHCP-DEBUG] EndInvoke count: $($ServerResult.Count)" -ForegroundColor Yellow
+                try {
+                    $ServerResult = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
 
-                    # If it's a collection, get the first item
-                    if ($ServerResult -is [System.Collections.ICollection] -and $ServerResult.Count -gt 0) {
-                        Write-Host "[DHCP-DEBUG] ServerResult is a collection, extracting first item" -ForegroundColor Yellow
-                        $actualResult = $ServerResult[0]
-                    } else {
-                        $actualResult = $ServerResult
-                    }
-
-                    Write-Host "[DHCP-DEBUG] ActualResult type: $($actualResult.GetType().FullName)" -ForegroundColor Yellow
-                    Write-Host "[DHCP-DEBUG] ActualResult.Success: $($actualResult.Success)" -ForegroundColor Yellow
-
-                    # Display script debug logs from the runspace
-                    if ($actualResult.ScriptDebug) {
-                        Write-Host "[DHCP-DEBUG] Found ScriptDebug with $($actualResult.ScriptDebug.Count) lines" -ForegroundColor Yellow
-                        foreach ($debugLine in $actualResult.ScriptDebug) {
+                    # Display script debug logs
+                    if ($ServerResult.ScriptDebug) {
+                        foreach ($debugLine in $ServerResult.ScriptDebug) {
                             Write-Host $debugLine -ForegroundColor Cyan
                             $script:DHCPDebugLog += $debugLine
                         }
-                    } else {
-                        Write-Host "[DHCP-DEBUG] No ScriptDebug found in result" -ForegroundColor Yellow
                     }
 
-                    $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)  # 25–100%
+                    $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)
 
-                    if ($actualResult.Success) {
-                        $msg = "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName) - $($actualResult.Message)"
+                    if ($ServerResult.Success) {
+                        $msg = "[$CompletedCount/$TotalServers] Completed: $($CompletedJob.ServerName) - $($ServerResult.Message)"
                         Write-Log -Message $msg -Color 'Success' -LogBox $LogBox -Theme $null
                         Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
 
-                        if ($actualResult.Scopes) {
-                            [void]$AllStats.AddRange($actualResult.Scopes)
+                        if ($ServerResult.Scopes) {
+                            [void]$AllStats.AddRange($ServerResult.Scopes)
                         }
                     }
                     else {
-                        $msg = "[$CompletedCount/$TotalServers] Failed: $($Runspace.ServerName) - $($actualResult.Message)"
+                        $msg = "[$CompletedCount/$TotalServers] Failed: $($CompletedJob.ServerName) - $($ServerResult.Message)"
                         Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
                         Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
                     }
+                } catch {
+                    $CompletedCount++
+                    $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)
+                    $msg = "[$CompletedCount/$TotalServers] Failed: $($CompletedJob.ServerName) - Error receiving job results"
+                    Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+                    Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
+                }
 
-                    $Runspace.PowerShell.Dispose()
-                    $Runspace.PowerShell = $null
+                Remove-Job -Job $CompletedJob.Job -Force
+
+                # Start next job to maintain pool
+                if ($ServerIndex -lt $TotalServers) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
+
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server
+                        Processed = $false
+                    }
+                    $ServerIndex++
                 }
             }
 
-            if ($StopToken -and $StopToken.Value) {
-                $msg = "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation."
-                Write-Log -Message $msg -Color 'Warning' -LogBox $LogBox -Theme $null
-                Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
-                return [PSCustomObject]@{
-                    Success = $false
-                    Results = $AllStats
-                    Error   = 'Operation cancelled by user'
+            # Check for failed jobs
+            $FailedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+            foreach ($FailedJob in $FailedInRound) {
+                $CompletedCount++
+                $FailedJob.Processed = $true
+
+                $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)
+                $msg = "[$CompletedCount/$TotalServers] Failed: $($FailedJob.ServerName)"
+                Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+                Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
+
+                Remove-Job -Job $FailedJob.Job -Force
+
+                # Start next job to maintain pool
+                if ($ServerIndex -lt $TotalServers) {
+                    $Server = $DHCPServers[$ServerIndex]
+                    $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
+
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server
+                        Processed = $false
+                    }
+                    $ServerIndex++
                 }
             }
         }
-        finally {
-            $RunspacePool.Close()
-            $RunspacePool.Dispose()
+
+        # Clean up any remaining jobs if stopped
+        if ($StopToken -and $StopToken.Value) {
+            $Jobs | Where-Object { -not $_.Processed } | ForEach-Object {
+                Stop-Job -Job $_.Job -ErrorAction SilentlyContinue
+                Remove-Job -Job $_.Job -Force -ErrorAction SilentlyContinue
+            }
+
+            $msg = "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation."
+            Write-Log -Message $msg -Color 'Warning' -LogBox $LogBox -Theme $null
+            Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
+            return [PSCustomObject]@{
+                Success = $false
+                Results = $AllStats
+                Error   = 'Operation cancelled by user'
+                DebugLog = $script:DHCPDebugLog
+            }
         }
 
         $completeMsg = "Collection complete. Found $($AllStats.Count) total DHCP scopes."
