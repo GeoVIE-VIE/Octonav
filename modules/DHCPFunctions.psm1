@@ -310,81 +310,93 @@ function Get-DHCPScopeStatistics {
 
             $ErrorActionPreference = 'Stop'
 
+            # Debug log for this scriptblock execution
+            $scriptDebug = @()
+
             $ResultObject = [PSCustomObject]@{
                 ServerName = $ServerName
                 Success    = $false
                 Message    = ''
                 Scopes     = @()
+                ScriptDebug = $scriptDebug
             }
 
             try {
-                Import-Module DhcpServer -ErrorAction Stop
+                $scriptDebug += "[SB-$ServerName] Scriptblock started"
+                $scriptDebug += "[SB-$ServerName] ScopeFilters: $($ScopeFilters -join ', ')"
+                $scriptDebug += "[SB-$ServerName] IncludeDNS: $IncludeDNS"
 
-                Write-Log -Message "[$ServerName] Querying scopes..." -Color 'Info' -LogBox $LogBox -Theme $null
+                Import-Module DhcpServer -ErrorAction Stop
+                $scriptDebug += "[SB-$ServerName] DhcpServer module imported"
+
+                $scriptDebug += "[SB-$ServerName] Querying scopes from $ServerName..."
                 $scopeStart = Get-Date
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
                 $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
-                Write-Log -Message "[$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s"
 
                 if (-not $Scopes) {
+                    $scriptDebug += "[SB-$ServerName] No scopes found on server"
                     $ResultObject.Message = 'No scopes found on server. Check permissions or DHCP service status.'
+                    $ResultObject.ScriptDebug = $scriptDebug
                     return $ResultObject
                 }
 
                 # Log all scope names and descriptions for debugging
-                Write-Log -Message "[$ServerName] Scope details:" -Color 'Info' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Scope details:"
                 foreach ($s in $Scopes) {
                     $descText = if ($s.Description) { $s.Description } else { "(empty)" }
-                    Write-Log -Message "  - ScopeId: $($s.ScopeId), Name: $($s.Name), Description: $descText" -Color 'Info' -LogBox $LogBox -Theme $null
+                    $scriptDebug += "[SB-$ServerName]   - ScopeId: $($s.ScopeId), Name: $($s.Name), Description: $descText"
                 }
 
                 # Scope description filtering
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
-                    Write-Log -Message "[$ServerName] Applying filters to scope descriptions: $($ScopeFilters -join ', ')" -Color 'Info' -LogBox $LogBox -Theme $null
+                    $scriptDebug += "[SB-$ServerName] Applying filters to scope descriptions: $($ScopeFilters -join ', ')"
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
                         if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
-                        Write-Log -Message "[$ServerName] Looking for descriptions containing: '$FilterUpper'" -Color 'Info' -LogBox $LogBox -Theme $null
+                        $scriptDebug += "[SB-$ServerName] Looking for descriptions containing: '$FilterUpper'"
 
                         # Match against Description (case-insensitive partial match)
                         $MatchingScopes = $Scopes | Where-Object {
                             $desc = if ($_.Description) { $_.Description.ToUpper() } else { "" }
                             $match = $desc -like "*$FilterUpper*"
                             if ($match) {
-                                Write-Log -Message "    MATCH: '$desc' contains '$FilterUpper'" -Color 'Success' -LogBox $LogBox -Theme $null
+                                $scriptDebug += "[SB-$ServerName]    MATCH: '$desc' contains '$FilterUpper'"
                             }
                             $match
                         }
 
                         if ($MatchingScopes) {
-                            Write-Log -Message "[$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)" -Color 'Success' -LogBox $LogBox -Theme $null
+                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)"
                         } else {
-                            Write-Log -Message "[$ServerName] Filter '$Filter' matched 0 scopes - none of the descriptions contain '$FilterUpper'" -Color 'Warning' -LogBox $LogBox -Theme $null
+                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched 0 scopes - none of the descriptions contain '$FilterUpper'"
                         }
                         $FilteredScopes += $MatchingScopes
                     }
 
                     $Scopes = $FilteredScopes | Select-Object -Unique
                     if (-not $Scopes -or $Scopes.Count -eq 0) {
+                        $scriptDebug += "[SB-$ServerName] No scopes matched filters"
                         $ResultObject.Message = 'No scopes matched the provided filter(s).'
-                        Write-Log -Message "[$ServerName] No scopes matched filters" -Color 'Warning' -LogBox $LogBox -Theme $null
+                        $ResultObject.ScriptDebug = $scriptDebug
                         return $ResultObject
                     }
-                    Write-Log -Message "[$ServerName] After filtering: $(@($Scopes).Count) scope(s) remaining" -Color 'Info' -LogBox $LogBox -Theme $null
+                    $scriptDebug += "[SB-$ServerName] After filtering: $(@($Scopes).Count) scope(s) remaining"
                 }
 
                 # Retrieve all statistics at once (more reliable than per-scope queries)
-                Write-Log -Message "[$ServerName] Querying scope statistics..." -Color 'Info' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Querying scope statistics..."
                 $statsStart = Get-Date
                 $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
                 $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
-                Write-Log -Message "[$ServerName] Retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s"
 
                 # Optional DNS server option lookup (OptionId 6)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
-                    Write-Log -Message "[$ServerName] Retrieving DNS server options for $(@($Scopes).Count) scope(s)..." -Color 'Info' -LogBox $LogBox -Theme $null
+                    $scriptDebug += "[SB-$ServerName] Retrieving DNS server options for $(@($Scopes).Count) scope(s)..."
                     $dnsStart = Get-Date
                     foreach ($Scope in $Scopes) {
                         try {
@@ -401,11 +413,11 @@ function Get-DHCPScopeStatistics {
                         }
                     }
                     $dnsDuration = ((Get-Date) - $dnsStart).TotalSeconds
-                    Write-Log -Message "[$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
+                    $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s"
                 }
 
                 # Process each scope and match with statistics
-                Write-Log -Message "[$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..." -Color 'Info' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..."
                 $ServerStats = foreach ($Scope in $Scopes) {
                     # Find corresponding statistics using Where-Object
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
@@ -427,20 +439,25 @@ function Get-DHCPScopeStatistics {
                             @{ Name = 'Description'; Expression = { $currentDescription } },
                             @{ Name = 'DNSServers'; Expression = { $currentDNSServers } }
                     } else {
-                        Write-Log -Message "[$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId) ($($Scope.Name))" -Color 'Warning' -LogBox $LogBox -Theme $null
+                        $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId) ($($Scope.Name))"
                     }
                 }
 
                 # Filter out any nulls
                 $ServerStats = @($ServerStats | Where-Object { $_ -ne $null })
-                Write-Log -Message "[$ServerName] Successfully matched $($ServerStats.Count) scope(s) with statistics" -Color 'Success' -LogBox $LogBox -Theme $null
+                $scriptDebug += "[SB-$ServerName] Successfully matched $($ServerStats.Count) scope(s) with statistics"
 
+                $scriptDebug += "[SB-$ServerName] Collection complete - returning $($ServerStats.Count) scopes"
                 $ResultObject.Success = $true
                 $ResultObject.Message = "Successfully retrieved $($ServerStats.Count) scope(s)."
                 $ResultObject.Scopes  = $ServerStats
+                $ResultObject.ScriptDebug = $scriptDebug
                 return $ResultObject
             } catch {
+                $scriptDebug += "[SB-$ServerName] EXCEPTION: $($_.Exception.Message)"
+                $scriptDebug += "[SB-$ServerName] Stack: $($_.ScriptStackTrace)"
                 $ResultObject.Message = "ERROR: $($_.Exception.Message)"
+                $ResultObject.ScriptDebug = $scriptDebug
                 return $ResultObject
             }
         }
@@ -485,6 +502,14 @@ function Get-DHCPScopeStatistics {
                 foreach ($Runspace in $Runspaces | Where-Object { $_.AsyncResult.IsCompleted -and $_.PowerShell -ne $null }) {
                     $CompletedCount++
                     $ServerResult = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
+
+                    # Display script debug logs from the runspace
+                    if ($ServerResult.ScriptDebug) {
+                        foreach ($debugLine in $ServerResult.ScriptDebug) {
+                            Write-Host $debugLine -ForegroundColor Cyan
+                            $script:DHCPDebugLog += $debugLine
+                        }
+                    }
 
                     $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)  # 25–100%
 
