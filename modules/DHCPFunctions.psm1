@@ -230,14 +230,32 @@ function Get-DHCPScopeStatistics {
             try {
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
 
+                Write-Output "DEBUG: Found $($Scopes.Count) total scope(s) on $DHCPServerName"
+
+                # Debug: Show all scope names
+                foreach ($s in $Scopes) {
+                    Write-Output "DEBUG: Scope found: Name='$($s.Name)', ScopeId='$($s.ScopeId)'"
+                }
+
                 # Apply filtering if scope filters are provided
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                    Write-Output "DEBUG: Applying $($ScopeFilters.Count) filter(s): $($ScopeFilters -join ', ')"
+
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
+                        Write-Output "DEBUG: Testing filter '$Filter' against scope names..."
+
                         # Case-insensitive matching
                         $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$Filter*" }
+
                         if ($MatchingScopes) {
+                            Write-Output "DEBUG: Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
+                            foreach ($ms in $MatchingScopes) {
+                                Write-Output "DEBUG:   - Matched: '$($ms.Name)'"
+                            }
                             $FilteredScopes += $MatchingScopes
+                        } else {
+                            Write-Output "DEBUG: Filter '$Filter' matched 0 scopes"
                         }
                     }
 
@@ -247,6 +265,8 @@ function Get-DHCPScopeStatistics {
                     if ($Scopes.Count -eq 0) {
                         Write-Output "WARNING: No scopes matching filter criteria on $DHCPServerName"
                         return @()
+                    } else {
+                        Write-Output "DEBUG: After filtering: $($Scopes.Count) scope(s) will be processed"
                     }
                 }
 
@@ -267,17 +287,28 @@ function Get-DHCPScopeStatistics {
                 }
 
                 foreach ($Scope in $Scopes) {
+                    Write-Output "DEBUG: Processing scope: $($Scope.Name) ($($Scope.ScopeId)) from $DHCPServerName"
+
+                    # Find corresponding statistics
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
                     if ($Stats) {
+                        Write-Output "DEBUG: Found statistics for scope $($Scope.ScopeId)"
+
                         $obj = $Stats | Select-Object *,
                             @{Name='DHCPServer'; Expression={$DHCPServerName}},
                             @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
                             @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
 
                         [void]$ServerStats.Add($obj)
+                        Write-Output "DEBUG: Added scope $($Scope.ScopeId) to results (ServerStats count: $($ServerStats.Count))"
+                    } else {
+                        Write-Output "WARNING: No statistics found for scope $($Scope.ScopeId) - it may be inactive"
                     }
                 }
+
+                Write-Output "DEBUG: Collected $($ServerStats.Count) scope(s) from $DHCPServerName - returning to main thread"
+
             } catch {
                 Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
             }
@@ -336,10 +367,23 @@ function Get-DHCPScopeStatistics {
                         $result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
 
                         if ($result) {
-                            # Add items individually to avoid type casting issues
+                            # Separate debug output from actual data
                             foreach ($item in $result) {
                                 if ($item) {
-                                    [void]$AllStats.Add($item)
+                                    # Check if it's a string (debug/warning message) or data object
+                                    if ($item -is [string]) {
+                                        # Log debug/warning messages
+                                        if ($item -like "DEBUG:*") {
+                                            Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                        } elseif ($item -like "WARNING:*") {
+                                            Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                                        } else {
+                                            Write-Log -Message $item -Color "Magenta" -LogBox $LogBox
+                                        }
+                                    } else {
+                                        # It's a data object (scope statistics), add to results
+                                        [void]$AllStats.Add($item)
+                                    }
                                 }
                             }
                         }
