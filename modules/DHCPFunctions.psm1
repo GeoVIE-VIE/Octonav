@@ -505,49 +505,49 @@ function Get-DHCPScopeStatistics {
 
                     Start-Sleep -Seconds 2
 
-                # Check for completed jobs and collect results
-                $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
-                foreach ($CompletedJob in $CompletedInBatch) {
-                    $CompletedCount++
-                    $CompletedJob.Processed = $true
+                    # Check for completed jobs and collect results
+                    $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+                    foreach ($CompletedJob in $CompletedInBatch) {
+                        $CompletedCount++
+                        $CompletedJob.Processed = $true
 
-                    Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
+                        Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
 
-                    try {
-                        $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
-                        if ($Result) {
-                            # Separate debug strings from data objects
-                            foreach ($item in $Result) {
-                                if ($item -is [string]) {
-                                    if ($item -like "DEBUG:*") {
-                                        Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
-                                    } elseif ($item -like "WARNING:*") {
-                                        Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                        try {
+                            $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
+                            if ($Result) {
+                                # Separate debug strings from data objects
+                                foreach ($item in $Result) {
+                                    if ($item -is [string]) {
+                                        if ($item -like "DEBUG:*") {
+                                            Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                        } elseif ($item -like "WARNING:*") {
+                                            Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                                        } else {
+                                            Write-Log -Message $item -Color "Magenta" -LogBox $LogBox
+                                        }
                                     } else {
-                                        Write-Log -Message $item -Color "Magenta" -LogBox $LogBox
+                                        # It's a scope data object, add to results
+                                        $AllStats += $item
                                     }
-                                } else {
-                                    # It's a scope data object, add to results
-                                    $AllStats += $item
                                 }
                             }
+                        } catch {
+                            Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
                         }
-                    } catch {
-                        Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+
+                        Remove-Job -Job $CompletedJob.Job -Force
                     }
 
-                    Remove-Job -Job $CompletedJob.Job -Force
+                    # Check for failed jobs
+                    $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+                    foreach ($FailedJob in $FailedInBatch) {
+                        $CompletedCount++
+                        $FailedJob.Processed = $true
+                        Write-Log -Message "[$CompletedCount/$TotalServers] Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
+                        Remove-Job -Job $FailedJob.Job -Force
+                    }
                 }
-
-                # Check for failed jobs
-                $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
-                foreach ($FailedJob in $FailedInBatch) {
-                    $CompletedCount++
-                    $FailedJob.Processed = $true
-                    Write-Log -Message "[$CompletedCount/$TotalServers] Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
-                    Remove-Job -Job $FailedJob.Job -Force
-                }
-            }
             }
 
             # Handle stop request - clean up all jobs
