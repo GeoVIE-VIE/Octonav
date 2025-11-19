@@ -307,7 +307,7 @@ function Get-DHCPScopeStatistics {
             try {
                 Import-Module DhcpServer -ErrorAction Stop
 
-                $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName
+                $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
                 if (-not $Scopes) {
                     $ResultObject.Message = 'No scopes found on server. Check permissions or DHCP service status.'
                     return $ResultObject
@@ -330,7 +330,7 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
-                $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName
+                $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
 
                 # Optional DNS server option lookup (OptionId 6)
                 $DNSServerMap = @{}
@@ -354,17 +354,22 @@ function Get-DHCPScopeStatistics {
                 $ServerStats = foreach ($Scope in $Scopes) {
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
                     if ($Stats) {
+                        # Capture scope variables for use in calculated properties
+                        $currentScopeId = $Scope.ScopeId
+                        $currentScopeDesc = $Scope.Description
+                        $currentScopeName = $Scope.Name
+
                         $Stats | Select-Object *,
                             @{ Name = 'DHCPServer';  Expression = { $ServerName } },
                             @{ Name = 'Description'; Expression = {
-                                    if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
-                                        $Scope.Description
+                                    if (-not [string]::IsNullOrWhiteSpace($currentScopeDesc)) {
+                                        $currentScopeDesc
                                     } else {
-                                        $Scope.Name
+                                        $currentScopeName
                                     }
                                 }
                             },
-                            @{ Name = 'DNSServers';  Expression = { $DNSServerMap[$Scope.ScopeId] } }
+                            @{ Name = 'DNSServers';  Expression = { $DNSServerMap[$currentScopeId] } }
                     }
                 }
 
