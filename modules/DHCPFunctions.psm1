@@ -318,6 +318,13 @@ function Get-DHCPScopeStatistics {
                     return $ResultObject
                 }
 
+                # Log all scope names and descriptions for debugging
+                Write-Log -Message "[$ServerName] Scope details:" -Color 'Info' -LogBox $LogBox -Theme $null
+                foreach ($s in $Scopes) {
+                    $descText = if ($s.Description) { $s.Description } else { "(empty)" }
+                    Write-Log -Message "  - ScopeId: $($s.ScopeId), Name: $($s.Name), Description: $descText" -Color 'Info' -LogBox $LogBox -Theme $null
+                }
+
                 # Scope description filtering
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                     Write-Log -Message "[$ServerName] Applying filters to scope descriptions: $($ScopeFilters -join ', ')" -Color 'Info' -LogBox $LogBox -Theme $null
@@ -325,15 +332,22 @@ function Get-DHCPScopeStatistics {
                     foreach ($Filter in $ScopeFilters) {
                         if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
+                        Write-Log -Message "[$ServerName] Looking for descriptions containing: '$FilterUpper'" -Color 'Info' -LogBox $LogBox -Theme $null
+
                         # Match against Description (case-insensitive partial match)
                         $MatchingScopes = $Scopes | Where-Object {
                             $desc = if ($_.Description) { $_.Description.ToUpper() } else { "" }
-                            $desc -like "*$FilterUpper*"
+                            $match = $desc -like "*$FilterUpper*"
+                            if ($match) {
+                                Write-Log -Message "    MATCH: '$desc' contains '$FilterUpper'" -Color 'Success' -LogBox $LogBox -Theme $null
+                            }
+                            $match
                         }
+
                         if ($MatchingScopes) {
-                            Write-Log -Message "[$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)" -Color 'Info' -LogBox $LogBox -Theme $null
+                            Write-Log -Message "[$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)" -Color 'Success' -LogBox $LogBox -Theme $null
                         } else {
-                            Write-Log -Message "[$ServerName] Filter '$Filter' matched 0 scopes" -Color 'Warning' -LogBox $LogBox -Theme $null
+                            Write-Log -Message "[$ServerName] Filter '$Filter' matched 0 scopes - none of the descriptions contain '$FilterUpper'" -Color 'Warning' -LogBox $LogBox -Theme $null
                         }
                         $FilteredScopes += $MatchingScopes
                     }
