@@ -1158,32 +1158,43 @@ $btnCollectDHCP.Add_Click({
             $btnCollectDHCP.Enabled = $true
             $btnStopDHCP.Enabled = $false
 
+            # PowerShell.EndInvoke returns a PSDataCollection - extract the actual result object
+            Write-Log -Message "DEBUG: Raw result type: $($result.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+            $actualResult = if ($result -is [System.Collections.ICollection] -and $result.Count -gt 0) {
+                Write-Log -Message "DEBUG: Extracting first item from collection (count=$($result.Count))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                $result[0]
+            } else {
+                $result
+            }
+
+            Write-Log -Message "DEBUG: ActualResult type: $($actualResult.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
             # Display debug log from background runspace
-            if ($result -and $result.DebugLog) {
+            if ($actualResult -and $actualResult.DebugLog) {
                 Write-Log -Message "===== Background Runspace Debug Log =====" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                foreach ($logLine in $result.DebugLog) {
+                foreach ($logLine in $actualResult.DebugLog) {
                     Write-Log -Message $logLine -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
                 Write-Log -Message "===== End Background Debug Log =====" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
 
             # Debug: Log result structure
-            if ($result) {
-                Write-Log -Message "Collection returned: Success=$($result.Success), Results Count=$($result.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                Write-Log -Message "DEBUG: Result type: $($result.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                Write-Log -Message "DEBUG: Results type: $($result.Results.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                if ($result.Results.Count -gt 0) {
-                    Write-Log -Message "DEBUG: First result type: $($result.Results[0].GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    Write-Log -Message "DEBUG: First result properties: $($result.Results[0].PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            if ($actualResult) {
+                Write-Log -Message "Collection returned: Success=$($actualResult.Success), Results Count=$($actualResult.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: Results type: $($actualResult.Results.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                if ($actualResult.Results.Count -gt 0) {
+                    Write-Log -Message "DEBUG: First result type: $($actualResult.Results[0].GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "DEBUG: First result properties: $($actualResult.Results[0].PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
             } else {
                 Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
 
-            if ($result -and $result.Success) {
+            if ($actualResult -and $actualResult.Success) {
             # Ensure Results is an array (even if empty)
-            $script:dhcpResults = if ($result.Results) {
-                @($result.Results)
+            $script:dhcpResults = if ($actualResult.Results) {
+                @($actualResult.Results)
             } else {
                 @()
             }
@@ -1217,19 +1228,19 @@ $btnCollectDHCP.Add_Click({
             } else {
                 Write-Log -Message "No DHCP scopes found matching criteria" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
-        } elseif ($result) {
+        } elseif ($actualResult) {
             # Even if not successful, save any partial results collected before stop/error
-            if ($result.Results -and $result.Results.Count -gt 0) {
-                $script:dhcpResults = @($result.Results)
+            if ($actualResult.Results -and $actualResult.Results.Count -gt 0) {
+                $script:dhcpResults = @($actualResult.Results)
                 $btnExportDHCP.Enabled = $true
                 Write-Log -Message "Partial results available: $($script:dhcpResults.Count) scopes collected before operation was stopped" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
 
-            Write-Log -Message "Error: $($result.Error)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            Write-Log -Message "Error: $($actualResult.Error)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
             # Only show error dialog if not a user-requested cancellation
-            if ($result.Error -notlike "*cancelled by user*") {
-                [System.Windows.Forms.MessageBox]::Show("DHCP collection failed: $($result.Error)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            if ($actualResult.Error -notlike "*cancelled by user*") {
+                [System.Windows.Forms.MessageBox]::Show("DHCP collection failed: $($actualResult.Error)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
             }
         } else {
             Write-Log -Message "DHCP collection returned no data" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
