@@ -423,21 +423,33 @@ function Get-DHCPScopeStatistics {
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
                     if ($Stats) {
-                        # Capture all values as local variables BEFORE Select-Object
-                        # This avoids closure issues with the $Scope loop variable
-                        $currentServer = $ServerName
-                        $currentDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
+                        # Build object explicitly to avoid closure issues
+                        $scopeDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
                             $Scope.Description
                         } else {
                             $Scope.Name
                         }
-                        $currentDNSServers = $DNSServerMap[$Scope.ScopeId]
 
-                        # Now use the local variables in Expression blocks
-                        $Stats | Select-Object *,
-                            @{ Name = 'DHCPServer'; Expression = { $currentServer } },
-                            @{ Name = 'Description'; Expression = { $currentDescription } },
-                            @{ Name = 'DNSServers'; Expression = { $currentDNSServers } }
+                        $dnsServers = $DNSServerMap[$Scope.ScopeId]
+
+                        # Create PSCustomObject with explicit property values (no scriptblocks)
+                        [PSCustomObject]@{
+                            ScopeId = $Stats.ScopeId
+                            DHCPServer = $ServerName
+                            Description = $scopeDescription
+                            SubnetMask = $Stats.SubnetMask
+                            StartRange = $Stats.StartRange
+                            EndRange = $Stats.EndRange
+                            Free = $Stats.Free
+                            InUse = $Stats.InUse
+                            Percentage = $Stats.Percentage
+                            Reserved = $Stats.Reserved
+                            Pending = $Stats.Pending
+                            AddressesFree = $Stats.Free
+                            AddressesInUse = $Stats.InUse
+                            PercentageInUse = $Stats.Percentage
+                            DNSServers = $dnsServers
+                        }
                     } else {
                         $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId) ($($Scope.Name))"
                     }

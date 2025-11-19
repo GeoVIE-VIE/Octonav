@@ -1170,6 +1170,12 @@ $btnCollectDHCP.Add_Click({
             # Debug: Log result structure
             if ($result) {
                 Write-Log -Message "Collection returned: Success=$($result.Success), Results Count=$($result.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: Result type: $($result.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: Results type: $($result.Results.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                if ($result.Results.Count -gt 0) {
+                    Write-Log -Message "DEBUG: First result type: $($result.Results[0].GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "DEBUG: First result properties: $($result.Results[0].PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                }
             } else {
                 Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
