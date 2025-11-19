@@ -50,6 +50,42 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = "Stop"
 
 # ============================================
+# CERTIFICATE VALIDATION BYPASS & TLS SETUP
+# ============================================
+# Required for DNA Center API calls with self-signed certificates
+if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type) {
+    $certCallback = @"
+    using System;
+    using System.Net;
+    using System.Net.Security;
+    using System.Security.Cryptography.X509Certificates;
+    public class ServerCertificateValidationCallback
+    {
+        public static void Ignore()
+        {
+            if(ServicePointManager.ServerCertificateValidationCallback == null)
+            {
+                ServicePointManager.ServerCertificateValidationCallback +=
+                    delegate
+                    (
+                        Object obj,
+                        X509Certificate certificate,
+                        X509Chain chain,
+                        SslPolicyErrors errors
+                    )
+                    {
+                        return true;
+                    };
+            }
+        }
+    }
+"@
+    Add-Type $certCallback
+}
+[ServerCertificateValidationCallback]::Ignore()
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# ============================================
 # MODULE IMPORTS
 # ============================================
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -855,8 +891,9 @@ $btnCollectDHCP.Add_Click({
                         New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
                     }
 
-                    Export-ToCSV -Data $script:dhcpResults -OutputPath $exportPath -Settings $script:Settings
-                    Write-Log -Message "Auto-exported to: $exportPath" -Color "Cyan" -LogBox $dhcpLogBox
+                    $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+                    Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
+                    Write-Log -Message "Auto-exported to: $exportedPath" -Color "Cyan" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
             } else {
                 Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox
