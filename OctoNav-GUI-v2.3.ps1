@@ -1070,28 +1070,54 @@ $btnCollectDHCP.Add_Click({
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
             param($filters, $servers, $dns, $stopRef, $scriptRoot)
 
+            $debugLog = @()
+
             try {
+                $debugLog += "Background: Starting collection"
+                $debugLog += "Background: Filters = $($filters -join ', ')"
+                $debugLog += "Background: Servers = $($servers -join ', ')"
+                $debugLog += "Background: IncludeDNS = $dns"
+
                 # Import required modules in background runspace
                 # HelperFunctions first (provides Write-Log used by DHCPFunctions)
                 $helperPath = Join-Path $scriptRoot "modules\HelperFunctions.psm1"
                 Import-Module $helperPath -Force -ErrorAction Stop
+                $debugLog += "Background: Imported HelperFunctions"
 
                 # Then DHCPFunctions
                 $dhcpPath = Join-Path $scriptRoot "modules\DHCPFunctions.psm1"
                 Import-Module $dhcpPath -Force -ErrorAction Stop
+                $debugLog += "Background: Imported DHCPFunctions"
 
                 # Call collection function
                 $result = Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+
+                $debugLog += "Background: Collection completed"
+                $debugLog += "Background: Result Success = $($result.Success)"
+                $debugLog += "Background: Result Results.Count = $($result.Results.Count)"
+                $debugLog += "Background: Result Message = $($result.Message)"
+
+                if ($result.Results) {
+                    $debugLog += "Background: Results type = $($result.Results.GetType().FullName)"
+                    $debugLog += "Background: First result = $($result.Results | Select-Object -First 1 | Out-String)"
+                }
+
+                # Add debug log to result
+                $result | Add-Member -NotePropertyName DebugLog -NotePropertyValue $debugLog -Force
 
                 # Ensure we return the result
                 return $result
             }
             catch {
+                $debugLog += "Background: EXCEPTION - $($_.Exception.Message)"
+                $debugLog += "Background: Stack trace - $($_.ScriptStackTrace)"
+
                 # Return error object if something fails
                 return [PSCustomObject]@{
                     Success = $false
                     Results = @()
                     Error = "Background operation error: $($_.Exception.Message)"
+                    DebugLog = $debugLog
                 }
             }
 
@@ -1101,6 +1127,15 @@ $btnCollectDHCP.Add_Click({
             # Re-enable buttons
             $btnCollectDHCP.Enabled = $true
             $btnStopDHCP.Enabled = $false
+
+            # Display debug log from background runspace
+            if ($result -and $result.DebugLog) {
+                Write-Log -Message "===== Background Runspace Debug Log =====" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                foreach ($logLine in $result.DebugLog) {
+                    Write-Log -Message $logLine -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                }
+                Write-Log -Message "===== End Background Debug Log =====" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
 
             # Debug: Log result structure
             if ($result) {
