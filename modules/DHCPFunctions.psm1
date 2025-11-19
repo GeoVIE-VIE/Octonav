@@ -10,7 +10,7 @@
     for optimal performance.
 
 .VERSION
-    2.0
+    2.1
 
 .AUTHOR
     OctoNav (Original), AI Assistant (Refined)
@@ -19,19 +19,19 @@
     Requires: PowerShell 5.0+
     Module Dependencies: DHCP Server PowerShell Module (DhcpServer)
     REFINEMENTS:
-    - Removed Start-Job implementation, focusing on the superior Runspace method.
+    - Fixed syntax error by moving comment-based help inside functions (PowerShell best practice).
+    - Removed non-standard `.FUNCTION` keyword from help comments.
     - Improved error handling to surface the root cause of "0 scopes found" issues.
     - Added pre-flight connectivity checks.
     - Switched to ArrayList for better performance with large datasets.
-    - Simplified the data pipeline between runspaces and the main thread.
 #>
 
-<#
-.FUNCTION Test-ServerName
-.SYNOPSIS
-    Validates server name format according to RFC 1123
-#>
 function Test-ServerName {
+    <#
+    .SYNOPSIS
+        Validates server name format according to RFC 1123.
+    #>
+    [CmdletBinding()]
     param([string]$ServerName)
 
     if ([string]::IsNullOrWhiteSpace($ServerName)) {
@@ -40,20 +40,14 @@ function Test-ServerName {
 
     $trimmed = $ServerName.Trim()
 
-    # Check length (max DNS name length is 253 characters)
     if ($trimmed.Length -gt 253) {
         return $false
     }
 
-    # Validate DNS hostname format (RFC 1123)
-    # Allows: alphanumeric, hyphens, and dots
-    # Each label must start/end with alphanumeric
-    # Max label length is 63 characters
     if ($trimmed -notmatch '^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$') {
         return $false
     }
 
-    # Additional check: no consecutive dots or hyphens at start/end of labels
     if ($trimmed -match '\.\.' -or $trimmed -match '\.-' -or $trimmed -match '-\.') {
         return $false
     }
@@ -61,37 +55,26 @@ function Test-ServerName {
     return $true
 }
 
-<#
-.FUNCTION Get-SanitizedErrorMessage
-.SYNOPSIS
-    Sanitizes error messages by removing sensitive information
-#>
 function Get-SanitizedErrorMessage {
+    <#
+    .SYNOPSIS
+        Sanitizes error messages by removing sensitive information.
+    #>
+    [CmdletBinding()]
     param([System.Management.Automation.ErrorRecord]$ErrorRecord)
 
     if (-not $ErrorRecord) {
         return "An unknown error occurred"
     }
 
-    # Get base error message without sensitive details
     $message = $ErrorRecord.Exception.Message
-
-    # Remove potentially sensitive information
-    # Remove file paths
     $message = $message -replace '[A-Z]:\\[^\s]+', '[PATH]'
     $message = $message -replace '/[^\s]+', '[PATH]'
-
-    # Remove IP addresses (both IPv4 and IPv6)
     $message = $message -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[IP]'
     $message = $message -replace '\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b', '[IPv6]'
-
-    # Remove usernames (common patterns)
     $message = $message -replace 'user(name)?[:\s]+[^\s]+', 'user: [REDACTED]'
-
-    # Remove stack trace information
     $message = $message -split "`n" | Select-Object -First 1
 
-    # Limit length
     if ($message.Length -gt 200) {
         $message = $message.Substring(0, 197) + "..."
     }
@@ -99,12 +82,12 @@ function Get-SanitizedErrorMessage {
     return $message
 }
 
-<#
-.FUNCTION Write-Log
-.SYNOPSIS
-    Writes colored log messages to a RichTextBox with timestamps
-#>
 function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes colored log messages to a RichTextBox with timestamps.
+    #>
+    [CmdletBinding()]
     param(
         [string]$Message,
         [string]$Color = "Black",
@@ -114,9 +97,7 @@ function Write-Log {
     if ($LogBox) {
         try {
             $LogBox.Invoke([Action]{
-                # Suspend layout for better performance during rapid updates
                 $LogBox.SuspendLayout()
-
                 $LogBox.SelectionStart = $LogBox.TextLength
                 $LogBox.SelectionLength = 0
                 $LogBox.SelectionColor = switch ($Color) {
@@ -130,8 +111,6 @@ function Write-Log {
                 $timestamp = Get-Date -Format "HH:mm:ss"
                 $LogBox.AppendText("[$timestamp] $Message`r`n")
                 $LogBox.SelectionColor = $LogBox.ForeColor
-
-                # Resume layout and force scroll to bottom
                 $LogBox.ResumeLayout()
                 $LogBox.SelectionStart = $LogBox.TextLength
                 $LogBox.ScrollToCaret()
@@ -143,45 +122,44 @@ function Write-Log {
     }
 }
 
-<#
-.FUNCTION Get-DHCPScopeStatistics
-.SYNOPSIS
-    Collects DHCP scope statistics from one or more DHCP servers using parallel processing.
-
-.DESCRIPTION
-    This function retrieves DHCP scope statistics from specified or auto-discovered DHCP servers.
-    It uses PowerShell runspace pools for optimal performance, supports scope filtering, and
-    optional DNS server information retrieval. This version provides enhanced error reporting
-    to diagnose connectivity and permission issues.
-
-.PARAMETER ScopeFilters
-    Array of scope name filters to apply. Case-insensitive partial matching. If empty, all scopes are returned.
-
-.PARAMETER SpecificServers
-    Array of specific DHCP server names to query. If empty, auto-discovers servers in domain.
-
-.PARAMETER IncludeDNS
-    Boolean flag to include DNS server information (Option ID 6) for each scope.
-
-.PARAMETER LogBox
-    Optional RichTextBox control for logging output with timestamps and colors.
-
-.PARAMETER ThrottleLimit
-    The maximum number of concurrent server operations. Default is 20.
-
-.PARAMETER StopToken
-    Reference to a boolean flag to enable job cancellation.
-
-.OUTPUTS
-    System.Collections.ArrayList of custom objects containing DHCP scope statistics.
-
-.EXAMPLE
-    Get-DHCPScopeStatistics -SpecificServers "DHCP-Server01" -LogBox $richTextBox1
-
-.EXAMPLE
-    Get-DHCPScopeStatistics -ScopeFilters @("Production", "Test") -IncludeDNS $true
-#>
 function Get-DHCPScopeStatistics {
+    <#
+    .SYNOPSIS
+        Collects DHCP scope statistics from one or more DHCP servers using parallel processing.
+
+    .DESCRIPTION
+        This function retrieves DHCP scope statistics from specified or auto-discovered DHCP servers.
+        It uses PowerShell runspace pools for optimal performance, supports scope filtering, and
+        optional DNS server information retrieval. This version provides enhanced error reporting
+        to diagnose connectivity and permission issues.
+
+    .PARAMETER ScopeFilters
+        Array of scope name filters to apply. Case-insensitive partial matching. If empty, all scopes are returned.
+
+    .PARAMETER SpecificServers
+        Array of specific DHCP server names to query. If empty, auto-discovers servers in domain.
+
+    .PARAMETER IncludeDNS
+        Boolean flag to include DNS server information (Option ID 6) for each scope.
+
+    .PARAMETER LogBox
+        Optional RichTextBox control for logging output with timestamps and colors.
+
+    .PARAMETER ThrottleLimit
+        The maximum number of concurrent server operations. Default is 20.
+
+    .PARAMETER StopToken
+        Reference to a boolean flag to enable job cancellation.
+
+    .OUTPUTS
+        System.Collections.ArrayList of custom objects containing DHCP scope statistics.
+
+    .EXAMPLE
+        Get-DHCPScopeStatistics -SpecificServers "DHCP-Server01" -LogBox $richTextBox1
+
+    .EXAMPLE
+        Get-DHCPScopeStatistics -ScopeFilters @("Production", "Test") -IncludeDNS $true
+    #>
     [CmdletBinding()]
     param(
         [string[]]$ScopeFilters = @(),
@@ -193,7 +171,6 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
-        # Get DHCP servers
         if ($SpecificServers.Count -gt 0) {
             Write-Log -Message "Using specified DHCP servers..." -Color "Cyan" -LogBox $LogBox
             $validServers = @()
@@ -239,33 +216,22 @@ function Get-DHCPScopeStatistics {
         }
         $DHCPServers = $OnlineServers
 
-        # This scriptblock does the work on each server
         $ScriptBlock = {
             param($ServerName, $ScopeFilters, $IncludeDNS)
-
-            # Force all errors to be terminating so the try/catch block will catch them
             $ErrorActionPreference = 'Stop'
-
-            # Return object will always indicate success or failure
             $ResultObject = [PSCustomObject]@{
                 ServerName = $ServerName
                 Success    = $false
                 Message    = ""
                 Scopes     = @()
             }
-
             try {
-                # CRITICAL: Ensure DhcpServer module is available inside the worker
                 Import-Module DhcpServer -ErrorAction Stop
-
-                # Get all scopes from the server
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName
                 if (-not $Scopes) {
                     $ResultObject.Message = "No scopes found on server. Check permissions or DHCP service status."
                     return $ResultObject
                 }
-
-                # Apply filtering if scope filters are provided
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
@@ -279,11 +245,7 @@ function Get-DHCPScopeStatistics {
                         return $ResultObject
                     }
                 }
-
-                # Get statistics for the (filtered) scopes
                 $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName
-
-                # Get DNS info if requested
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
                     foreach ($Scope in $Scopes) {
@@ -292,13 +254,9 @@ function Get-DHCPScopeStatistics {
                             if ($DNSOption) {
                                 $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
                             }
-                        } catch {
-                            # DNS option not found for this scope, ignore.
-                        }
+                        } catch { }
                     }
                 }
-
-                # Combine scope info with statistics
                 $ServerStats = foreach ($Scope in $Scopes) {
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
                     if ($Stats) {
@@ -308,36 +266,26 @@ function Get-DHCPScopeStatistics {
                             @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
                     }
                 }
-
-                # Return success
                 $ResultObject.Success = $true
                 $ResultObject.Message = "Successfully retrieved $($ServerStats.Count) scope(s)."
                 $ResultObject.Scopes = $ServerStats
                 return $ResultObject
-
             } catch {
-                # Catch any terminating error and report it
                 $ResultObject.Message = "ERROR: $($_.Exception.Message)"
                 return $ResultObject
             }
         }
 
-        # --- Runspace Pool Implementation ---
         Write-Log -Message "Starting parallel processing of $($DHCPServers.Count) DHCP servers (Throttle: $ThrottleLimit)..." -Color "Cyan" -LogBox $LogBox
         
         $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $ThrottleLimit)
         $RunspacePool.Open()
         $Runspaces = @()
-        
-        # Use ArrayList for better performance when adding many items
         [System.Collections.ArrayList]$AllStats = @()
 
         try {
             foreach ($Server in $DHCPServers) {
-                if ($StopToken -and $StopToken.Value) {
-                    Write-Log -Message "Stop requested, cancelling remaining servers..." -Color "Yellow" -LogBox $LogBox
-                    break
-                }
+                if ($StopToken -and $StopToken.Value) { break }
                 $PowerShell = [powershell]::Create().AddScript($ScriptBlock).AddArgument($Server).AddArgument($ScopeFilters).AddArgument($IncludeDNS)
                 $PowerShell.RunspacePool = $RunspacePool
                 $Runspaces += [PSCustomObject]@{
@@ -351,10 +299,7 @@ function Get-DHCPScopeStatistics {
             $TotalServers = $Runspaces.Count
 
             while ($Runspaces.AsyncResult.IsCompleted -contains $false) {
-                if ($StopToken -and $StopToken.Value) {
-                    Write-Log -Message "Stop requested during processing..." -Color "Yellow" -LogBox $LogBox
-                    break
-                }
+                if ($StopToken -and $StopToken.Value) { break }
                 Start-Sleep -Milliseconds 200
                 foreach ($Runspace in $Runspaces | Where-Object { $_.AsyncResult.IsCompleted -and $_.PowerShell -ne $null }) {
                     $CompletedCount++
@@ -367,11 +312,10 @@ function Get-DHCPScopeStatistics {
                         Write-Log -Message "[$CompletedCount/$TotalServers] Failed: $($Runspace.ServerName) - $($ServerResult.Message)" -Color "Red" -LogBox $LogBox
                     }
                     $Runspace.PowerShell.Dispose()
-                    $Runspace.PowerShell = $null # Mark as processed
+                    $Runspace.PowerShell = $null
                 }
             }
 
-            # Handle cancellation
             if ($StopToken -and $StopToken.Value) {
                 Write-Log -Message "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation." -Color "Yellow" -LogBox $LogBox
                 return [PSCustomObject]@{ Success = $false; Results = $AllStats; Error = "Operation cancelled by user" }
@@ -399,4 +343,3 @@ Export-ModuleMember -Function @(
     'Write-Log',
     'Get-SanitizedErrorMessage'
 )
-```
