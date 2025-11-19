@@ -55,41 +55,41 @@ $script:UISpacing = @{
 # ============================================
 
 $script:UIIcons = @{
-    # Status icons (using safe Unicode symbols)
-    Success = [char]0x2713    # ✓
-    Error = [char]0x2717      # ✗
-    Warning = [char]0x26A0    # ⚠
-    Info = [char]0x2139       # ℹ
+    # Status icons (simple ASCII-safe)
+    Success = "+"
+    Error = "X"
+    Warning = "!"
+    Info = "i"
 
-    # Action icons (using safe Unicode symbols, no emoji)
-    Connect = [char]0x2316    # ⌖ (position indicator)
-    Disconnect = [char]0x2316 # Same icon
-    Refresh = [char]0x21BB    # ↻ (clockwise arrow)
-    Search = [char]0x2315     # ⌕ (telephone recorder)
-    Filter = [char]0x2699     # ⚙
-    Export = [char]0x21E7     # ⇧ (upward arrow)
-    Import = [char]0x21E9     # ⇩ (downward arrow)
-    Settings = [char]0x2699   # ⚙
+    # Action icons
+    Connect = "*"
+    Disconnect = "-"
+    Refresh = "@"
+    Search = "?"
+    Filter = "#"
+    Export = "^"
+    Import = "v"
+    Settings = "*"
 
-    # Feature icons (using safe Unicode symbols)
-    Network = [char]0x2637    # ☷ (trigram)
-    Server = [char]0x25A0     # ■ (black square)
-    Database = [char]0x2261   # ≡ (identical to)
-    Stats = [char]0x2248      # ≈ (almost equal)
-    DNA = [char]0x2042        # ⁂ (asterism)
+    # Feature icons
+    Network = "~"
+    Server = "="
+    Database = "="
+    Stats = "="
+    DNA = "*"
 
     # Navigation
-    Forward = [char]0x25B6    # ▶
-    Back = [char]0x25C0       # ◀
-    Up = [char]0x25B2         # ▲
-    Down = [char]0x25BC       # ▼
+    Forward = ">"
+    Back = "<"
+    Up = "^"
+    Down = "v"
 
     # Status indicators
-    Online = [char]0x25CF     # ●
-    Offline = [char]0x25CB    # ○
-    Shield = [char]0x2302     # ⌂ (house/shield alternative)
-    User = [char]0x263A       # ☺ (smiley face)
-    Time = [char]0x231A       # ⌚ (watch)
+    Online = "o"
+    Offline = "."
+    Shield = "#"
+    User = "@"
+    Time = ":"
 }
 
 # ============================================
