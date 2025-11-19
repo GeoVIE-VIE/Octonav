@@ -318,16 +318,22 @@ function Get-DHCPScopeStatistics {
                     return $ResultObject
                 }
 
-                # Scope name filtering
+                # Scope description filtering
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
-                    Write-Log -Message "[$ServerName] Applying filters: $($ScopeFilters -join ', ')" -Color 'Info' -LogBox $LogBox -Theme $null
+                    Write-Log -Message "[$ServerName] Applying filters to scope descriptions: $($ScopeFilters -join ', ')" -Color 'Info' -LogBox $LogBox -Theme $null
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
                         if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
-                        $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$FilterUpper*" }
+                        # Match against Description (case-insensitive partial match)
+                        $MatchingScopes = $Scopes | Where-Object {
+                            $desc = if ($_.Description) { $_.Description.ToUpper() } else { "" }
+                            $desc -like "*$FilterUpper*"
+                        }
                         if ($MatchingScopes) {
                             Write-Log -Message "[$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)" -Color 'Info' -LogBox $LogBox -Theme $null
+                        } else {
+                            Write-Log -Message "[$ServerName] Filter '$Filter' matched 0 scopes" -Color 'Warning' -LogBox $LogBox -Theme $null
                         }
                         $FilteredScopes += $MatchingScopes
                     }
