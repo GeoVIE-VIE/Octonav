@@ -179,17 +179,20 @@ function Get-DHCPScopeStatistics {
         [scriptblock]$StatusBarCallback
     )
 
+    # Create debug log array to capture execution flow
+    $script:DHCPDebugLog = @()
+
     try {
-        Write-Host "[DHCP-DEBUG] Get-DHCPScopeStatistics called" -ForegroundColor Cyan
-        Write-Host "[DHCP-DEBUG] ScopeFilters: $($ScopeFilters.Count) items" -ForegroundColor Cyan
-        Write-Host "[DHCP-DEBUG] SpecificServers: $($SpecificServers.Count) items" -ForegroundColor Cyan
-        Write-Host "[DHCP-DEBUG] IncludeDNS: $IncludeDNS" -ForegroundColor Cyan
+        $script:DHCPDebugLog += "[DHCP] Get-DHCPScopeStatistics called"
+        $script:DHCPDebugLog += "[DHCP] ScopeFilters: $($ScopeFilters.Count) items - $($ScopeFilters -join ', ')"
+        $script:DHCPDebugLog += "[DHCP] SpecificServers: $($SpecificServers.Count) items - $($SpecificServers -join ', ')"
+        $script:DHCPDebugLog += "[DHCP] IncludeDNS: $IncludeDNS"
 
         # -------------------------
         # Determine DHCP servers
         # -------------------------
         if ($SpecificServers -and $SpecificServers.Count -gt 0) {
-            Write-Host "[DHCP-DEBUG] Using specific servers" -ForegroundColor Cyan
+            $script:DHCPDebugLog += "[DHCP] Using specific servers"
             Invoke-StatusBar -Callback $StatusBarCallback -Status 'Using specified DHCP servers...' -Progress 5 -ProgressText 'Validating server names...'
             Write-Log -Message 'Using specified DHCP servers...' -Color 'Info' -LogBox $LogBox -Theme $null
 
@@ -207,20 +210,22 @@ function Get-DHCPScopeStatistics {
 
             if ($validServers.Count -eq 0) {
                 $msg = 'No valid DHCP server names provided.'
+                $script:DHCPDebugLog += "[DHCP] ERROR: No valid servers"
                 Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
                 Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
                 return [PSCustomObject]@{
                     Success = $false
                     Results = @()
                     Error   = $msg
+                    DebugLog = $script:DHCPDebugLog
                 }
             }
 
             $DHCPServers = $validServers
-            Write-Host "[DHCP-DEBUG] Valid servers: $($DHCPServers.Count)" -ForegroundColor Cyan
+            $script:DHCPDebugLog += "[DHCP] Valid servers: $($DHCPServers.Count) - $($DHCPServers -join ', ')"
         }
         else {
-            Write-Host "[DHCP-DEBUG] No specific servers - auto-discovering from AD" -ForegroundColor Cyan
+            $script:DHCPDebugLog += "[DHCP] No specific servers - auto-discovering from AD"
             Invoke-StatusBar -Callback $StatusBarCallback -Status 'Discovering DHCP servers...' -Progress 5 -ProgressText 'Discovering DHCP servers in domain...'
             Write-Log -Message 'Discovering DHCP servers in domain...' -Color 'Info' -LogBox $LogBox -Theme $null
 

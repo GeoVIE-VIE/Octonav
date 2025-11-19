@@ -998,15 +998,22 @@ $btnCollectDHCP.Add_Click({
         foreach ($item in $script:lstDHCPServers.CheckedItems) {
             # Convert to string and log
             $itemStr = $item.ToString()
-            Write-Log -Message "DEBUG: Processing item: '$itemStr'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            Write-Log -Message "DEBUG: Item type: $($item.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            Write-Log -Message "DEBUG: Item raw value: '$itemStr'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            Write-Log -Message "DEBUG: Item length: $($itemStr.Length)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
             # Extract DNS name from "DnsName (IPAddress)" format
             if ($itemStr -match '^(.+?)\s+\(') {
                 $serverName = $matches[1].Trim()
                 $checkedServers += $serverName
-                Write-Log -Message "DEBUG: Extracted server name: '$serverName'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: Regex MATCHED - Extracted: '$serverName'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             } else {
-                Write-Log -Message "DEBUG: Failed to extract server name from: '$itemStr'" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: Regex FAILED - No match for pattern '^(.+?)\s+\('" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                # Try alternative: just use the whole string if no parentheses
+                if (-not [string]::IsNullOrWhiteSpace($itemStr)) {
+                    Write-Log -Message "DEBUG: Using entire string as server name" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $checkedServers += $itemStr.Trim()
+                }
             }
         }
 
@@ -1043,7 +1050,13 @@ $btnCollectDHCP.Add_Click({
         }
 
         # 3. Combine both sources (remove duplicates)
+        Write-Log -Message "DEBUG: checkedServers array contents: $($checkedServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: checkedServers count: $($checkedServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
         $specificServers = @($checkedServers) + @($manualServers) | Select-Object -Unique
+
+        Write-Log -Message "DEBUG: specificServers after combine: $($specificServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: specificServers count: $($specificServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
         # Log server sources
         if ($checkedServers.Count -gt 0) {
@@ -1075,7 +1088,15 @@ $btnCollectDHCP.Add_Click({
             try {
                 $debugLog += "Background: Starting collection"
                 $debugLog += "Background: Filters = $($filters -join ', ')"
+                $debugLog += "Background: Filters count = $($filters.Count)"
                 $debugLog += "Background: Servers = $($servers -join ', ')"
+                $debugLog += "Background: Servers count = $($servers.Count)"
+                $debugLog += "Background: Servers type = $($servers.GetType().FullName)"
+                if ($servers.Count -gt 0) {
+                    $debugLog += "Background:   - First server: '$($servers[0])'"
+                    $debugLog += "Background:   - First server type: $($servers[0].GetType().FullName)"
+                    $debugLog += "Background:   - First server length: $($servers[0].Length)"
+                }
                 $debugLog += "Background: IncludeDNS = $dns"
 
                 # Import required modules in background runspace
