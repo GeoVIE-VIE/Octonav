@@ -174,6 +174,7 @@ function Write-Log {
     Get-DHCPScopeStatistics -ScopeFilters @("Production", "Test") -IncludeDNS $true
 #>
 function Get-DHCPScopeStatistics {
+    [CmdletBinding()]
     param(
         [string[]]$ScopeFilters = @(),
         [string[]]$SpecificServers = @(),
@@ -181,7 +182,7 @@ function Get-DHCPScopeStatistics {
         [System.Windows.Forms.RichTextBox]$LogBox,
         [scriptblock]$StatusBarCallback = $null,
         [switch]$UseRunspaces = $false,
-        [ref]$StopToken = $null
+        [ref]$StopToken
     )
 
     try {
@@ -202,7 +203,7 @@ function Get-DHCPScopeStatistics {
 
             if ($validServers.Count -eq 0) {
                 Write-Log -Message "No valid DHCP server names provided" -Color "Red" -LogBox $LogBox
-                return @{
+                return [PSCustomObject]@{
                     Success = $false
                     Results = @()
                     Error = "No valid DHCP server names provided"
@@ -221,7 +222,7 @@ function Get-DHCPScopeStatistics {
             } catch {
                 $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
                 Write-Log -Message "Failed to get DHCP servers: $sanitizedError" -Color "Red" -LogBox $LogBox
-                return @{
+                return [PSCustomObject]@{
                     Success = $false
                     Results = @()
                     Error = "Failed to get DHCP servers: $sanitizedError"
@@ -232,6 +233,15 @@ function Get-DHCPScopeStatistics {
         # Script block for parallel processing
         $ScriptBlock = {
             param($DHCPServerName, $ScopeFilters, $IncludeDNS)
+
+            # CRITICAL: Ensure DhcpServer module is available inside the worker
+            # Each job/runspace runs in a separate process and needs the module loaded
+            try {
+                Import-Module DhcpServer -ErrorAction Stop
+            } catch {
+                Write-Error "Error loading DhcpServer module on $DHCPServerName : $($_.Exception.Message)"
+                return @()
+            }
 
             $ServerStats = @()  # Use regular array, not ArrayList
 
@@ -260,7 +270,7 @@ function Get-DHCPScopeStatistics {
                         if ($MatchingScopes) {
                             Write-Output "DEBUG: Filter '$Filter' matched $($MatchingScopes.Count) scope(s)"
                             foreach ($ms in $MatchingScopes) {
-                                Write-Output "DEBUG:   - Matched: '$($ms.Name)'"
+                                Write-Output "DEBUG: - Matched: '$($ms.Name)'"
                             }
                             $FilteredScopes += $MatchingScopes
                         } else {
@@ -328,7 +338,7 @@ function Get-DHCPScopeStatistics {
         # Check if stop was requested before starting
         if ($StopToken -and $StopToken.Value) {
             Write-Log -Message "Operation cancelled before starting" -Color "Yellow" -LogBox $LogBox
-            return @{
+            return [PSCustomObject]@{
                 Success = $false
                 Results = @()
                 Error = "Operation cancelled by user"
@@ -441,7 +451,7 @@ function Get-DHCPScopeStatistics {
                     }
 
                     Write-Log -Message "Operation cancelled by user" -Color "Yellow" -LogBox $LogBox
-                    return @{
+                    return [PSCustomObject]@{
                         Success = $false
                         Results = $AllStats
                         Error = "Operation cancelled by user"
@@ -473,7 +483,7 @@ function Get-DHCPScopeStatistics {
 
                 $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxConcurrentJobs - 1, $DHCPServers.Count - 1))]
 
-                Write-Log -Message "Starting batch with $($Batch.Count) servers..." -Color "Info" -LogBox $LogBox
+                Write-Log -Message "Starting batch with $($Batch.Count) servers..." -Color "Cyan" -LogBox $LogBox
 
                 # Start jobs for current batch
                 foreach ($Server in $Batch) {
@@ -551,7 +561,7 @@ function Get-DHCPScopeStatistics {
                 }
 
                 Write-Log -Message "Operation cancelled by user. Collected $($AllStats.Count) scopes before cancellation." -Color "Yellow" -LogBox $LogBox
-                return @{
+                return [PSCustomObject]@{
                     Success = $false
                     Results = $AllStats
                     Error = "Operation cancelled by user"
@@ -587,17 +597,15 @@ function Get-DHCPScopeStatistics {
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
 
-        $resultsArray = $AllStats
-
-        return @{
+        return [PSCustomObject]@{
             Success = $true
-            Results = $resultsArray
+            Results = $AllStats
             Error = $null
         }
     } catch {
         $errorMessage = $_.Exception.Message
         Write-Log -Message "DHCP collection error: $errorMessage" -Color "Red" -LogBox $LogBox
-        return @{
+        return [PSCustomObject]@{
             Success = $false
             Results = @()
             Error = $errorMessage
