@@ -1090,12 +1090,21 @@ $btnCollectDHCP.Add_Click({
                 $debugLog += "Background: Imported DHCPFunctions"
 
                 # Call collection function
+                $debugLog += "Background: About to call Get-DHCPScopeStatistics"
+                $debugLog += "Background:   - ScopeFilters count: $($filters.Count)"
+                $debugLog += "Background:   - SpecificServers count: $($servers.Count)"
+                if ($servers.Count -gt 0) {
+                    $debugLog += "Background:   - First server: $($servers[0])"
+                }
+                $debugLog += "Background:   - IncludeDNS: $dns"
+
                 $result = Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
 
                 $debugLog += "Background: Collection completed"
                 $debugLog += "Background: Result Success = $($result.Success)"
                 $debugLog += "Background: Result Results.Count = $($result.Results.Count)"
                 $debugLog += "Background: Result Message = $($result.Message)"
+                $debugLog += "Background: Result Error = $($result.Error)"
 
                 if ($result.Results) {
                     $debugLog += "Background: Results type = $($result.Results.GetType().FullName)"

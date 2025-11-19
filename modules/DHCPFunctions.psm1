@@ -180,10 +180,16 @@ function Get-DHCPScopeStatistics {
     )
 
     try {
+        Write-Host "[DHCP-DEBUG] Get-DHCPScopeStatistics called" -ForegroundColor Cyan
+        Write-Host "[DHCP-DEBUG] ScopeFilters: $($ScopeFilters.Count) items" -ForegroundColor Cyan
+        Write-Host "[DHCP-DEBUG] SpecificServers: $($SpecificServers.Count) items" -ForegroundColor Cyan
+        Write-Host "[DHCP-DEBUG] IncludeDNS: $IncludeDNS" -ForegroundColor Cyan
+
         # -------------------------
         # Determine DHCP servers
         # -------------------------
         if ($SpecificServers -and $SpecificServers.Count -gt 0) {
+            Write-Host "[DHCP-DEBUG] Using specific servers" -ForegroundColor Cyan
             Invoke-StatusBar -Callback $StatusBarCallback -Status 'Using specified DHCP servers...' -Progress 5 -ProgressText 'Validating server names...'
             Write-Log -Message 'Using specified DHCP servers...' -Color 'Info' -LogBox $LogBox -Theme $null
 
@@ -211,8 +217,10 @@ function Get-DHCPScopeStatistics {
             }
 
             $DHCPServers = $validServers
+            Write-Host "[DHCP-DEBUG] Valid servers: $($DHCPServers.Count)" -ForegroundColor Cyan
         }
         else {
+            Write-Host "[DHCP-DEBUG] No specific servers - auto-discovering from AD" -ForegroundColor Cyan
             Invoke-StatusBar -Callback $StatusBarCallback -Status 'Discovering DHCP servers...' -Progress 5 -ProgressText 'Discovering DHCP servers in domain...'
             Write-Log -Message 'Discovering DHCP servers in domain...' -Color 'Info' -LogBox $LogBox -Theme $null
 
@@ -435,12 +443,14 @@ function Get-DHCPScopeStatistics {
         # -------------------------
         # Parallel processing
         # -------------------------
+        Write-Host "[DHCP-DEBUG] Starting parallel processing of $($DHCPServers.Count) servers" -ForegroundColor Cyan
         $startMsg = "Starting parallel processing of $($DHCPServers.Count) DHCP servers (Throttle: $ThrottleLimit)..."
         Write-Log -Message $startMsg -Color 'Info' -LogBox $LogBox -Theme $null
         Invoke-StatusBar -Callback $StatusBarCallback -Status $startMsg -Progress 25 -ProgressText $startMsg
 
         $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $ThrottleLimit)
         $RunspacePool.Open()
+        Write-Host "[DHCP-DEBUG] Runspace pool created and opened" -ForegroundColor Cyan
 
         $Runspaces = @()
         $AllStats  = New-Object System.Collections.ArrayList
@@ -510,9 +520,11 @@ function Get-DHCPScopeStatistics {
         }
 
         $completeMsg = "Collection complete. Found $($AllStats.Count) total DHCP scopes."
+        Write-Host "[DHCP-DEBUG] Collection complete - AllStats.Count = $($AllStats.Count)" -ForegroundColor Cyan
         Write-Log -Message $completeMsg -Color 'Success' -LogBox $LogBox -Theme $null
         Invoke-StatusBar -Callback $StatusBarCallback -Status $completeMsg -Progress 100 -ProgressText $completeMsg
 
+        Write-Host "[DHCP-DEBUG] Returning result object" -ForegroundColor Cyan
         return [PSCustomObject]@{
             Success = $true
             Results = $AllStats
