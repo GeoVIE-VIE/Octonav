@@ -273,7 +273,8 @@ function Show-ToastNotification {
     Write-Verbose "Toast: [$Type] $Title - $Message"
 }
 
-function Invoke-BackgroundOperation {
+function Invoke-BackgroundOperation
+{
     <#
     .SYNOPSIS
         Runs a scriptblock in a background runspace to keep UI responsive
@@ -282,25 +283,20 @@ function Invoke-BackgroundOperation {
         Uses a timer to poll for completion and update the UI when done.
     .PARAMETER ScriptBlock
         The code to run in the background
+    .PARAMETER ArgumentList
+        Arguments to pass to the scriptblock
     .PARAMETER OnComplete
-        Scriptblock to execute when operation completes (receives $result)
+        Scriptblock to execute when operation completes (receives result)
     .PARAMETER Form
         The main form (used for creating the timer)
-    .EXAMPLE
-        Invoke-BackgroundOperation -ScriptBlock {
-            Get-DHCPScopeStatistics -ScopeFilters $args[0]
-        } -ArgumentList @($scopeFilters) -OnComplete {
-            param($result)
-            $btnCollectDHCP.Enabled = $true
-            Write-Log "Complete!" -LogBox $dhcpLogBox
-        } -Form $mainForm
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)]
         [scriptblock]$ScriptBlock,
 
         [Parameter(Mandatory=$false)]
-        [object[]]$ArgumentList,
+        [object[]]$ArgumentList = @(),
 
         [Parameter(Mandatory=$true)]
         [scriptblock]$OnComplete,
@@ -316,11 +312,12 @@ function Invoke-BackgroundOperation {
     # Create PowerShell instance
     $ps = [powershell]::Create()
     $ps.Runspace = $runspace
-    $null = $ps.AddScript($ScriptBlock)
+    [void]$ps.AddScript($ScriptBlock)
 
-    if ($ArgumentList) {
+    # Add arguments if provided
+    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
         foreach ($arg in $ArgumentList) {
-            $null = $ps.AddArgument($arg)
+            [void]$ps.AddArgument($arg)
         }
     }
 
@@ -329,45 +326,44 @@ function Invoke-BackgroundOperation {
 
     # Create timer to poll for completion
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 200  # Check every 200ms
+    $timer.Interval = 200
 
     # Store references in timer tag
-    $timer.Tag = @{
+    $timerTag = @{
         PowerShell = $ps
         Handle = $handle
         Runspace = $runspace
         OnComplete = $OnComplete
     }
+    $timer.Tag = $timerTag
 
-    # Timer tick event
-    $timer.Add_Tick({
-        $timerData = $this.Tag
+    # Create tick handler
+    $tickHandler = {
+        $data = $this.Tag
 
-        if ($timerData.Handle.IsCompleted) {
-            # Operation complete - get result
+        if ($data.Handle.IsCompleted) {
             try {
-                $result = $timerData.PowerShell.EndInvoke($timerData.Handle)
-
-                # Execute completion callback
-                & $timerData.OnComplete $result
-
-            } catch {
+                $result = $data.PowerShell.EndInvoke($data.Handle)
+                & $data.OnComplete $result
+            }
+            catch {
                 Write-Warning "Background operation error: $($_.Exception.Message)"
-            } finally {
-                # Cleanup
-                $timerData.PowerShell.Dispose()
-                $timerData.Runspace.Close()
-                $timerData.Runspace.Dispose()
+            }
+            finally {
+                if ($data.PowerShell) { $data.PowerShell.Dispose() }
+                if ($data.Runspace) {
+                    $data.Runspace.Close()
+                    $data.Runspace.Dispose()
+                }
                 $this.Stop()
                 $this.Dispose()
             }
         }
-    })
+    }
 
-    # Start timer
+    $timer.Add_Tick($tickHandler)
     $timer.Start()
 
-    # Return timer reference in case caller wants to cancel
     return $timer
 }
 
