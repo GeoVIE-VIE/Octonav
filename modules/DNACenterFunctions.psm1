@@ -157,7 +157,7 @@ function Get-SafeFileName {
 }
 
 # Apply filters to output lines - matches DNACAPEiv6_COMPLETE behavior
-function Apply-Filters {
+function Invoke-Filters {
     param(
         [string[]]$Lines,
         [string[]]$Filters
@@ -515,10 +515,10 @@ function Connect-DNACenter {
     }
 }
 
-function Load-AllDNADevices {
+function Get-AllDNADevices {
     <#
     .SYNOPSIS
-        Loads all network devices from DNA Center
+        Gets all network devices from DNA Center
     .DESCRIPTION
         Retrieves complete device inventory with pagination support
     .PARAMETER LogBox
@@ -587,10 +587,10 @@ function Load-AllDNADevices {
     }
 }
 
-function Filter-DNADevices {
+function Select-DNADevices {
     <#
     .SYNOPSIS
-        Filters loaded devices by hostname, IP, role, and family
+        Selects loaded devices by hostname, IP, role, and family
     .DESCRIPTION
         Applies filter criteria to select a subset of loaded devices
     .PARAMETER Hostname
@@ -2389,7 +2389,7 @@ function Invoke-CommandRunner {
                             $filteredOutput = $outputText
                             if ($outputFilters.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($outputText)) {
                                 $lines = $outputText -split "`n"
-                                $filteredLines = Apply-Filters -Lines $lines -Filters $outputFilters
+                                $filteredLines = Invoke-Filters -Lines $lines -Filters $outputFilters
                                 $filteredOutput = $filteredLines -join "`n"
                             }
 
@@ -2472,8 +2472,8 @@ Export-ModuleMember -Function @(
     # Connection Functions
     'Test-DNACTokenValid',
     'Connect-DNACenter',
-    'Load-AllDNADevices',
-    'Filter-DNADevices',
+    'Get-AllDNADevices',
+    'Select-DNADevices',
 
     # DNA Center API Functions
     'Get-NetworkDevicesBasic',
@@ -2511,6 +2511,6 @@ Export-ModuleMember -Function @(
     'Get-TaskFileId',
     'Test-IPAddress',
     'Get-SafeFileName',
-    'Apply-Filters',
+    'Invoke-Filters',
     'Test-DnaFilterInput'
 )

@@ -213,10 +213,10 @@ function ConvertTo-ReadableTimestamp {
     return $Value.ToString()
 }
 
-function Apply-Filters {
+function Invoke-Filters {
     <#
     .SYNOPSIS
-        Applies filters to output lines (OR logic)
+        Invokes filters on output lines (OR logic)
     #>
     param(
         [string[]]$Lines,
@@ -282,7 +282,7 @@ Export-ModuleMember -Function @(
     'Set-MarqueeProgress',
     'Hide-Progress',
     'ConvertTo-ReadableTimestamp',
-    'Apply-Filters',
+    'Invoke-Filters',
     'Test-IsAdministrator',
     'Show-ToastNotification'
 )
