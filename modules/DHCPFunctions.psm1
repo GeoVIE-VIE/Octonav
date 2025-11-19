@@ -295,10 +295,23 @@ function Get-DHCPScopeStatistics {
                     if ($Stats) {
                         Write-Output "DEBUG: Found statistics for scope $($Scope.ScopeId)"
 
-                        $obj = $Stats | Select-Object *,
-                            @{Name='DHCPServer'; Expression={$DHCPServerName}},
-                            @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
-                            @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
+                        # Create explicit PSCustomObject instead of Select-Object to ensure proper serialization
+                        $obj = [PSCustomObject]@{
+                            ScopeId = $Stats.ScopeId
+                            SubnetMask = $Stats.SubnetMask
+                            StartRange = $Stats.StartRange
+                            EndRange = $Stats.EndRange
+                            Free = $Stats.Free
+                            InUse = $Stats.InUse
+                            Pending = $Stats.Pending
+                            Reserved = $Stats.Reserved
+                            AddressesFree = $Stats.Free
+                            AddressesInUse = $Stats.InUse
+                            PercentageInUse = $Stats.PercentageInUse
+                            DHCPServer = $DHCPServerName
+                            Description = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }
+                            DNSServers = $DNSServerMap[$Scope.ScopeId]
+                        }
 
                         [void]$ServerStats.Add($obj)
                         Write-Output "DEBUG: Added scope $($Scope.ScopeId) to results (ServerStats count: $($ServerStats.Count))"
@@ -313,7 +326,13 @@ function Get-DHCPScopeStatistics {
                 Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
             }
 
-            return $ServerStats
+            # Return array items directly (PowerShell will unwrap ArrayList automatically)
+            # Write each item to output stream explicitly
+            foreach ($item in $ServerStats) {
+                Write-Output $item
+            }
+
+            Write-Output "DEBUG: Finished outputting $($ServerStats.Count) data objects"
         }
 
         # Process servers in parallel using Runspaces (5-10x faster than Start-Job)
@@ -366,10 +385,16 @@ function Get-DHCPScopeStatistics {
                     try {
                         $result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
 
+                        Write-Log -Message "DEBUG: EndInvoke returned $($result.Count) item(s) from $($Runspace.ServerName)" -Color "Cyan" -LogBox $LogBox
+
                         if ($result) {
                             # Separate debug output from actual data
+                            $dataObjectCount = 0
                             foreach ($item in $result) {
                                 if ($item) {
+                                    $itemType = $item.GetType().Name
+                                    Write-Log -Message "DEBUG: Processing item type: $itemType" -Color "Cyan" -LogBox $LogBox
+
                                     # Check if it's a string (debug/warning message) or data object
                                     if ($item -is [string]) {
                                         # Log debug/warning messages
@@ -382,10 +407,13 @@ function Get-DHCPScopeStatistics {
                                         }
                                     } else {
                                         # It's a data object (scope statistics), add to results
+                                        Write-Log -Message "DEBUG: Adding data object (type: $itemType) to AllStats" -Color "Cyan" -LogBox $LogBox
                                         [void]$AllStats.Add($item)
+                                        $dataObjectCount++
                                     }
                                 }
                             }
+                            Write-Log -Message "DEBUG: Added $dataObjectCount data object(s) from $($Runspace.ServerName). AllStats now has $($AllStats.Count) total" -Color "Cyan" -LogBox $LogBox
                         }
                     } catch {
                         Write-Log -Message "Failed to receive from $($Runspace.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
