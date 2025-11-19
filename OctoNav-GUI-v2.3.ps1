@@ -871,16 +871,30 @@ $btnCollectDHCP.Add_Click({
         $includeDNS = $chkIncludeDNS.Checked
 
         # Call DHCP collection function from module
+        Write-Log -Message "Starting DHCP statistics collection..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         $result = Get-DHCPScopeStatistics -ScopeFilters $scopeFilters -SpecificServers $specificServers -IncludeDNS $includeDNS -LogBox $dhcpLogBox -StatusBarCallback {
             param($status, $progress, $progressText)
             Update-StatusBar -Status $status -ProgressValue $progress -ProgressMax 100 -ProgressText $progressText
         }
 
-        if ($result.Success) {
-            $script:dhcpResults = $result.Results
+        # Debug: Log result structure
+        if ($result) {
+            Write-Log -Message "Collection returned: Success=$($result.Success), Results Count=$($result.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        } else {
+            Write-Log -Message "Collection returned null result" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
+        if ($result -and $result.Success) {
+            # Ensure Results is an array (even if empty)
+            $script:dhcpResults = if ($result.Results) {
+                @($result.Results)
+            } else {
+                @()
+            }
+
             if ($script:dhcpResults.Count -gt 0) {
                 $btnExportDHCP.Enabled = $true
-                Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes" -Color "Green" -LogBox $dhcpLogBox
+                Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scopes" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                 # Auto-export if enabled
                 if ($script:Settings.AutoExportAfterCollection) {
@@ -891,29 +905,36 @@ $btnCollectDHCP.Add_Click({
                         New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
                     }
 
+                    Write-Log -Message "Auto-exporting $($script:dhcpResults.Count) scope(s)..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                     $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
                     Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
-                    Write-Log -Message "Auto-exported to: $exportedPath" -Color "Cyan" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "Auto-exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
             } else {
-                Write-Log -Message "No DHCP scopes found matching criteria" -Color "Yellow" -LogBox $dhcpLogBox
+                Write-Log -Message "No DHCP scopes found matching criteria" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
+        } elseif ($result) {
+            Write-Log -Message "Error: $($result.Error)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            [System.Windows.Forms.MessageBox]::Show("DHCP collection failed: $($result.Error)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         } else {
-            Write-Log -Message "Error: $($result.Error)" -Color "Red" -LogBox $dhcpLogBox
+            Write-Log -Message "DHCP collection returned no data" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            [System.Windows.Forms.MessageBox]::Show("DHCP collection failed - no data returned", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
 
     } catch {
-        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox
+        Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
     } finally {
         $btnCollectDHCP.Enabled = $true
-        Update-StatusBar -Status "Ready" -ProgressValue -1
+        Update-StatusBar -Status "Ready" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+        Hide-Progress -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
     }
 })
 
 $btnExportDHCP.Add_Click({
     try {
-        if ($script:dhcpResults.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("No DHCP results to export", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        # Check if results exist and have data
+        if (-not $script:dhcpResults -or $script:dhcpResults.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("No DHCP results to export. Please collect statistics first.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
@@ -924,7 +945,9 @@ $btnExportDHCP.Add_Click({
             New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
         }
 
+        Write-Log -Message "Exporting $($script:dhcpResults.Count) scope(s) to CSV..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+
         Write-Log -Message "Exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$exportedPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
 
