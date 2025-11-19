@@ -293,7 +293,7 @@ function Show-SettingsDialog {
         # Import and apply theme
         try {
             Import-Module "$PSScriptRoot\ThemeManager.ps1" -Force -ErrorAction Stop
-            Apply-ThemeToControl -Control $form -Theme $Theme
+            Set-ThemeToControl -Control $form -Theme $Theme
         } catch {
             # Silently continue if theme application fails
         }

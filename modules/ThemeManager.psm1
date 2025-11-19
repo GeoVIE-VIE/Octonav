@@ -118,10 +118,10 @@ function Get-Theme {
     return $script:LightTheme
 }
 
-function Apply-ThemeToControl {
+function Set-ThemeToControl {
     <#
     .SYNOPSIS
-        Applies theme to a control and its children recursively
+        Sets theme to a control and its children recursively
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -200,7 +200,7 @@ function Apply-ThemeToControl {
 
         # Recursively apply to child controls
         foreach ($child in $Control.Controls) {
-            Apply-ThemeToControl -Control $child -Theme $Theme
+            Set-ThemeToControl -Control $child -Theme $Theme
         }
     } catch {
         # Silently continue if unable to apply theme to this control
@@ -233,6 +233,6 @@ function Get-LogColor {
 # Export module members
 Export-ModuleMember -Function @(
     'Get-Theme',
-    'Apply-ThemeToControl',
+    'Set-ThemeToControl',
     'Get-LogColor'
 )

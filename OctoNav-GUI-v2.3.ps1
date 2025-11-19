@@ -368,7 +368,7 @@ $menuToolsSettings.Add_Click({
         # Apply theme if changed
         if ($script:CurrentTheme.Name -ne $script:Settings.Theme) {
             $script:CurrentTheme = Get-Theme -ThemeName $script:Settings.Theme
-            Apply-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
+            Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
         }
 
         [System.Windows.Forms.MessageBox]::Show(
@@ -407,7 +407,7 @@ $menuViewTheme.Add_Click({
     Save-OctoNavSettings -Settings $script:Settings
 
     # Apply new theme
-    Apply-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
+    Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
 })
 $menuView.DropDownItems.Add($menuViewTheme)
 
@@ -1698,7 +1698,7 @@ $btnDNAConnect.Add_Click({
 $btnLoadDevices.Add_Click({
     try {
         Update-StatusBar -Status "Loading devices from DNA Center..." -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
-        $success = Load-AllDNADevices -LogBox $dnaLogBox
+        $success = Get-AllDNADevices -LogBox $dnaLogBox
 
         if ($success) {
             # Enable filter controls
@@ -1722,7 +1722,7 @@ $btnLoadDevices.Add_Click({
 
 $btnApplyDeviceFilter.Add_Click({
     try {
-        $result = Filter-DNADevices -Hostname $txtFilterHostname.Text -IPAddress $txtFilterIPAddress.Text -Role $txtFilterRole.Text -Family $txtFilterFamily.Text -LogBox $dnaLogBox
+        $result = Select-DNADevices -Hostname $txtFilterHostname.Text -IPAddress $txtFilterIPAddress.Text -Role $txtFilterRole.Text -Family $txtFilterFamily.Text -LogBox $dnaLogBox
 
         if ($result.Count -eq 0) {
             $lblDeviceSelectionStatus.Text = "Selected devices: 0 of $($global:allDNADevices.Count)"
@@ -1823,7 +1823,7 @@ $mainForm.Add_FormClosing({
 # APPLY THEME
 # ============================================
 
-Apply-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
+Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
 
 # ============================================
 # INITIAL DHCP SERVER CACHE LOAD
