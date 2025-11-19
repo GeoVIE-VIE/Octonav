@@ -307,7 +307,12 @@ function Get-DHCPScopeStatistics {
             try {
                 Import-Module DhcpServer -ErrorAction Stop
 
+                Write-Log -Message "[$ServerName] Querying scopes..." -Color 'Info' -LogBox $LogBox -Theme $null
+                $scopeStart = Get-Date
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
+                $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
+                Write-Log -Message "[$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
+
                 if (-not $Scopes) {
                     $ResultObject.Message = 'No scopes found on server. Check permissions or DHCP service status.'
                     return $ResultObject
@@ -331,11 +336,17 @@ function Get-DHCPScopeStatistics {
                 }
 
                 # Retrieve all statistics at once (more reliable than per-scope queries)
+                Write-Log -Message "[$ServerName] Querying scope statistics..." -Color 'Info' -LogBox $LogBox -Theme $null
+                $statsStart = Get-Date
                 $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
+                $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
+                Write-Log -Message "[$ServerName] Retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
 
                 # Optional DNS server option lookup (OptionId 6)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
+                    Write-Log -Message "[$ServerName] Retrieving DNS server options for $(@($Scopes).Count) scope(s)..." -Color 'Info' -LogBox $LogBox -Theme $null
+                    $dnsStart = Get-Date
                     foreach ($Scope in $Scopes) {
                         try {
                             $DNSOption = Get-DhcpServerv4OptionValue `
@@ -350,6 +361,8 @@ function Get-DHCPScopeStatistics {
                             # Ignore DNS lookup failures per-scope
                         }
                     }
+                    $dnsDuration = ((Get-Date) - $dnsStart).TotalSeconds
+                    Write-Log -Message "[$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s" -Color 'Info' -LogBox $LogBox -Theme $null
                 }
 
                 # Process each scope and match with statistics
@@ -357,21 +370,22 @@ function Get-DHCPScopeStatistics {
                     # Find corresponding statistics using Where-Object
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
-                    # Get DNS servers from map
-                    $DNSServersString = $DNSServerMap[$Scope.ScopeId]
-
                     if ($Stats) {
-                        # Add custom properties - use direct variable references
+                        # Capture all values as local variables BEFORE Select-Object
+                        # This avoids closure issues with the $Scope loop variable
+                        $currentServer = $ServerName
+                        $currentDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
+                            $Scope.Description
+                        } else {
+                            $Scope.Name
+                        }
+                        $currentDNSServers = $DNSServerMap[$Scope.ScopeId]
+
+                        # Now use the local variables in Expression blocks
                         $Stats | Select-Object *,
-                            @{ Name = 'DHCPServer'; Expression = { $ServerName } },
-                            @{ Name = 'Description'; Expression = {
-                                if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
-                                    $Scope.Description
-                                } else {
-                                    $Scope.Name
-                                }
-                            }},
-                            @{ Name = 'DNSServers'; Expression = { $DNSServersString } }
+                            @{ Name = 'DHCPServer'; Expression = { $currentServer } },
+                            @{ Name = 'Description'; Expression = { $currentDescription } },
+                            @{ Name = 'DNSServers'; Expression = { $currentDNSServers } }
                     }
                 }
 
