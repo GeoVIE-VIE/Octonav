@@ -320,19 +320,25 @@ function Get-DHCPScopeStatistics {
 
                 # Scope name filtering
                 if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                    Write-Log -Message "[$ServerName] Applying filters: $($ScopeFilters -join ', ')" -Color 'Info' -LogBox $LogBox -Theme $null
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
                         if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
                         $MatchingScopes = $Scopes | Where-Object { $_.Name.ToUpper() -like "*$FilterUpper*" }
+                        if ($MatchingScopes) {
+                            Write-Log -Message "[$ServerName] Filter '$Filter' matched $(@($MatchingScopes).Count) scope(s)" -Color 'Info' -LogBox $LogBox -Theme $null
+                        }
                         $FilteredScopes += $MatchingScopes
                     }
 
                     $Scopes = $FilteredScopes | Select-Object -Unique
                     if (-not $Scopes -or $Scopes.Count -eq 0) {
                         $ResultObject.Message = 'No scopes matched the provided filter(s).'
+                        Write-Log -Message "[$ServerName] No scopes matched filters" -Color 'Warning' -LogBox $LogBox -Theme $null
                         return $ResultObject
                     }
+                    Write-Log -Message "[$ServerName] After filtering: $(@($Scopes).Count) scope(s) remaining" -Color 'Info' -LogBox $LogBox -Theme $null
                 }
 
                 # Retrieve all statistics at once (more reliable than per-scope queries)
@@ -366,6 +372,7 @@ function Get-DHCPScopeStatistics {
                 }
 
                 # Process each scope and match with statistics
+                Write-Log -Message "[$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..." -Color 'Info' -LogBox $LogBox -Theme $null
                 $ServerStats = foreach ($Scope in $Scopes) {
                     # Find corresponding statistics using Where-Object
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
@@ -386,8 +393,14 @@ function Get-DHCPScopeStatistics {
                             @{ Name = 'DHCPServer'; Expression = { $currentServer } },
                             @{ Name = 'Description'; Expression = { $currentDescription } },
                             @{ Name = 'DNSServers'; Expression = { $currentDNSServers } }
+                    } else {
+                        Write-Log -Message "[$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId) ($($Scope.Name))" -Color 'Warning' -LogBox $LogBox -Theme $null
                     }
                 }
+
+                # Filter out any nulls
+                $ServerStats = @($ServerStats | Where-Object { $_ -ne $null })
+                Write-Log -Message "[$ServerName] Successfully matched $($ServerStats.Count) scope(s) with statistics" -Color 'Success' -LogBox $LogBox -Theme $null
 
                 $ResultObject.Success = $true
                 $ResultObject.Message = "Successfully retrieved $($ServerStats.Count) scope(s)."
