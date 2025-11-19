@@ -51,6 +51,19 @@ try {
 }
 
 # ============================================
+# IMPORT UI ENHANCEMENT MODULES
+# ============================================
+
+# Import UI Enhancements module for professional spacing and icons
+$modulePath = Join-Path $scriptPath "modules"
+try {
+    Import-Module "$modulePath\UIEnhancements.psm1" -Force -ErrorAction Stop
+    Write-Verbose "UI Enhancements module loaded successfully"
+} catch {
+    Write-Warning "Failed to load UI Enhancements module: $($_.Exception.Message)"
+}
+
+# ============================================
 # PRIVILEGE MANAGEMENT
 # ============================================
 
@@ -2888,34 +2901,20 @@ $mainForm.MinimumSize = New-Object System.Drawing.Size(900, 650)
 
 # Create Tab Control
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Size = New-Object System.Drawing.Size(980, 620)
-$tabControl.Location = New-Object System.Drawing.Point(10, 10)
+$margin = Get-UISpacing -Name "MarginMedium"  # 16px
+$tabControl.Size = New-Object System.Drawing.Size(968, 608)  # Adjusted for larger margins
+$tabControl.Location = New-Object System.Drawing.Point($margin, $margin)
 $tabControl.Anchor = "Top, Left, Right, Bottom"
 $mainForm.Controls.Add($tabControl)
 
-# Create Status Bar
-$statusStrip = New-Object System.Windows.Forms.StatusStrip
-$statusStrip.SizingGrip = $true
-$mainForm.Controls.Add($statusStrip)
+# Create Enhanced Status Bar
+$script:StatusBarPanels = New-EnhancedStatusBar -Form $mainForm
 
-# Status Label (shows current operation)
-$script:statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$script:statusLabel.Text = "Ready"
-$script:statusLabel.Spring = $true  # Takes remaining space
-$script:statusLabel.TextAlign = "MiddleLeft"
-$statusStrip.Items.Add($script:statusLabel) | Out-Null
-
-# Progress Bar (shows progress percentage)
-$script:progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
-$script:progressBar.Size = New-Object System.Drawing.Size(200, 16)
-$script:progressBar.Visible = $false  # Hidden by default
-$statusStrip.Items.Add($script:progressBar) | Out-Null
-
-# Progress Label (shows X/Y)
-$script:progressLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$script:progressLabel.Text = ""
-$script:progressLabel.Visible = $false  # Hidden by default
-$statusStrip.Items.Add($script:progressLabel) | Out-Null
+# Create references for backward compatibility with existing code
+$statusStrip = $script:StatusBarPanels.StatusStrip
+$script:statusLabel = $script:StatusBarPanels.StatusLabel
+$script:progressBar = $script:StatusBarPanels.ProgressBar
+$script:progressLabel = $script:StatusBarPanels.ProgressLabel
 
 # ============================================
 # TAB 1: NETWORK CONFIGURATION (XFER)
@@ -2924,11 +2923,13 @@ $statusStrip.Items.Add($script:progressLabel) | Out-Null
 $tab1 = New-Object System.Windows.Forms.TabPage
 $tab1.Text = "Network Configuration"
 $tabControl.Controls.Add($tab1)
+Add-IconToTab -Tab $tab1 -IconName "Network"
 
 # Admin Status Indicator for Network Config Tab
 $lblAdminStatus = New-Object System.Windows.Forms.Label
-$lblAdminStatus.Size = New-Object System.Drawing.Size(940, 25)
-$lblAdminStatus.Location = New-Object System.Drawing.Point(10, 10)
+$margin = Get-UISpacing -Name "MarginMedium"
+$lblAdminStatus.Size = New-Object System.Drawing.Size(928, 32)  # Slightly taller for better visibility
+$lblAdminStatus.Location = New-Object System.Drawing.Point($margin, $margin)
 $lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblAdminStatus.TextAlign = "MiddleLeft"
 if ($script:IsRunningAsAdmin) {
@@ -2945,75 +2946,88 @@ $tab1.Controls.Add($lblAdminStatus)
 # Group Box for Network Settings
 $netGroupBox = New-Object System.Windows.Forms.GroupBox
 $netGroupBox.Text = "Network Adapter Configuration"
-$netGroupBox.Size = New-Object System.Drawing.Size(940, 250)
-$netGroupBox.Location = New-Object System.Drawing.Point(10, 40)
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$margin = Get-UISpacing -Name "MarginMedium"
+$netGroupBox.Size = New-Object System.Drawing.Size(928, 260)  # Slightly larger for better spacing
+$netGroupBox.Location = New-Object System.Drawing.Point($margin, (48 + $sectionGap))  # After admin status + gap
 $tab1.Controls.Add($netGroupBox)
+
+# Get spacing constants for consistent layout
+$padding = Get-UISpacing -Name "PaddingLarge"  # 16px internal padding
+$controlGap = Get-UISpacing -Name "ControlGapMedium"  # 12px between controls
+$buttonHeight = Get-UISpacing -Name "ButtonHeight"  # 36px
+$inputWidth = 220  # Slightly wider inputs
 
 # Find Network Button
 $btnFindNetwork = New-Object System.Windows.Forms.Button
 $btnFindNetwork.Text = "Find Unidentified Network"
-$btnFindNetwork.Size = New-Object System.Drawing.Size(200, 30)
-$btnFindNetwork.Location = New-Object System.Drawing.Point(20, 30)
+$btnFindNetwork.Size = New-Object System.Drawing.Size(220, $buttonHeight)
+$btnFindNetwork.Location = New-Object System.Drawing.Point($padding, ($padding + 12))
 $netGroupBox.Controls.Add($btnFindNetwork)
 
 # IP Address Label
 $lblIPAddress = New-Object System.Windows.Forms.Label
 $lblIPAddress.Text = "New IP Address:"
-$lblIPAddress.Size = New-Object System.Drawing.Size(120, 20)
-$lblIPAddress.Location = New-Object System.Drawing.Point(20, 80)
+$lblIPAddress.Size = New-Object System.Drawing.Size(130, 24)
+$lblIPAddress.Location = New-Object System.Drawing.Point($padding, (72))
+$lblIPAddress.TextAlign = "MiddleLeft"
 $netGroupBox.Controls.Add($lblIPAddress)
 
 # IP Address TextBox
 $txtIPAddress = New-Object System.Windows.Forms.TextBox
-$txtIPAddress.Size = New-Object System.Drawing.Size(200, 20)
-$txtIPAddress.Location = New-Object System.Drawing.Point(150, 78)
+$txtIPAddress.Size = New-Object System.Drawing.Size($inputWidth, 24)
+$txtIPAddress.Location = New-Object System.Drawing.Point((146), (72))
 $netGroupBox.Controls.Add($txtIPAddress)
 
 # Gateway Label
 $lblGateway = New-Object System.Windows.Forms.Label
 $lblGateway.Text = "Gateway:"
-$lblGateway.Size = New-Object System.Drawing.Size(120, 20)
-$lblGateway.Location = New-Object System.Drawing.Point(20, 120)
+$lblGateway.Size = New-Object System.Drawing.Size(130, 24)
+$lblGateway.Location = New-Object System.Drawing.Point($padding, (112))
+$lblGateway.TextAlign = "MiddleLeft"
 $netGroupBox.Controls.Add($lblGateway)
 
 # Gateway TextBox
 $txtGateway = New-Object System.Windows.Forms.TextBox
-$txtGateway.Size = New-Object System.Drawing.Size(200, 20)
-$txtGateway.Location = New-Object System.Drawing.Point(150, 118)
+$txtGateway.Size = New-Object System.Drawing.Size($inputWidth, 24)
+$txtGateway.Location = New-Object System.Drawing.Point((146), (112))
 $netGroupBox.Controls.Add($txtGateway)
 
 # Prefix Length Label
 $lblPrefix = New-Object System.Windows.Forms.Label
 $lblPrefix.Text = "Prefix Length:"
-$lblPrefix.Size = New-Object System.Drawing.Size(120, 20)
-$lblPrefix.Location = New-Object System.Drawing.Point(20, 160)
+$lblPrefix.Size = New-Object System.Drawing.Size(130, 24)
+$lblPrefix.Location = New-Object System.Drawing.Point($padding, (152))
+$lblPrefix.TextAlign = "MiddleLeft"
 $netGroupBox.Controls.Add($lblPrefix)
 
 # Prefix Length TextBox
 $txtPrefix = New-Object System.Windows.Forms.TextBox
 $txtPrefix.Text = "24"
-$txtPrefix.Size = New-Object System.Drawing.Size(200, 20)
-$txtPrefix.Location = New-Object System.Drawing.Point(150, 158)
+$txtPrefix.Size = New-Object System.Drawing.Size($inputWidth, 24)
+$txtPrefix.Location = New-Object System.Drawing.Point((146), (152))
 $netGroupBox.Controls.Add($txtPrefix)
 
 # Apply Configuration Button
 $btnApplyConfig = New-Object System.Windows.Forms.Button
 $btnApplyConfig.Text = "Apply Configuration"
-$btnApplyConfig.Size = New-Object System.Drawing.Size(200, 30)
-$btnApplyConfig.Location = New-Object System.Drawing.Point(20, 200)
+$btnApplyConfig.Size = New-Object System.Drawing.Size(220, $buttonHeight)
+$btnApplyConfig.Location = New-Object System.Drawing.Point($padding, (200))
 $netGroupBox.Controls.Add($btnApplyConfig)
 
 # Restore Defaults Button
 $btnRestoreDefaults = New-Object System.Windows.Forms.Button
 $btnRestoreDefaults.Text = "Restore Defaults"
-$btnRestoreDefaults.Size = New-Object System.Drawing.Size(200, 30)
-$btnRestoreDefaults.Location = New-Object System.Drawing.Point(240, 200)
+$btnRestoreDefaults.Size = New-Object System.Drawing.Size(220, $buttonHeight)
+$btnRestoreDefaults.Location = New-Object System.Drawing.Point((252), (200))
 $netGroupBox.Controls.Add($btnRestoreDefaults)
 
 # Network Config Log
 $netLogBox = New-Object System.Windows.Forms.RichTextBox
-$netLogBox.Size = New-Object System.Drawing.Size(940, 310)
-$netLogBox.Location = New-Object System.Drawing.Point(10, 300)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$netLogBox.Size = New-Object System.Drawing.Size(928, 280)  # Adjusted size
+$netLogBox.Location = New-Object System.Drawing.Point($margin, (328 + $sectionGap))  # After GroupBox + gap
 $netLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $netLogBox.ReadOnly = $true
 $tab1.Controls.Add($netLogBox)
@@ -3102,21 +3116,24 @@ $btnRestoreDefaults.Add_Click({
 $tab2 = New-Object System.Windows.Forms.TabPage
 $tab2.Text = "DHCP Statistics"
 $tabControl.Controls.Add($tab2)
+Add-IconToTab -Tab $tab2 -IconName "Stats"
 
 # Info Label
+$margin = Get-UISpacing -Name "MarginMedium"
 $lblDHCPInfo = New-Object System.Windows.Forms.Label
 $lblDHCPInfo.Text = "Collect and analyze DHCP scope statistics from domain DHCP servers"
-$lblDHCPInfo.Location = New-Object System.Drawing.Point(15, 15)
-$lblDHCPInfo.Size = New-Object System.Drawing.Size(900, 20)
-$lblDHCPInfo.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Italic)
+$lblDHCPInfo.Location = New-Object System.Drawing.Point($margin, $margin)
+$lblDHCPInfo.Size = New-Object System.Drawing.Size(900, 24)
+$lblDHCPInfo.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
 $lblDHCPInfo.ForeColor = [System.Drawing.Color]::DarkBlue
 $tab2.Controls.Add($lblDHCPInfo)
 
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Configuration"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(940, 110)
-$dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(928, 115)
+$dhcpServerGroupBox.Location = New-Object System.Drawing.Point($margin, (40 + $sectionGap))
 $tab2.Controls.Add($dhcpServerGroupBox)
 
 $lblServerInfo = New-Object System.Windows.Forms.Label
@@ -3151,8 +3168,10 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 # Scope Filtering Group
 $dhcpFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpFilterGroupBox.Text = "Scope Filtering (Optional)"
-$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(940, 75)
-$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(928, 80)
+$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point($margin, (175 + $sectionGap))
 $tab2.Controls.Add($dhcpFilterGroupBox)
 
 $lblScopeFilter = New-Object System.Windows.Forms.Label
@@ -3178,8 +3197,10 @@ $dhcpFilterGroupBox.Controls.Add($txtScopeFilter)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(940, 75)
-$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 245)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(928, 80)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point($margin, (275 + $sectionGap))
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
 $chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
@@ -3199,8 +3220,11 @@ $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
-$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(940, 65)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 330)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$buttonHeight = Get-UISpacing -Name "ButtonHeight"
+$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(928, (70))
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point($margin, (375 + $sectionGap))
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -3227,8 +3251,10 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 
 # DHCP Log
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
-$dhcpLogBox.Size = New-Object System.Drawing.Size(940, 220)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 405)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dhcpLogBox.Size = New-Object System.Drawing.Size(928, 180)
+$dhcpLogBox.Location = New-Object System.Drawing.Point($margin, (465 + $sectionGap))
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = "Vertical"
@@ -3695,12 +3721,14 @@ $btnExportDHCP.Add_Click({
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
 $tabControl.Controls.Add($tab3)
+Add-IconToTab -Tab $tab3 -IconName "DNA"
 
 # Connection Group
 $dnaConnGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaConnGroupBox.Text = "DNA Center Connection"
-$dnaConnGroupBox.Size = New-Object System.Drawing.Size(940, 140)
-$dnaConnGroupBox.Location = New-Object System.Drawing.Point(10, 10)
+$margin = Get-UISpacing -Name "MarginMedium"
+$dnaConnGroupBox.Size = New-Object System.Drawing.Size(928, 145)
+$dnaConnGroupBox.Location = New-Object System.Drawing.Point($margin, $margin)
 $tab3.Controls.Add($dnaConnGroupBox)
 
 # Server Selection
@@ -3763,8 +3791,10 @@ $dnaConnGroupBox.Controls.Add($btnLoadDevices)
 # Device Filters
 $dnaFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFilterGroupBox.Text = "Device Filters"
-$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(940, 105)
-$dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(928, 110)
+$dnaFilterGroupBox.Location = New-Object System.Drawing.Point($margin, (177 + $sectionGap))
 $tab3.Controls.Add($dnaFilterGroupBox)
 
 $lblFilterHostname = New-Object System.Windows.Forms.Label
@@ -3842,8 +3872,10 @@ $dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
 # Functions Group
 $dnaFuncGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFuncGroupBox.Text = "DNA Center Functions - 23 Available (Click to Execute)"
-$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(940, 210)
-$dnaFuncGroupBox.Location = New-Object System.Drawing.Point(10, 275)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dnaFuncGroupBox.Size = New-Object System.Drawing.Size(928, 215)
+$dnaFuncGroupBox.Location = New-Object System.Drawing.Point($margin, (307 + $sectionGap))
 $tab3.Controls.Add($dnaFuncGroupBox)
 
 # Create buttons for DNA Center functions in a grid layout
@@ -3909,8 +3941,10 @@ for ($i = 0; $i -lt $functions.Count; $i++) {
 
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
-$dnaLogBox.Size = New-Object System.Drawing.Size(940, 140)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 495)
+$margin = Get-UISpacing -Name "MarginMedium"
+$sectionGap = Get-UISpacing -Name "SectionGap"
+$dnaLogBox.Size = New-Object System.Drawing.Size(928, 115)
+$dnaLogBox.Location = New-Object System.Drawing.Point($margin, (542 + $sectionGap))
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $dnaLogBox.ScrollBars = "Vertical"
@@ -3943,9 +3977,15 @@ $btnDNAConnect.Add_Click({
         if ($success) {
             $btnLoadDevices.Enabled = $true
             Update-StatusBar -Status "Ready - Connected to DNA Center"
+
+            # Update enhanced status bar connection status
+            $serverName = $script:dnaCenterServers[$selectedIndex].Name
+            Update-ConnectionStatus -StatusBar $script:StatusBarPanels -IsConnected $true -ServerName $serverName
+
             [System.Windows.Forms.MessageBox]::Show("Successfully connected to DNA Center!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
             Update-StatusBar -Status "Ready - Failed to connect to DNA Center"
+            Update-ConnectionStatus -StatusBar $script:StatusBarPanels -IsConnected $false
             [System.Windows.Forms.MessageBox]::Show("Failed to connect to DNA Center", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {

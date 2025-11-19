@@ -19,13 +19,14 @@ $script:LightTheme = @{
     ControlForeColor = [System.Drawing.Color]::Black
 
     # GroupBox
-    GroupBoxBackColor = [System.Drawing.Color]::White
+    GroupBoxBackColor = [System.Drawing.Color]::FromArgb(247, 247, 247)  # Subtle gray tint
     GroupBoxForeColor = [System.Drawing.Color]::Black
 
     # TextBox/RichTextBox
     TextBoxBackColor = [System.Drawing.Color]::White
     TextBoxForeColor = [System.Drawing.Color]::Black
     TextBoxBorderColor = [System.Drawing.Color]::Gray
+    RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)  # Subtle background for logs
 
     # Button
     ButtonBackColor = [System.Drawing.Color]::WhiteSmoke
@@ -72,6 +73,7 @@ $script:DarkTheme = @{
     TextBoxBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45)
     TextBoxForeColor = [System.Drawing.Color]::White
     TextBoxBorderColor = [System.Drawing.Color]::Gray
+    RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)  # Slightly darker for logs
 
     # Button
     ButtonBackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
@@ -145,7 +147,11 @@ function Apply-ThemeToControl {
                 $Control.ForeColor = $Theme.TextBoxForeColor
             }
             "RichTextBox" {
-                $Control.BackColor = $Theme.TextBoxBackColor
+                if ($Theme.ContainsKey('RichTextBoxBackColor')) {
+                    $Control.BackColor = $Theme.RichTextBoxBackColor
+                } else {
+                    $Control.BackColor = $Theme.TextBoxBackColor
+                }
                 $Control.ForeColor = $Theme.TextBoxForeColor
             }
             "Button" {
