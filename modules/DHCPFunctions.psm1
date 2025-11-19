@@ -225,7 +225,7 @@ function Get-DHCPScopeStatistics {
         $ScriptBlock = {
             param($DHCPServerName, $ScopeFilters, $IncludeDNS)
 
-            $ServerStats = New-Object System.Collections.ArrayList
+            $ServerStats = @()  # Use regular array, not ArrayList
 
             try {
                 $Scopes = Get-DhcpServerv4Scope -ComputerName $DHCPServerName -ErrorAction Stop
@@ -295,25 +295,12 @@ function Get-DHCPScopeStatistics {
                     if ($Stats) {
                         Write-Output "DEBUG: Found statistics for scope $($Scope.ScopeId)"
 
-                        # Create explicit PSCustomObject instead of Select-Object to ensure proper serialization
-                        $obj = [PSCustomObject]@{
-                            ScopeId = $Stats.ScopeId
-                            SubnetMask = $Stats.SubnetMask
-                            StartRange = $Stats.StartRange
-                            EndRange = $Stats.EndRange
-                            Free = $Stats.Free
-                            InUse = $Stats.InUse
-                            Pending = $Stats.Pending
-                            Reserved = $Stats.Reserved
-                            AddressesFree = $Stats.Free
-                            AddressesInUse = $Stats.InUse
-                            PercentageInUse = $Stats.PercentageInUse
-                            DHCPServer = $DHCPServerName
-                            Description = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }
-                            DNSServers = $DNSServerMap[$Scope.ScopeId]
-                        }
+                        # Use Select-Object * with calculated properties (matches working merged script)
+                        $ServerStats += $Stats | Select-Object *,
+                            @{Name='DHCPServer'; Expression={$DHCPServerName}},
+                            @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
+                            @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
 
-                        [void]$ServerStats.Add($obj)
                         Write-Output "DEBUG: Added scope $($Scope.ScopeId) to results (ServerStats count: $($ServerStats.Count))"
                     } else {
                         Write-Output "WARNING: No statistics found for scope $($Scope.ScopeId) - it may be inactive"
@@ -326,116 +313,112 @@ function Get-DHCPScopeStatistics {
                 Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
             }
 
-            # Return array items directly (PowerShell will unwrap ArrayList automatically)
-            # Write each item to output stream explicitly
-            foreach ($item in $ServerStats) {
-                Write-Output $item
-            }
-
-            Write-Output "DEBUG: Finished outputting $($ServerStats.Count) data objects"
+            return $ServerStats
         }
 
-        # Process servers in parallel using Runspaces (5-10x faster than Start-Job)
-        $AllStats = New-Object System.Collections.ArrayList
+        # Process servers in parallel using Start-Job (better serialization than runspaces)
+        $Jobs = @()
+        $AllStats = @()
         $MaxConcurrentJobs = 20
-        $CheckIntervalMs = 500
+        $CompletedCount = 0
         $TotalServers = $DHCPServers.Count
 
-        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Runspace Pool)..." -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "Starting parallel processing of $TotalServers DHCP servers (using Start-Job with batching)..." -Color "Cyan" -LogBox $LogBox
 
-        # Create runspace pool
-        $RunspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxConcurrentJobs)
-        $RunspacePool.Open()
+        # Process servers in batches
+        for ($i = 0; $i -lt $DHCPServers.Count; $i += $MaxConcurrentJobs) {
+            $Batch = $DHCPServers[$i..([Math]::Min($i + $MaxConcurrentJobs - 1, $DHCPServers.Count - 1))]
 
-        # Track runspaces
-        $Runspaces = New-Object System.Collections.ArrayList
-        $CompletedCount = 0
+            Write-Log -Message "Starting batch with $($Batch.Count) servers..." -Color "Info" -LogBox $LogBox
 
-        # Start all runspaces
-        foreach ($Server in $DHCPServers) {
-            $PowerShell = [powershell]::Create()
-            $PowerShell.RunspacePool = $RunspacePool
+            # Start jobs for current batch
+            foreach ($Server in $Batch) {
+                $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server.DnsName, $ScopeFilters, $IncludeDNS
+                $Jobs += @{
+                    Job = $Job
+                    ServerName = $Server.DnsName
+                    Processed = $false
+                }
+            }
 
-            [void]$PowerShell.AddScript($ScriptBlock)
-            [void]$PowerShell.AddArgument($Server.DnsName)
-            [void]$PowerShell.AddArgument($ScopeFilters)
-            [void]$PowerShell.AddArgument($IncludeDNS)
+            # Wait for current batch to complete
+            while ($Jobs | Where-Object { $_.Job.State -eq 'Running' }) {
+                Start-Sleep -Seconds 2
 
-            $AsyncResult = $PowerShell.BeginInvoke()
-
-            [void]$Runspaces.Add([PSCustomObject]@{
-                PowerShell = $PowerShell
-                AsyncResult = $AsyncResult
-                ServerName = $Server.DnsName
-                Completed = $false
-            })
-        }
-
-        # Monitor runspaces
-        while ($Runspaces | Where-Object { -not $_.Completed }) {
-            Start-Sleep -Milliseconds $CheckIntervalMs
-
-            foreach ($Runspace in ($Runspaces | Where-Object { -not $_.Completed })) {
-                if ($Runspace.AsyncResult.IsCompleted) {
+                # Check for completed jobs and collect results
+                $CompletedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+                foreach ($CompletedJob in $CompletedInBatch) {
                     $CompletedCount++
-                    $Runspace.Completed = $true
+                    $CompletedJob.Processed = $true
 
-                    Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName)" -Color "Green" -LogBox $LogBox
+                    Write-Log -Message "[$CompletedCount/$TotalServers] Completed: $($CompletedJob.ServerName)" -Color "Green" -LogBox $LogBox
 
                     try {
-                        $result = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
-
-                        Write-Log -Message "DEBUG: EndInvoke returned $($result.Count) item(s) from $($Runspace.ServerName)" -Color "Cyan" -LogBox $LogBox
-
-                        if ($result) {
-                            # Separate debug output from actual data
-                            $dataObjectCount = 0
-                            foreach ($item in $result) {
-                                if ($item) {
-                                    $itemType = $item.GetType().Name
-                                    Write-Log -Message "DEBUG: Processing item type: $itemType" -Color "Cyan" -LogBox $LogBox
-
-                                    # Check if it's a string (debug/warning message) or data object
-                                    if ($item -is [string]) {
-                                        # Log debug/warning messages
-                                        if ($item -like "DEBUG:*") {
-                                            Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
-                                        } elseif ($item -like "WARNING:*") {
-                                            Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
-                                        } else {
-                                            Write-Log -Message $item -Color "Magenta" -LogBox $LogBox
-                                        }
+                        $Result = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
+                        if ($Result) {
+                            # Separate debug strings from data objects
+                            foreach ($item in $Result) {
+                                if ($item -is [string]) {
+                                    if ($item -like "DEBUG:*") {
+                                        Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                    } elseif ($item -like "WARNING:*") {
+                                        Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
                                     } else {
-                                        # It's a data object (scope statistics), add to results
-                                        Write-Log -Message "DEBUG: Adding data object (type: $itemType) to AllStats" -Color "Cyan" -LogBox $LogBox
-                                        [void]$AllStats.Add($item)
-                                        $dataObjectCount++
+                                        Write-Log -Message $item -Color "Magenta" -LogBox $LogBox
                                     }
+                                } else {
+                                    # It's a scope data object, add to results
+                                    $AllStats += $item
                                 }
                             }
-                            Write-Log -Message "DEBUG: Added $dataObjectCount data object(s) from $($Runspace.ServerName). AllStats now has $($AllStats.Count) total" -Color "Cyan" -LogBox $LogBox
                         }
                     } catch {
-                        Write-Log -Message "Failed to receive from $($Runspace.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
-                    } finally {
-                        $Runspace.PowerShell.Dispose()
+                        Write-Log -Message "Failed to receive from $($CompletedJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
                     }
+
+                    Remove-Job -Job $CompletedJob.Job -Force
+                }
+
+                # Check for failed jobs
+                $FailedInBatch = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+                foreach ($FailedJob in $FailedInBatch) {
+                    $CompletedCount++
+                    $FailedJob.Processed = $true
+                    Write-Log -Message "[$CompletedCount/$TotalServers] Failed: $($FailedJob.ServerName)" -Color "Red" -LogBox $LogBox
+                    Remove-Job -Job $FailedJob.Job -Force
                 }
             }
         }
 
-        # Cleanup
-        $RunspacePool.Close()
-        $RunspacePool.Dispose()
+        # Final cleanup - handle any remaining jobs
+        $RemainingJobs = $Jobs | Where-Object { -not $_.Processed }
+        foreach ($RemainingJob in $RemainingJobs) {
+            if ($RemainingJob.Job.State -eq 'Completed') {
+                try {
+                    $Result = Receive-Job -Job $RemainingJob.Job
+                    if ($Result) {
+                        foreach ($item in $Result) {
+                            if ($item -is [string]) {
+                                if ($item -like "DEBUG:*") {
+                                    Write-Log -Message $item -Color "Cyan" -LogBox $LogBox
+                                } elseif ($item -like "WARNING:*") {
+                                    Write-Log -Message $item -Color "Yellow" -LogBox $LogBox
+                                }
+                            } else {
+                                $AllStats += $item
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log -Message "Failed to receive from $($RemainingJob.ServerName): $($_.Exception.Message)" -Color "Red" -LogBox $LogBox
+                }
+            }
+            Remove-Job -Job $RemainingJob.Job -Force
+        }
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
 
-        # Convert ArrayList to array for better compatibility
-        $resultsArray = if ($AllStats.Count -gt 0) {
-            $AllStats.ToArray()
-        } else {
-            @()
-        }
+        $resultsArray = $AllStats
 
         return @{
             Success = $true
