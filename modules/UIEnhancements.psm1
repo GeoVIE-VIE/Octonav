@@ -55,30 +55,30 @@ $script:UISpacing = @{
 # ============================================
 
 $script:UIIcons = @{
-    # Status icons (using Unicode box drawing and symbols - BMP safe)
+    # Status icons (using safe Unicode symbols)
     Success = [char]0x2713    # ✓
     Error = [char]0x2717      # ✗
     Warning = [char]0x26A0    # ⚠
     Info = [char]0x2139       # ℹ
 
-    # Action icons (using ConvertFromUtf32 for emoji)
-    Connect = [System.Char]::ConvertFromUtf32(0x1F50C)   # 🔌
-    Disconnect = [System.Char]::ConvertFromUtf32(0x1F50C)  # Same icon, different state
-    Refresh = [System.Char]::ConvertFromUtf32(0x1F504)   # 🔄
-    Search = [System.Char]::ConvertFromUtf32(0x1F50D)    # 🔍
+    # Action icons (using safe Unicode symbols, no emoji)
+    Connect = [char]0x2316    # ⌖ (position indicator)
+    Disconnect = [char]0x2316 # Same icon
+    Refresh = [char]0x21BB    # ↻ (clockwise arrow)
+    Search = [char]0x2315     # ⌕ (telephone recorder)
     Filter = [char]0x2699     # ⚙
-    Export = [System.Char]::ConvertFromUtf32(0x1F4BE)    # 💾
-    Import = [System.Char]::ConvertFromUtf32(0x1F4C1)    # 📁
+    Export = [char]0x21E7     # ⇧ (upward arrow)
+    Import = [char]0x21E9     # ⇩ (downward arrow)
     Settings = [char]0x2699   # ⚙
 
-    # Feature icons
-    Network = [System.Char]::ConvertFromUtf32(0x1F310)   # 🌐
-    Server = [System.Char]::ConvertFromUtf32(0x1F5A5)    # 🖥
-    Database = [System.Char]::ConvertFromUtf32(0x1F4BE)  # 💾
-    Stats = [System.Char]::ConvertFromUtf32(0x1F4CA)     # 📊
-    DNA = [System.Char]::ConvertFromUtf32(0x1F52C)       # 🔬
+    # Feature icons (using safe Unicode symbols)
+    Network = [char]0x2637    # ☷ (trigram)
+    Server = [char]0x25A0     # ■ (black square)
+    Database = [char]0x2261   # ≡ (identical to)
+    Stats = [char]0x2248      # ≈ (almost equal)
+    DNA = [char]0x2042        # ⁂ (asterism)
 
-    # Navigation (BMP safe)
+    # Navigation
     Forward = [char]0x25B6    # ▶
     Back = [char]0x25C0       # ◀
     Up = [char]0x25B2         # ▲
@@ -87,9 +87,9 @@ $script:UIIcons = @{
     # Status indicators
     Online = [char]0x25CF     # ●
     Offline = [char]0x25CB    # ○
-    Shield = [System.Char]::ConvertFromUtf32(0x1F6E1)    # 🛡
-    User = [System.Char]::ConvertFromUtf32(0x1F464)      # 👤
-    Time = [System.Char]::ConvertFromUtf32(0x1F550)      # 🕐
+    Shield = [char]0x2302     # ⌂ (house/shield alternative)
+    User = [char]0x263A       # ☺ (smiley face)
+    Time = [char]0x231A       # ⌚ (watch)
 }
 
 # ============================================
