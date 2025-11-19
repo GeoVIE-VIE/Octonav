@@ -295,10 +295,23 @@ function Get-DHCPScopeStatistics {
                     if ($Stats) {
                         Write-Output "DEBUG: Found statistics for scope $($Scope.ScopeId)"
 
-                        $obj = $Stats | Select-Object *,
-                            @{Name='DHCPServer'; Expression={$DHCPServerName}},
-                            @{Name='Description'; Expression={if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }}},
-                            @{Name='DNSServers'; Expression={$DNSServerMap[$Scope.ScopeId]}}
+                        # Create explicit PSCustomObject instead of Select-Object to ensure proper serialization
+                        $obj = [PSCustomObject]@{
+                            ScopeId = $Stats.ScopeId
+                            SubnetMask = $Stats.SubnetMask
+                            StartRange = $Stats.StartRange
+                            EndRange = $Stats.EndRange
+                            Free = $Stats.Free
+                            InUse = $Stats.InUse
+                            Pending = $Stats.Pending
+                            Reserved = $Stats.Reserved
+                            AddressesFree = $Stats.Free
+                            AddressesInUse = $Stats.InUse
+                            PercentageInUse = $Stats.PercentageInUse
+                            DHCPServer = $DHCPServerName
+                            Description = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) { $Scope.Description } else { $Scope.Name }
+                            DNSServers = $DNSServerMap[$Scope.ScopeId]
+                        }
 
                         [void]$ServerStats.Add($obj)
                         Write-Output "DEBUG: Added scope $($Scope.ScopeId) to results (ServerStats count: $($ServerStats.Count))"
@@ -313,7 +326,13 @@ function Get-DHCPScopeStatistics {
                 Write-Error "Error querying $DHCPServerName : $($_.Exception.Message)"
             }
 
-            return $ServerStats
+            # Return array items directly (PowerShell will unwrap ArrayList automatically)
+            # Write each item to output stream explicitly
+            foreach ($item in $ServerStats) {
+                Write-Output $item
+            }
+
+            Write-Output "DEBUG: Finished outputting $($ServerStats.Count) data objects"
         }
 
         # Process servers in parallel using Runspaces (5-10x faster than Start-Job)
