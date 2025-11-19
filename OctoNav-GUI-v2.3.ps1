@@ -199,6 +199,7 @@ $global:dnaCenterServers = @()
 
 # Initialize global variables for DHCP
 $script:dhcpResults = @()
+$script:dhcpStopRequested = $false
 $script:dhcpRunspace = $null
 $script:dhcpPowerShell = $null
 $script:dhcpAsyncResult = $null
@@ -797,17 +798,25 @@ $btnCollectDHCP.Location = New-Object System.Drawing.Point(15, 25)
 $btnCollectDHCP.BackColor = [System.Drawing.Color]::LightGreen
 $dhcpActionsGroupBox.Controls.Add($btnCollectDHCP)
 
+$btnStopDHCP = New-Object System.Windows.Forms.Button
+$btnStopDHCP.Text = "Stop"
+$btnStopDHCP.Size = New-Object System.Drawing.Size(100, 35)
+$btnStopDHCP.Location = New-Object System.Drawing.Point(230, 25)
+$btnStopDHCP.BackColor = [System.Drawing.Color]::LightCoral
+$btnStopDHCP.Enabled = $false
+$dhcpActionsGroupBox.Controls.Add($btnStopDHCP)
+
 $btnExportDHCP = New-Object System.Windows.Forms.Button
 $btnExportDHCP.Text = "Export to CSV"
 $btnExportDHCP.Size = New-Object System.Drawing.Size(150, 35)
-$btnExportDHCP.Location = New-Object System.Drawing.Point(230, 25)
+$btnExportDHCP.Location = New-Object System.Drawing.Point(345, 25)
 $btnExportDHCP.Enabled = $false
 $dhcpActionsGroupBox.Controls.Add($btnExportDHCP)
 
 $lblExportHint = New-Object System.Windows.Forms.Label
-$lblExportHint.Text = "Results will be automatically exported after collection. Use this button to re-export."
-$lblExportHint.Size = New-Object System.Drawing.Size(700, 20)
-$lblExportHint.Location = New-Object System.Drawing.Point(395, 33)
+$lblExportHint.Text = "Results auto-exported after collection. Use Export to re-export."
+$lblExportHint.Size = New-Object System.Drawing.Size(400, 20)
+$lblExportHint.Location = New-Object System.Drawing.Point(510, 33)
 $lblExportHint.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblExportHint.ForeColor = [System.Drawing.Color]::Gray
 $dhcpActionsGroupBox.Controls.Add($lblExportHint)
@@ -829,11 +838,14 @@ $tab2.Controls.Add($dhcpLogBox)
 $btnCollectDHCP.Add_Click({
     try {
         $btnCollectDHCP.Enabled = $false
+        $btnStopDHCP.Enabled = $true
+        $btnExportDHCP.Enabled = $false
+        $script:dhcpStopRequested = $false
 
-        # Parse scope filters
+        # Parse scope filters (case-insensitive - module handles ToUpper conversion)
         $scopeFilters = @()
         if (-not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
-            $scopeFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim().ToUpper() }
+            $scopeFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() }
         }
 
         # Parse and validate specific servers
@@ -870,9 +882,9 @@ $btnCollectDHCP.Add_Click({
 
         $includeDNS = $chkIncludeDNS.Checked
 
-        # Call DHCP collection function from module
+        # Call DHCP collection function from module with stop token
         Write-Log -Message "Starting DHCP statistics collection..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        $result = Get-DHCPScopeStatistics -ScopeFilters $scopeFilters -SpecificServers $specificServers -IncludeDNS $includeDNS -LogBox $dhcpLogBox -StatusBarCallback {
+        $result = Get-DHCPScopeStatistics -ScopeFilters $scopeFilters -SpecificServers $specificServers -IncludeDNS $includeDNS -LogBox $dhcpLogBox -StopToken ([ref]$script:dhcpStopRequested) -StatusBarCallback {
             param($status, $progress, $progressText)
             Update-StatusBar -Status $status -ProgressValue $progress -ProgressMax 100 -ProgressText $progressText
         }
@@ -914,8 +926,19 @@ $btnCollectDHCP.Add_Click({
                 Write-Log -Message "No DHCP scopes found matching criteria" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
         } elseif ($result) {
+            # Even if not successful, save any partial results collected before stop/error
+            if ($result.Results -and $result.Results.Count -gt 0) {
+                $script:dhcpResults = @($result.Results)
+                $btnExportDHCP.Enabled = $true
+                Write-Log -Message "Partial results available: $($script:dhcpResults.Count) scopes collected before operation was stopped" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+
             Write-Log -Message "Error: $($result.Error)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            [System.Windows.Forms.MessageBox]::Show("DHCP collection failed: $($result.Error)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+
+            # Only show error dialog if not a user-requested cancellation
+            if ($result.Error -notlike "*cancelled by user*") {
+                [System.Windows.Forms.MessageBox]::Show("DHCP collection failed: $($result.Error)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
         } else {
             Write-Log -Message "DHCP collection returned no data" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             [System.Windows.Forms.MessageBox]::Show("DHCP collection failed - no data returned", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -925,9 +948,16 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "Error: $($_.Exception.Message)" -Color "Red" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
     } finally {
         $btnCollectDHCP.Enabled = $true
+        $btnStopDHCP.Enabled = $false
         Update-StatusBar -Status "Ready" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
         Hide-Progress -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
     }
+})
+
+$btnStopDHCP.Add_Click({
+    Write-Log -Message "Stop requested by user..." -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+    $script:dhcpStopRequested = $true
+    $btnStopDHCP.Enabled = $false
 })
 
 $btnExportDHCP.Add_Click({
