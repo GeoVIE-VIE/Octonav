@@ -517,27 +517,45 @@ function Get-DHCPScopeStatistics {
                     $CompletedCount++
                     $ServerResult = $Runspace.PowerShell.EndInvoke($Runspace.AsyncResult)
 
+                    # Debug what EndInvoke actually returned
+                    Write-Host "[DHCP-DEBUG] EndInvoke returned type: $($ServerResult.GetType().FullName)" -ForegroundColor Yellow
+                    Write-Host "[DHCP-DEBUG] EndInvoke count: $($ServerResult.Count)" -ForegroundColor Yellow
+
+                    # If it's a collection, get the first item
+                    if ($ServerResult -is [System.Collections.ICollection] -and $ServerResult.Count -gt 0) {
+                        Write-Host "[DHCP-DEBUG] ServerResult is a collection, extracting first item" -ForegroundColor Yellow
+                        $actualResult = $ServerResult[0]
+                    } else {
+                        $actualResult = $ServerResult
+                    }
+
+                    Write-Host "[DHCP-DEBUG] ActualResult type: $($actualResult.GetType().FullName)" -ForegroundColor Yellow
+                    Write-Host "[DHCP-DEBUG] ActualResult.Success: $($actualResult.Success)" -ForegroundColor Yellow
+
                     # Display script debug logs from the runspace
-                    if ($ServerResult.ScriptDebug) {
-                        foreach ($debugLine in $ServerResult.ScriptDebug) {
+                    if ($actualResult.ScriptDebug) {
+                        Write-Host "[DHCP-DEBUG] Found ScriptDebug with $($actualResult.ScriptDebug.Count) lines" -ForegroundColor Yellow
+                        foreach ($debugLine in $actualResult.ScriptDebug) {
                             Write-Host $debugLine -ForegroundColor Cyan
                             $script:DHCPDebugLog += $debugLine
                         }
+                    } else {
+                        Write-Host "[DHCP-DEBUG] No ScriptDebug found in result" -ForegroundColor Yellow
                     }
 
                     $pct = 25 + [int](($CompletedCount / [double]$TotalServers) * 75)  # 25–100%
 
-                    if ($ServerResult.Success) {
-                        $msg = "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName) - $($ServerResult.Message)"
+                    if ($actualResult.Success) {
+                        $msg = "[$CompletedCount/$TotalServers] Completed: $($Runspace.ServerName) - $($actualResult.Message)"
                         Write-Log -Message $msg -Color 'Success' -LogBox $LogBox -Theme $null
                         Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
 
-                        if ($ServerResult.Scopes) {
-                            [void]$AllStats.AddRange($ServerResult.Scopes)
+                        if ($actualResult.Scopes) {
+                            [void]$AllStats.AddRange($actualResult.Scopes)
                         }
                     }
                     else {
-                        $msg = "[$CompletedCount/$TotalServers] Failed: $($Runspace.ServerName) - $($ServerResult.Message)"
+                        $msg = "[$CompletedCount/$TotalServers] Failed: $($Runspace.ServerName) - $($actualResult.Message)"
                         Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
                         Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress $pct -ProgressText $msg
                     }
