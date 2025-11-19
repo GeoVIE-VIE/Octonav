@@ -1160,15 +1160,37 @@ $btnCollectDHCP.Add_Click({
 
             # PowerShell.EndInvoke returns a PSDataCollection - extract the actual result object
             Write-Log -Message "DEBUG: Raw result type: $($result.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            Write-Log -Message "DEBUG: Raw result count: $($result.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+            # Check what's actually in the result collection
+            if ($result.Count -gt 0) {
+                Write-Log -Message "DEBUG: result[0] type: $($result[0].GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                if ($result[0].PSObject.Properties.Name -contains 'Success') {
+                    Write-Log -Message "DEBUG: result[0] HAS Success property" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                } else {
+                    Write-Log -Message "DEBUG: result[0] DOES NOT have Success property" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "DEBUG: result[0] properties: $($result[0].PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                }
+            }
 
             $actualResult = if ($result -is [System.Collections.ICollection] -and $result.Count -gt 0) {
                 Write-Log -Message "DEBUG: Extracting first item from collection (count=$($result.Count))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                $result[0]
+                # Check if result[0] has the expected structure
+                if ($result[0].PSObject.Properties.Name -contains 'Success') {
+                    $result[0]
+                } else {
+                    # The entire result IS the return value (not wrapped)
+                    Write-Log -Message "DEBUG: Result not wrapped - using entire result object" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $result
+                }
             } else {
                 $result
             }
 
             Write-Log -Message "DEBUG: ActualResult type: $($actualResult.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            if ($actualResult.PSObject.Properties.Name) {
+                Write-Log -Message "DEBUG: ActualResult properties: $($actualResult.PSObject.Properties.Name -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
 
             # Display debug log from background runspace
             if ($actualResult -and $actualResult.DebugLog) {
