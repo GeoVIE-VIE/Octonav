@@ -99,6 +99,7 @@ try {
     Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -ErrorAction Stop
 
     # UI modules
+    Import-Module "$scriptPath\modules\UIEnhancements.psm1" -Force -ErrorAction Stop
     Import-Module "$scriptPath\modules\SettingsDialog.psm1" -Force -ErrorAction Stop
     Import-Module "$scriptPath\modules\DashboardComponents.psm1" -Force -ErrorAction Stop
 
@@ -358,8 +359,9 @@ $mainForm.MainMenuStrip = $menuStrip
 # ============================================
 
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(10, 30)
-$tabControl.Size = New-Object System.Drawing.Size(($mainForm.ClientSize.Width - 20), ($mainForm.ClientSize.Height - 70))
+$margin = Get-UISpacing -Name "MarginMedium"  # 16px for professional spacing
+$tabControl.Location = New-Object System.Drawing.Point($margin, 30)  # 30 for menu bar
+$tabControl.Size = New-Object System.Drawing.Size(($mainForm.ClientSize.Width - ($margin * 2)), ($mainForm.ClientSize.Height - 70))
 $tabControl.Anchor = "Top,Bottom,Left,Right"
 $mainForm.Controls.Add($tabControl)
 
@@ -370,6 +372,7 @@ $mainForm.Controls.Add($tabControl)
 $tab0 = New-Object System.Windows.Forms.TabPage
 $tab0.Text = "Dashboard"
 $tabControl.Controls.Add($tab0)
+Add-IconToTab -Tab $tab0 -IconName "Stats"
 
 # Title Label
 $lblDashboardTitle = New-Object System.Windows.Forms.Label
@@ -491,6 +494,7 @@ function Update-Dashboard {
 $tab1 = New-Object System.Windows.Forms.TabPage
 $tab1.Text = "Network Configuration"
 $tabControl.Controls.Add($tab1)
+Add-IconToTab -Tab $tab1 -IconName "Network"
 
 # Admin Status Indicator for Network Config Tab
 $lblAdminStatus = New-Object System.Windows.Forms.Label
@@ -690,6 +694,7 @@ $btnRestoreDefaults.Add_Click({
 $tab2 = New-Object System.Windows.Forms.TabPage
 $tab2.Text = "DHCP Statistics"
 $tabControl.Controls.Add($tab2)
+Add-IconToTab -Tab $tab2 -IconName "Server"
 
 # Info Label
 $lblDHCPInfo = New-Object System.Windows.Forms.Label
@@ -997,6 +1002,7 @@ $btnExportDHCP.Add_Click({
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
 $tabControl.Controls.Add($tab3)
+Add-IconToTab -Tab $tab3 -IconName "DNA"
 
 # Connection Group
 $dnaConnGroupBox = New-Object System.Windows.Forms.GroupBox
@@ -1320,9 +1326,15 @@ $btnDNAConnect.Add_Click({
         if ($success) {
             $btnLoadDevices.Enabled = $true
             Update-StatusBar -Status "Ready - Connected to DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+
+            # Update enhanced status bar connection status
+            $serverName = $global:dnaCenterServers[$selectedIndex].Name
+            Update-ConnectionStatus -StatusBar $script:StatusBarPanels -IsConnected $true -ServerName $serverName
+
             [System.Windows.Forms.MessageBox]::Show("Successfully connected to DNA Center!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
             Update-StatusBar -Status "Ready - Failed to connect to DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+            Update-ConnectionStatus -StatusBar $script:StatusBarPanels -IsConnected $false
             [System.Windows.Forms.MessageBox]::Show("Failed to connect to DNA Center", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     } catch {
@@ -1397,24 +1409,14 @@ $btnResetDeviceFilter.Add_Click({
 # STATUS BAR
 # ============================================
 
-$statusStrip = New-Object System.Windows.Forms.StatusStrip
-$script:statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$script:statusLabel.Text = "Ready"
-$script:statusLabel.Spring = $true
-$script:statusLabel.TextAlign = "MiddleLeft"
-$statusStrip.Items.Add($script:statusLabel)
+# Create Enhanced Status Bar with segmented panels
+$script:StatusBarPanels = New-EnhancedStatusBar -Form $mainForm
 
-$script:progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
-$script:progressBar.Size = New-Object System.Drawing.Size(200, 16)
-$script:progressBar.Visible = $false
-$statusStrip.Items.Add($script:progressBar)
-
-$script:progressLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$script:progressLabel.Text = ""
-$script:progressLabel.Visible = $false
-$statusStrip.Items.Add($script:progressLabel)
-
-$mainForm.Controls.Add($statusStrip)
+# Create references for backward compatibility with existing code
+$statusStrip = $script:StatusBarPanels.StatusStrip
+$script:statusLabel = $script:StatusBarPanels.StatusLabel
+$script:progressBar = $script:StatusBarPanels.ProgressBar
+$script:progressLabel = $script:StatusBarPanels.ProgressLabel
 
 # ============================================
 # TAB SELECTION EVENT
