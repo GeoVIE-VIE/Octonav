@@ -273,101 +273,9 @@ function Show-ToastNotification {
     Write-Verbose "Toast: [$Type] $Title - $Message"
 }
 
-function Invoke-BackgroundOperation
-{
-    <#
-    .SYNOPSIS
-        Runs a scriptblock in a background runspace to keep UI responsive
-    .DESCRIPTION
-        Executes long-running operations without blocking the UI thread.
-        Uses a timer to poll for completion and update the UI when done.
-    .PARAMETER ScriptBlock
-        The code to run in the background
-    .PARAMETER ArgumentList
-        Arguments to pass to the scriptblock
-    .PARAMETER OnComplete
-        Scriptblock to execute when operation completes (receives result)
-    .PARAMETER Form
-        The main form (used for creating the timer)
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [scriptblock]$ScriptBlock,
-
-        [Parameter(Mandatory=$false)]
-        [object[]]$ArgumentList = @(),
-
-        [Parameter(Mandatory=$true)]
-        [scriptblock]$OnComplete,
-
-        [Parameter(Mandatory=$true)]
-        [System.Windows.Forms.Form]$Form
-    )
-
-    # Create runspace
-    $runspace = [runspacefactory]::CreateRunspace()
-    $runspace.Open()
-
-    # Create PowerShell instance
-    $ps = [powershell]::Create()
-    $ps.Runspace = $runspace
-    [void]$ps.AddScript($ScriptBlock)
-
-    # Add arguments if provided
-    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
-        foreach ($arg in $ArgumentList) {
-            [void]$ps.AddArgument($arg)
-        }
-    }
-
-    # Start async execution
-    $handle = $ps.BeginInvoke()
-
-    # Create timer to poll for completion
-    $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 200
-
-    # Store references in timer tag
-    $timerTag = @{
-        PowerShell = $ps
-        Handle = $handle
-        Runspace = $runspace
-        OnComplete = $OnComplete
-    }
-    $timer.Tag = $timerTag
-
-    # Create tick handler
-    $tickHandler = {
-        $data = $this.Tag
-
-        if ($data.Handle.IsCompleted) {
-            try {
-                $result = $data.PowerShell.EndInvoke($data.Handle)
-                & $data.OnComplete $result
-            }
-            catch {
-                Write-Warning "Background operation error: $($_.Exception.Message)"
-            }
-            finally {
-                if ($data.PowerShell) { $data.PowerShell.Dispose() }
-                if ($data.Runspace) {
-                    $data.Runspace.Close()
-                    $data.Runspace.Dispose()
-                }
-                $this.Stop()
-                $this.Dispose()
-            }
-        }
-    }
-
-    $timer.Add_Tick($tickHandler)
-    $timer.Start()
-
-    return $timer
-}
-
 # Export module members
+# Note: Invoke-BackgroundOperation is defined in main script (not module) to ensure
+# System.Windows.Forms.Timer is available at definition time
 Export-ModuleMember -Function @(
     'Write-Log',
     'Update-StatusBar',
@@ -376,6 +284,5 @@ Export-ModuleMember -Function @(
     'ConvertTo-ReadableTimestamp',
     'Apply-Filters',
     'Test-IsAdministrator',
-    'Show-ToastNotification',
-    'Invoke-BackgroundOperation'
+    'Show-ToastNotification'
 )
