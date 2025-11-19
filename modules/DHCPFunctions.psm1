@@ -358,9 +358,16 @@ function Get-DHCPScopeStatistics {
 
         Write-Log -Message "Found $($AllStats.Count) total DHCP scopes" -Color "Green" -LogBox $LogBox
 
+        # Convert ArrayList to array for better compatibility
+        $resultsArray = if ($AllStats.Count -gt 0) {
+            $AllStats.ToArray()
+        } else {
+            @()
+        }
+
         return @{
             Success = $true
-            Results = $AllStats
+            Results = $resultsArray
             Error = $null
         }
     } catch {
