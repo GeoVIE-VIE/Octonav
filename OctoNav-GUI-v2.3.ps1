@@ -1068,11 +1068,11 @@ $btnCollectDHCP.Add_Click({
 
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
-            param($filters, $servers, $dns, $stopRef)
+            param($filters, $servers, $dns, $stopRef, $scriptRoot)
 
             try {
                 # Import required module in background runspace
-                $modulePath = "$using:scriptPath\modules\DHCPFunctions.psm1"
+                $modulePath = Join-Path $scriptRoot "modules\DHCPFunctions.psm1"
                 Import-Module $modulePath -Force -ErrorAction Stop
 
                 # Call collection function
@@ -1090,7 +1090,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @($scopeFilters, $specificServers, $includeDNS, ([ref]$script:dhcpStopRequested)) -OnComplete {
+        } -ArgumentList @($scopeFilters, $specificServers, $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
