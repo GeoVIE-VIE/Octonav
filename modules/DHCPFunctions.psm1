@@ -330,8 +330,6 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
-                $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
-
                 # Optional DNS server option lookup (OptionId 6)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
@@ -339,11 +337,11 @@ function Get-DHCPScopeStatistics {
                         try {
                             $DNSOption = Get-DhcpServerv4OptionValue `
                                 -ComputerName $ServerName `
-                                -ScopeId $Scope.ScopeId `
+                                -ScopeId $Scope.ScopeId.ToString() `
                                 -OptionId 6 `
                                 -ErrorAction SilentlyContinue
                             if ($DNSOption) {
-                                $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
+                                $DNSServerMap[$Scope.ScopeId.ToString()] = $DNSOption.Value -join ','
                             }
                         } catch {
                             # Ignore DNS lookup failures per-scope
@@ -351,25 +349,38 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
+                # Query statistics per-scope for better reliability
                 $ServerStats = foreach ($Scope in $Scopes) {
-                    $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
-                    if ($Stats) {
-                        # Capture scope variables for use in calculated properties
-                        $currentScopeId = $Scope.ScopeId
-                        $currentScopeDesc = $Scope.Description
-                        $currentScopeName = $Scope.Name
+                    try {
+                        # Convert ScopeId to string to ensure proper parameter binding
+                        $scopeIdString = $Scope.ScopeId.ToString()
 
-                        $Stats | Select-Object *,
-                            @{ Name = 'DHCPServer';  Expression = { $ServerName } },
-                            @{ Name = 'Description'; Expression = {
-                                    if (-not [string]::IsNullOrWhiteSpace($currentScopeDesc)) {
-                                        $currentScopeDesc
-                                    } else {
-                                        $currentScopeName
+                        $Stats = Get-DhcpServerv4ScopeStatistics `
+                            -ComputerName $ServerName `
+                            -ScopeId $scopeIdString `
+                            -ErrorAction Stop
+
+                        if ($Stats) {
+                            # Capture scope variables for use in calculated properties
+                            $currentScopeId = $scopeIdString
+                            $currentScopeDesc = $Scope.Description
+                            $currentScopeName = $Scope.Name
+
+                            $Stats | Select-Object *,
+                                @{ Name = 'DHCPServer';  Expression = { $ServerName } },
+                                @{ Name = 'Description'; Expression = {
+                                        if (-not [string]::IsNullOrWhiteSpace($currentScopeDesc)) {
+                                            $currentScopeDesc
+                                        } else {
+                                            $currentScopeName
+                                        }
                                     }
-                                }
-                            },
-                            @{ Name = 'DNSServers';  Expression = { $DNSServerMap[$currentScopeId] } }
+                                },
+                                @{ Name = 'DNSServers';  Expression = { $DNSServerMap[$currentScopeId] } }
+                        }
+                    } catch {
+                        # Log scope-specific failures but continue processing other scopes
+                        Write-Warning "Failed to get statistics for scope $($Scope.ScopeId) on $ServerName : $($_.Exception.Message)"
                     }
                 }
 
