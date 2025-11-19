@@ -993,10 +993,20 @@ $btnCollectDHCP.Add_Click({
 
         # 1. Get checked servers from the list
         $checkedServers = @()
+        Write-Log -Message "DEBUG: CheckedItems count: $($script:lstDHCPServers.CheckedItems.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
         foreach ($item in $script:lstDHCPServers.CheckedItems) {
+            # Convert to string and log
+            $itemStr = $item.ToString()
+            Write-Log -Message "DEBUG: Processing item: '$itemStr'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
             # Extract DNS name from "DnsName (IPAddress)" format
-            if ($item -match '^(.+?)\s+\(') {
-                $checkedServers += $matches[1]
+            if ($itemStr -match '^(.+?)\s+\(') {
+                $serverName = $matches[1].Trim()
+                $checkedServers += $serverName
+                Write-Log -Message "DEBUG: Extracted server name: '$serverName'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            } else {
+                Write-Log -Message "DEBUG: Failed to extract server name from: '$itemStr'" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
         }
 
@@ -1051,15 +1061,34 @@ $btnCollectDHCP.Add_Click({
         # Call DHCP collection function in background to keep UI responsive
         Write-Log -Message "Starting DHCP statistics collection in background..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
+        # Log what we're passing to the background operation
+        Write-Log -Message "DEBUG: Scope filters: $($scopeFilters.Count) items" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Specific servers: $($specificServers.Count) items - $($specificServers -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include DNS: $includeDNS" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
             param($filters, $servers, $dns, $stopRef)
 
-            # Import required module in background runspace
-            Import-Module "$using:scriptPath\modules\DHCPFunctions.psm1" -Force
+            try {
+                # Import required module in background runspace
+                $modulePath = "$using:scriptPath\modules\DHCPFunctions.psm1"
+                Import-Module $modulePath -Force -ErrorAction Stop
 
-            # Call collection function
-            Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+                # Call collection function
+                $result = Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+
+                # Ensure we return the result
+                return $result
+            }
+            catch {
+                # Return error object if something fails
+                return [PSCustomObject]@{
+                    Success = $false
+                    Results = @()
+                    Error = "Background operation error: $($_.Exception.Message)"
+                }
+            }
 
         } -ArgumentList @($scopeFilters, $specificServers, $includeDNS, ([ref]$script:dhcpStopRequested)) -OnComplete {
             param($result)
