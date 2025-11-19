@@ -55,30 +55,30 @@ $script:UISpacing = @{
 # ============================================
 
 $script:UIIcons = @{
-    # Status icons (using Unicode box drawing and symbols)
+    # Status icons (using Unicode box drawing and symbols - BMP safe)
     Success = [char]0x2713    # ✓
     Error = [char]0x2717      # ✗
     Warning = [char]0x26A0    # ⚠
     Info = [char]0x2139       # ℹ
 
-    # Action icons
-    Connect = [char]0x1F50C   # 🔌
-    Disconnect = [char]0x1F50C  # Same icon, different state
-    Refresh = [char]0x1F504   # 🔄
-    Search = [char]0x1F50D    # 🔍
+    # Action icons (using ConvertFromUtf32 for emoji)
+    Connect = [System.Char]::ConvertFromUtf32(0x1F50C)   # 🔌
+    Disconnect = [System.Char]::ConvertFromUtf32(0x1F50C)  # Same icon, different state
+    Refresh = [System.Char]::ConvertFromUtf32(0x1F504)   # 🔄
+    Search = [System.Char]::ConvertFromUtf32(0x1F50D)    # 🔍
     Filter = [char]0x2699     # ⚙
-    Export = [char]0x1F4BE    # 💾
-    Import = [char]0x1F4C1    # 📁
+    Export = [System.Char]::ConvertFromUtf32(0x1F4BE)    # 💾
+    Import = [System.Char]::ConvertFromUtf32(0x1F4C1)    # 📁
     Settings = [char]0x2699   # ⚙
 
     # Feature icons
-    Network = [char]0x1F310   # 🌐
-    Server = [char]0x1F5A5    # 🖥
-    Database = [char]0x1F4BE  # 💾
-    Stats = [char]0x1F4CA     # 📊
-    DNA = [char]0x1F52C       # 🔬
+    Network = [System.Char]::ConvertFromUtf32(0x1F310)   # 🌐
+    Server = [System.Char]::ConvertFromUtf32(0x1F5A5)    # 🖥
+    Database = [System.Char]::ConvertFromUtf32(0x1F4BE)  # 💾
+    Stats = [System.Char]::ConvertFromUtf32(0x1F4CA)     # 📊
+    DNA = [System.Char]::ConvertFromUtf32(0x1F52C)       # 🔬
 
-    # Navigation
+    # Navigation (BMP safe)
     Forward = [char]0x25B6    # ▶
     Back = [char]0x25C0       # ◀
     Up = [char]0x25B2         # ▲
@@ -87,9 +87,9 @@ $script:UIIcons = @{
     # Status indicators
     Online = [char]0x25CF     # ●
     Offline = [char]0x25CB    # ○
-    Shield = [char]0x1F6E1    # 🛡
-    User = [char]0x1F464      # 👤
-    Time = [char]0x1F550      # 🕐
+    Shield = [System.Char]::ConvertFromUtf32(0x1F6E1)    # 🛡
+    User = [System.Char]::ConvertFromUtf32(0x1F464)      # 👤
+    Time = [System.Char]::ConvertFromUtf32(0x1F550)      # 🕐
 }
 
 # ============================================
