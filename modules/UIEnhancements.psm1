@@ -55,41 +55,41 @@ $script:UISpacing = @{
 # ============================================
 
 $script:UIIcons = @{
-    # Status icons
-    Success = "✓"
-    Error = "✗"
-    Warning = "⚠"
-    Info = "ℹ"
+    # Status icons (using Unicode box drawing and symbols)
+    Success = [char]0x2713    # ✓
+    Error = [char]0x2717      # ✗
+    Warning = [char]0x26A0    # ⚠
+    Info = [char]0x2139       # ℹ
 
     # Action icons
-    Connect = "🔌"
-    Disconnect = "🔌"  # Same icon, different state
-    Refresh = "🔄"
-    Search = "🔍"
-    Filter = "⚙"
-    Export = "💾"
-    Import = "📁"
-    Settings = "⚙"
+    Connect = [char]0x1F50C   # 🔌
+    Disconnect = [char]0x1F50C  # Same icon, different state
+    Refresh = [char]0x1F504   # 🔄
+    Search = [char]0x1F50D    # 🔍
+    Filter = [char]0x2699     # ⚙
+    Export = [char]0x1F4BE    # 💾
+    Import = [char]0x1F4C1    # 📁
+    Settings = [char]0x2699   # ⚙
 
     # Feature icons
-    Network = "🌐"
-    Server = "🖥"
-    Database = "💾"
-    Stats = "📊"
-    DNA = "🔬"
+    Network = [char]0x1F310   # 🌐
+    Server = [char]0x1F5A5    # 🖥
+    Database = [char]0x1F4BE  # 💾
+    Stats = [char]0x1F4CA     # 📊
+    DNA = [char]0x1F52C       # 🔬
 
     # Navigation
-    Forward = "▶"
-    Back = "◀"
-    Up = "▲"
-    Down = "▼"
+    Forward = [char]0x25B6    # ▶
+    Back = [char]0x25C0       # ◀
+    Up = [char]0x25B2         # ▲
+    Down = [char]0x25BC       # ▼
 
     # Status indicators
-    Online = "●"
-    Offline = "○"
-    Shield = "🛡"
-    User = "👤"
-    Time = "🕐"
+    Online = [char]0x25CF     # ●
+    Offline = [char]0x25CB    # ○
+    Shield = [char]0x1F6E1    # 🛡
+    User = [char]0x1F464      # 👤
+    Time = [char]0x1F550      # 🕐
 }
 
 # ============================================
