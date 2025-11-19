@@ -61,6 +61,68 @@ function Update-DashboardPanel {
     }
 }
 
+function Get-CachedDHCPServers {
+    <#
+    .SYNOPSIS
+        Gets DHCP servers from cache file
+    .DESCRIPTION
+        Reads cached DHCP server list from JSON file. Returns empty array if cache doesn't exist.
+    #>
+    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
+
+    if (Test-Path $cacheFile) {
+        try {
+            $cache = Get-Content $cacheFile -Raw | ConvertFrom-Json
+            return $cache.Servers
+        } catch {
+            # Cache file corrupted, return empty
+        }
+    }
+
+    return @()
+}
+
+function Update-DHCPServerCache {
+    <#
+    .SYNOPSIS
+        Discovers DHCP servers and updates cache file
+    .DESCRIPTION
+        Queries Active Directory for DHCP servers and saves to cache.
+        Returns the discovered servers.
+    #>
+    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
+
+    try {
+        # Discover DHCP servers from AD
+        $dhcpServers = Get-DhcpServerInDC -ErrorAction Stop
+
+        if ($dhcpServers) {
+            $serverList = @($dhcpServers | ForEach-Object {
+                [PSCustomObject]@{
+                    DnsName = $_.DnsName
+                    IPAddress = $_.IPAddress
+                }
+            })
+
+            # Create cache object
+            $cache = @{
+                LastUpdated = (Get-Date).ToString("o")
+                ServerCount = $serverList.Count
+                Servers = $serverList
+            }
+
+            # Save to JSON file
+            $cache | ConvertTo-Json -Depth 3 | Set-Content $cacheFile -Force
+
+            return $serverList
+        }
+    } catch {
+        Write-Warning "Failed to discover DHCP servers: $($_.Exception.Message)"
+    }
+
+    return @()
+}
+
 function Get-SystemHealthSummary {
     <#
     .SYNOPSIS
@@ -82,14 +144,14 @@ function Get-SystemHealthSummary {
             }
         }
 
-        # Check for DHCP servers
+        # Check for DHCP servers from cache (fast)
         try {
-            $dhcpServers = Get-DhcpServerInDC -ErrorAction SilentlyContinue
-            if ($dhcpServers) {
-                $health.DHCPServersFound = @($dhcpServers).Count
+            $cachedServers = Get-CachedDHCPServers
+            if ($cachedServers) {
+                $health.DHCPServersFound = @($cachedServers).Count
             }
         } catch {
-            # Silently continue if DHCP discovery fails
+            # Silently continue if cache read fails
         }
 
         return $health
@@ -154,6 +216,8 @@ function Get-RecentActivity {
 Export-ModuleMember -Function @(
     'New-DashboardPanel',
     'Update-DashboardPanel',
+    'Get-CachedDHCPServers',
+    'Update-DHCPServerCache',
     'Get-SystemHealthSummary',
     'New-QuickActionButton',
     'Get-RecentActivity'
