@@ -91,6 +91,9 @@ if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationC
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 try {
+    # Remove all custom modules from session to ensure clean reload
+    Get-Module | Where-Object { $_.Path -like "$scriptPath\modules\*" } | Remove-Module -Force -ErrorAction SilentlyContinue
+
     # Core modules
     Import-Module "$scriptPath\modules\SettingsManager.psm1" -Force -ErrorAction Stop
     Import-Module "$scriptPath\modules\ThemeManager.psm1" -Force -ErrorAction Stop
@@ -107,6 +110,19 @@ try {
     Import-Module "$scriptPath\modules\DNACenterFunctions.psm1" -Force -ErrorAction Stop
     Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -ErrorAction Stop
     Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -ErrorAction Stop
+
+    # Verify critical functions are available
+    $criticalFunctions = @('Write-Log', 'Invoke-BackgroundOperation', 'New-EnhancedStatusBar')
+    $missingFunctions = @()
+    foreach ($func in $criticalFunctions) {
+        if (-not (Get-Command $func -ErrorAction SilentlyContinue)) {
+            $missingFunctions += $func
+        }
+    }
+
+    if ($missingFunctions.Count -gt 0) {
+        throw "Critical functions not loaded: $($missingFunctions -join ', '). Please restart PowerShell and try again."
+    }
 
     Write-Host "All modules loaded successfully" -ForegroundColor Green
 } catch {
