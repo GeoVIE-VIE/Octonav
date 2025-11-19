@@ -111,12 +111,9 @@ try {
     Import-Module "$scriptPath\modules\DHCPFunctions.psm1" -Force -Global -ErrorAction Stop
     Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -Global -ErrorAction Stop
 
-    # Verify critical functions are available
-    $criticalFunctions = @('Write-Log', 'Invoke-BackgroundOperation', 'New-EnhancedStatusBar')
+    # Verify critical module functions are available
+    $criticalFunctions = @('Write-Log', 'New-EnhancedStatusBar')
     $missingFunctions = @()
-
-    # Get loaded module info for debugging
-    $helperModule = Get-Module | Where-Object { $_.Path -like "*HelperFunctions.psm1" }
 
     foreach ($func in $criticalFunctions) {
         if (-not (Get-Command $func -ErrorAction SilentlyContinue)) {
@@ -125,18 +122,7 @@ try {
     }
 
     if ($missingFunctions.Count -gt 0) {
-        $debugInfo = "Critical functions not loaded: $($missingFunctions -join ', ').`n`n"
-
-        if ($helperModule) {
-            $exportedFunctions = $helperModule.ExportedFunctions.Keys -join ', '
-            $debugInfo += "HelperFunctions module IS loaded.`n"
-            $debugInfo += "Exported functions: $exportedFunctions`n`n"
-        } else {
-            $debugInfo += "HelperFunctions module NOT loaded!`n`n"
-        }
-
-        $debugInfo += "Please close PowerShell completely and start a fresh session, then run the script again."
-        throw $debugInfo
+        throw "Critical module functions not loaded: $($missingFunctions -join ', '). Please close PowerShell completely and restart."
     }
 
     Write-Host "All modules loaded successfully" -ForegroundColor Green
@@ -148,6 +134,86 @@ try {
         [System.Windows.Forms.MessageBoxIcon]::Error
     )
     exit 1
+}
+
+# ============================================
+# DEFINE INVOKE-BACKGROUNDOPERATION LOCALLY
+# ============================================
+# Define this function here instead of in module to ensure System.Windows.Forms.Timer is available
+
+function Invoke-BackgroundOperation
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$ScriptBlock,
+
+        [Parameter(Mandatory=$false)]
+        [object[]]$ArgumentList = @(),
+
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$OnComplete,
+
+        [Parameter(Mandatory=$true)]
+        [System.Windows.Forms.Form]$Form
+    )
+
+    # Create runspace
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.Open()
+
+    # Create PowerShell instance
+    $ps = [powershell]::Create()
+    $ps.Runspace = $runspace
+    [void]$ps.AddScript($ScriptBlock)
+
+    # Add arguments if provided
+    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
+        foreach ($arg in $ArgumentList) {
+            [void]$ps.AddArgument($arg)
+        }
+    }
+
+    # Start async execution
+    $handle = $ps.BeginInvoke()
+
+    # Create timer to poll for completion
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 200
+
+    # Store references in timer tag
+    $timer.Tag = @{
+        PowerShell = $ps
+        Handle = $handle
+        Runspace = $runspace
+        OnComplete = $OnComplete
+    }
+
+    # Add tick handler
+    $timer.Add_Tick({
+        $data = $this.Tag
+        if ($data.Handle.IsCompleted) {
+            try {
+                $result = $data.PowerShell.EndInvoke($data.Handle)
+                & $data.OnComplete $result
+            }
+            catch {
+                Write-Warning "Background operation error: $($_.Exception.Message)"
+            }
+            finally {
+                if ($data.PowerShell) { $data.PowerShell.Dispose() }
+                if ($data.Runspace) {
+                    $data.Runspace.Close()
+                    $data.Runspace.Dispose()
+                }
+                $this.Stop()
+                $this.Dispose()
+            }
+        }
+    })
+
+    $timer.Start()
+    return $timer
 }
 
 # ============================================
