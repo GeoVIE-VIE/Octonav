@@ -494,7 +494,9 @@ function Get-DHCPScopeStatistics {
                 if ($StopToken -and $StopToken.Value) { break }
 
                 $PowerShell = [powershell]::Create()
-                $null = $PowerShell.AddScript($ScriptBlock).AddArgument($Server).AddArgument($ScopeFilters).AddArgument($IncludeDNS)
+                # Ensure ScopeFilters is passed as an array (wrap in array to prevent unwrapping)
+                $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
+                $null = $PowerShell.AddScript($ScriptBlock).AddArgument($Server).AddArgument($filtersArg).AddArgument($IncludeDNS)
                 $PowerShell.RunspacePool = $RunspacePool
 
                 $Runspaces += [PSCustomObject]@{
