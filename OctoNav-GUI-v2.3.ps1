@@ -1071,9 +1071,14 @@ $btnCollectDHCP.Add_Click({
             param($filters, $servers, $dns, $stopRef, $scriptRoot)
 
             try {
-                # Import required module in background runspace
-                $modulePath = Join-Path $scriptRoot "modules\DHCPFunctions.psm1"
-                Import-Module $modulePath -Force -ErrorAction Stop
+                # Import required modules in background runspace
+                # HelperFunctions first (provides Write-Log used by DHCPFunctions)
+                $helperPath = Join-Path $scriptRoot "modules\HelperFunctions.psm1"
+                Import-Module $helperPath -Force -ErrorAction Stop
+
+                # Then DHCPFunctions
+                $dhcpPath = Join-Path $scriptRoot "modules\DHCPFunctions.psm1"
+                Import-Module $dhcpPath -Force -ErrorAction Stop
 
                 # Call collection function
                 $result = Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
@@ -1154,7 +1159,7 @@ $btnCollectDHCP.Add_Click({
 
             # Update status bar
             Update-StatusBar -Status "Ready" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
-            Hide-Progress -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
+            Hide-Progress -StatusBar $script:StatusBarPanels
 
         } -Form $mainForm
 
