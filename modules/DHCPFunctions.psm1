@@ -1,24 +1,4 @@
 
-Of course. It's a common and frustrating issue when a script that looks correct fails silently. The "Found 0 total dhcp scopes" message is the key clue. It means the `Get-DhcpServerv4Scope` command inside the parallel task is running but returning nothing, which almost always points to a permissions, connectivity, or credential context issue.
-
-The original script's error handling, while good, was likely swallowing the *real* error message (e.g., "Access is denied" or "RPC server is unavailable").
-
-I have rewritten the script to be more robust, provide clearer error messages, and simplify the logic by focusing on the superior runspace method. This version should tell you *why* it's failing.
-
-### Key Changes in This Version:
-
-1.  **Aggressive Error Reporting:** The script now forces all errors inside the worker tasks to be "terminating errors." This means any failure (like permissions) will be caught and reported back to you with the specific, actionable error message.
-2.  **Simplified Logic:** I've removed the `Start-Job` implementation to focus on the faster, more efficient runspace method. This reduces complexity and potential bugs.
-3.  **Pre-flight Connectivity Check:** Before starting the heavy work, the script now pings each server to ensure it's online and resolvable, providing faster feedback.
-4.  **Cleaner Output:** The worker tasks now return structured objects for both success and failure cases, making the main processing loop cleaner and more reliable.
-5.  **Performance:** Uses `[System.Collections.ArrayList]` for collecting results, which is more memory-efficient when gathering a large number of scopes.
-6.  **Case Insensitivity:** To answer your question directly: **No, it does not matter if the server or scope name is uppercase or lowercase.** PowerShell cmdlets and their parameters are case-insensitive by default, and the script's filtering logic (`-like`) is also case-insensitive. The problem lies elsewhere.
-
----
-
-### Rewritten and Functional Code
-
-```powershell
 <#
 .SYNOPSIS
     DHCP Functions Module - Provides DHCP scope statistics collection and management
