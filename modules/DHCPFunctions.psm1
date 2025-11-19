@@ -330,6 +330,9 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
+                # Retrieve all statistics at once (more reliable than per-scope queries)
+                $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
+
                 # Optional DNS server option lookup (OptionId 6)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
@@ -337,11 +340,11 @@ function Get-DHCPScopeStatistics {
                         try {
                             $DNSOption = Get-DhcpServerv4OptionValue `
                                 -ComputerName $ServerName `
-                                -ScopeId $Scope.ScopeId.ToString() `
+                                -ScopeId $Scope.ScopeId `
                                 -OptionId 6 `
                                 -ErrorAction SilentlyContinue
                             if ($DNSOption) {
-                                $DNSServerMap[$Scope.ScopeId.ToString()] = $DNSOption.Value -join ','
+                                $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
                             }
                         } catch {
                             # Ignore DNS lookup failures per-scope
@@ -349,38 +352,26 @@ function Get-DHCPScopeStatistics {
                     }
                 }
 
-                # Query statistics per-scope for better reliability
+                # Process each scope and match with statistics
                 $ServerStats = foreach ($Scope in $Scopes) {
-                    try {
-                        # Convert ScopeId to string to ensure proper parameter binding
-                        $scopeIdString = $Scope.ScopeId.ToString()
+                    # Find corresponding statistics using Where-Object
+                    $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
 
-                        $Stats = Get-DhcpServerv4ScopeStatistics `
-                            -ComputerName $ServerName `
-                            -ScopeId $scopeIdString `
-                            -ErrorAction Stop
+                    # Get DNS servers from map
+                    $DNSServersString = $DNSServerMap[$Scope.ScopeId]
 
-                        if ($Stats) {
-                            # Capture scope variables for use in calculated properties
-                            $currentScopeId = $scopeIdString
-                            $currentScopeDesc = $Scope.Description
-                            $currentScopeName = $Scope.Name
-
-                            $Stats | Select-Object *,
-                                @{ Name = 'DHCPServer';  Expression = { $ServerName } },
-                                @{ Name = 'Description'; Expression = {
-                                        if (-not [string]::IsNullOrWhiteSpace($currentScopeDesc)) {
-                                            $currentScopeDesc
-                                        } else {
-                                            $currentScopeName
-                                        }
-                                    }
-                                },
-                                @{ Name = 'DNSServers';  Expression = { $DNSServerMap[$currentScopeId] } }
-                        }
-                    } catch {
-                        # Log scope-specific failures but continue processing other scopes
-                        Write-Warning "Failed to get statistics for scope $($Scope.ScopeId) on $ServerName : $($_.Exception.Message)"
+                    if ($Stats) {
+                        # Add custom properties - use direct variable references
+                        $Stats | Select-Object *,
+                            @{ Name = 'DHCPServer'; Expression = { $ServerName } },
+                            @{ Name = 'Description'; Expression = {
+                                if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
+                                    $Scope.Description
+                                } else {
+                                    $Scope.Name
+                                }
+                            }},
+                            @{ Name = 'DNSServers'; Expression = { $DNSServersString } }
                     }
                 }
 

@@ -1131,7 +1131,15 @@ $btnCollectDHCP.Add_Click({
                     }
 
                     Write-Log -Message "Auto-exporting $($script:dhcpResults.Count) scope(s)..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+
+                    # Format data with specific columns in order (matching optimized script)
+                    if ($includeDNS) {
+                        $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+                    } else {
+                        $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+                    }
+
+                    $exportedPath = Export-ToCSV -Data $exportData -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
                     Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
                     Write-Log -Message "Auto-exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
@@ -1241,7 +1249,16 @@ $btnExportDHCP.Add_Click({
         }
 
         Write-Log -Message "Exporting $($script:dhcpResults.Count) scope(s) to CSV..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        $exportedPath = Export-ToCSV -Data $script:dhcpResults -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+
+        # Format data with specific columns in order (check if DNSServers column exists)
+        $hasDNSColumn = $script:dhcpResults[0].PSObject.Properties.Name -contains 'DNSServers'
+        if ($hasDNSColumn) {
+            $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+        } else {
+            $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+        }
+
+        $exportedPath = Export-ToCSV -Data $exportData -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
 
         Write-Log -Message "Exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$exportedPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
