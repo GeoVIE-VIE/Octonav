@@ -1151,7 +1151,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @($scopeFilters, $specificServers, $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
+        } -ArgumentList @((,$scopeFilters), (,$specificServers), $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
