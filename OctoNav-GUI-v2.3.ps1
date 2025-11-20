@@ -1284,6 +1284,18 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: specificServers after combine: $($specificServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: specificServers count: $($specificServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
+        # If no servers explicitly selected but we have pre-selected scopes with server info, extract servers from scopes
+        if ($specificServers.Count -eq 0 -and $selectedScopes.Count -gt 0) {
+            $scopeServers = @($selectedScopes |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_.Server) } |
+                Select-Object -ExpandProperty Server -Unique)
+
+            if ($scopeServers.Count -gt 0) {
+                $specificServers = $scopeServers
+                Write-Log -Message "Extracted $($scopeServers.Count) server(s) from selected scopes: $($scopeServers -join ', ')" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+        }
+
         # Log server sources
         if ($checkedServers.Count -gt 0) {
             Write-Log -Message "Using $($checkedServers.Count) selected server(s) from list" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
