@@ -26,8 +26,9 @@ function Export-ToCSV {
         if ($IncludeTimestamp) {
             $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
             $directory = Split-Path $FilePath -Parent
-            $filename = Split-Path $FilePath -LeafBase
-            $extension = Split-Path $FilePath -Extension
+            $filenameWithExt = Split-Path $FilePath -Leaf
+            $extension = [System.IO.Path]::GetExtension($FilePath)
+            $filename = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
             $outputPath = Join-Path $directory "${filename}_${timestamp}${extension}"
         }
 
