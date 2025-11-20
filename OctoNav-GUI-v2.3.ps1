@@ -1286,13 +1286,30 @@ $btnCollectDHCP.Add_Click({
 
         # If no servers explicitly selected but we have pre-selected scopes with server info, extract servers from scopes
         if ($specificServers.Count -eq 0 -and $selectedScopes.Count -gt 0) {
+            Write-Log -Message "DEBUG: Attempting to extract servers from $($selectedScopes.Count) selected scope(s)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+            # Debug: Show first few scopes
+            for ($i = 0; $i -lt [Math]::Min(3, $selectedScopes.Count); $i++) {
+                $scope = $selectedScopes[$i]
+                Write-Log -Message "DEBUG: Scope[$i] - ScopeId: '$($scope.ScopeId)', Server: '$($scope.Server)', Name: '$($scope.Name)'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+
             $scopeServers = @($selectedScopes |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_.Server) } |
                 Select-Object -ExpandProperty Server -Unique)
 
+            Write-Log -Message "DEBUG: Extracted $($scopeServers.Count) unique server(s) from scopes" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
             if ($scopeServers.Count -gt 0) {
+                # Debug each extracted server
+                foreach ($srv in $scopeServers) {
+                    Write-Log -Message "DEBUG: Extracted server: '$srv' (Length: $($srv.Length), Type: $($srv.GetType().Name))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                }
+
                 $specificServers = $scopeServers
                 Write-Log -Message "Extracted $($scopeServers.Count) server(s) from selected scopes: $($scopeServers -join ', ')" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            } else {
+                Write-Log -Message "DEBUG: No valid servers found in selected scopes (all Server properties were null/empty)" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
         }
 
