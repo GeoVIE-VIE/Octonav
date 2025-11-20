@@ -560,9 +560,12 @@ function Get-DHCPScopeStatistics {
 
                     # Collect results
                     foreach ($Job in $Jobs) {
-                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
-                        if ($result.Value) {
-                            $DNSServerMap[$result.ScopeId] = $result.Value
+                        $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($resultArray -and $resultArray.Count -gt 0) {
+                            $result = $resultArray[0]
+                            if ($result.Value) {
+                                $DNSServerMap[$result.ScopeId] = $result.Value
+                            }
                         }
                         $Job.PowerShell.Dispose()
                     }
@@ -616,9 +619,12 @@ function Get-DHCPScopeStatistics {
 
                     # Collect results
                     foreach ($Job in $Jobs) {
-                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
-                        if ($result.Value) {
-                            $Option60Map[$result.ScopeId] = $result.Value
+                        $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($resultArray -and $resultArray.Count -gt 0) {
+                            $result = $resultArray[0]
+                            if ($result.Value) {
+                                $Option60Map[$result.ScopeId] = $result.Value
+                            }
                         }
                         $Job.PowerShell.Dispose()
                     }
@@ -672,9 +678,12 @@ function Get-DHCPScopeStatistics {
 
                     # Collect results
                     foreach ($Job in $Jobs) {
-                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
-                        if ($result.Value) {
-                            $Option43Map[$result.ScopeId] = $result.Value
+                        $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($resultArray -and $resultArray.Count -gt 0) {
+                            $result = $resultArray[0]
+                            if ($result.Value) {
+                                $Option43Map[$result.ScopeId] = $result.Value
+                            }
                         }
                         $Job.PowerShell.Dispose()
                     }
