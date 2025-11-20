@@ -2075,6 +2075,7 @@ $btnExportDHCP.Add_Click({
 
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
+$tab3.AutoScroll = $true
 $tabControl.Controls.Add($tab3)
 Add-IconToTab -Tab $tab3 -IconName "DNA"
 
