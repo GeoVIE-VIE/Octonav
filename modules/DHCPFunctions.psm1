@@ -214,7 +214,13 @@ function Get-DHCPScopeStatistics {
                     continue
                 }
 
-                $server = $scope.Server.Trim()
+                # Explicitly convert to string and trim to ensure proper format
+                $server = ([string]$scope.Server).Trim()
+                if ([string]::IsNullOrWhiteSpace($server)) {
+                    $script:DHCPDebugLog += "[DHCP] WARNING: Server name is whitespace after conversion"
+                    continue
+                }
+
                 if (-not $scopesByServer.ContainsKey($server)) {
                     $scopesByServer[$server] = @()
                 }
@@ -223,8 +229,8 @@ function Get-DHCPScopeStatistics {
 
             $script:DHCPDebugLog += "[DHCP] Grouped into $($scopesByServer.Keys.Count) server(s)"
 
-            # Use these servers instead of discovering
-            $SpecificServers = @($scopesByServer.Keys)
+            # Use these servers instead of discovering - convert keys to array of strings
+            $SpecificServers = @($scopesByServer.Keys | ForEach-Object { [string]$_ })
             # Clear filters since we have specific scopes
             $ScopeFilters = @()
 
@@ -241,23 +247,50 @@ function Get-DHCPScopeStatistics {
 
             $validServers = @()
             foreach ($server in $SpecificServers) {
+                $script:DHCPDebugLog += "[DHCP] Validating server: '$server' (type: $($server.GetType().FullName))"
+
                 # Skip null entries
-                if ($null -eq $server) { continue }
+                if ($null -eq $server) {
+                    $script:DHCPDebugLog += "[DHCP] Skipped: server is null"
+                    continue
+                }
 
-                $trimmedServer = $server.Trim()
-                if ([string]::IsNullOrWhiteSpace($trimmedServer)) { continue }
+                # Ensure it's a string
+                $serverStr = [string]$server
+                $trimmedServer = $serverStr.Trim()
 
+                if ([string]::IsNullOrWhiteSpace($trimmedServer)) {
+                    $script:DHCPDebugLog += "[DHCP] Skipped: server is whitespace after trim"
+                    continue
+                }
+
+                $script:DHCPDebugLog += "[DHCP] Testing server name: '$trimmedServer'"
                 if (Test-ServerName -ServerName $trimmedServer) {
                     $validServers += $trimmedServer
+                    $script:DHCPDebugLog += "[DHCP] Server '$trimmedServer' passed validation"
                 } else {
+                    $script:DHCPDebugLog += "[DHCP] Server '$trimmedServer' FAILED validation"
                     Write-Log -Message "Invalid DHCP server name skipped: $trimmedServer" -Color 'Warning' -LogBox $LogBox -Theme $null
                 }
             }
 
             if ($validServers.Count -eq 0) {
                 $msg = 'No valid DHCP server names provided.'
-                $script:DHCPDebugLog += "[DHCP] ERROR: No valid servers"
+                $script:DHCPDebugLog += "[DHCP] ERROR: No valid servers after validation"
+                $script:DHCPDebugLog += "[DHCP] Original SpecificServers count: $($SpecificServers.Count)"
+                $script:DHCPDebugLog += "[DHCP] SpecificServers: $($SpecificServers -join ', ')"
+
                 Write-Log -Message $msg -Color 'Error' -LogBox $LogBox -Theme $null
+
+                # Output debug log to help diagnose the issue
+                if ($script:DHCPDebugLog -and $script:DHCPDebugLog.Count -gt 0) {
+                    Write-Log -Message "=== Debug Information ===" -Color 'Warning' -LogBox $LogBox -Theme $null
+                    foreach ($logEntry in $script:DHCPDebugLog) {
+                        Write-Log -Message $logEntry -Color 'Debug' -LogBox $LogBox -Theme $null
+                    }
+                    Write-Log -Message "=== End Debug ===" -Color 'Warning' -LogBox $LogBox -Theme $null
+                }
+
                 Invoke-StatusBar -Callback $StatusBarCallback -Status $msg -Progress 0 -ProgressText $msg
                 return [PSCustomObject]@{
                     Success = $false

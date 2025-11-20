@@ -1172,10 +1172,11 @@ $btnCollectDHCP.Add_Click({
                         continue
                     }
 
+                    # Explicitly convert to strings to ensure proper serialization to background job
                     $selectedScopes += [PSCustomObject]@{
-                        ScopeId = $matchingScope.ScopeId
-                        Server = $matchingScope.Server
-                        Name = $matchingScope.Name
+                        ScopeId = [string]$matchingScope.ScopeId
+                        Server = [string]$matchingScope.Server
+                        Name = [string]$matchingScope.Name
                     }
                 }
             }
