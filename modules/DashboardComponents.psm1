@@ -13,11 +13,17 @@
 function Protect-DHCPCache {
     <#
     .SYNOPSIS
-        Encrypts DHCP cache data with AES-256 encryption using a password
+        Encrypts DHCP cache data with AES-256 encryption and HMAC integrity check
     .PARAMETER PlainText
         The plain text data to encrypt (JSON string)
     .PARAMETER Password
         SecureString password for encryption
+    .DESCRIPTION
+        Security features:
+        - AES-256-CBC encryption
+        - PBKDF2 key derivation (10,000 iterations)
+        - HMAC-SHA256 for integrity verification
+        - Random salt per encryption
     #>
     param(
         [string]$PlainText,
@@ -37,12 +43,13 @@ function Protect-DHCPCache {
 
         # Derive key from password using PBKDF2 (10000 iterations)
         $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordPlain, $salt, 10000)
-        $key = $pbkdf2.GetBytes(32)  # 256-bit key
+        $encryptionKey = $pbkdf2.GetBytes(32)  # 256-bit AES key
         $iv = $pbkdf2.GetBytes(16)   # 128-bit IV
+        $hmacKey = $pbkdf2.GetBytes(32)  # 256-bit HMAC key
 
         # Create AES encryptor
         $aes = [System.Security.Cryptography.Aes]::Create()
-        $aes.Key = $key
+        $aes.Key = $encryptionKey
         $aes.IV = $iv
         $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
         $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
@@ -52,14 +59,24 @@ function Protect-DHCPCache {
         $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($PlainText)
         $encryptedBytes = $encryptor.TransformFinalBlock($plainBytes, 0, $plainBytes.Length)
 
-        # Combine salt + encrypted data
-        $result = New-Object byte[] ($salt.Length + $encryptedBytes.Length)
+        # Calculate HMAC over salt + encrypted data
+        $hmac = New-Object System.Security.Cryptography.HMACSHA256
+        $hmac.Key = $hmacKey
+        $dataToSign = New-Object byte[] ($salt.Length + $encryptedBytes.Length)
+        [Array]::Copy($salt, 0, $dataToSign, 0, $salt.Length)
+        [Array]::Copy($encryptedBytes, 0, $dataToSign, $salt.Length, $encryptedBytes.Length)
+        $hmacHash = $hmac.ComputeHash($dataToSign)
+
+        # Combine: salt + hmac + encrypted data
+        $result = New-Object byte[] ($salt.Length + $hmacHash.Length + $encryptedBytes.Length)
         [Array]::Copy($salt, 0, $result, 0, $salt.Length)
-        [Array]::Copy($encryptedBytes, 0, $result, $salt.Length, $encryptedBytes.Length)
+        [Array]::Copy($hmacHash, 0, $result, $salt.Length, $hmacHash.Length)
+        [Array]::Copy($encryptedBytes, 0, $result, $salt.Length + $hmacHash.Length, $encryptedBytes.Length)
 
         # Clean up
         $aes.Dispose()
         $encryptor.Dispose()
+        $hmac.Dispose()
 
         # Return as Base64
         return [Convert]::ToBase64String($result)
@@ -72,11 +89,14 @@ function Protect-DHCPCache {
 function Unprotect-DHCPCache {
     <#
     .SYNOPSIS
-        Decrypts DHCP cache data encrypted with Protect-DHCPCache
+        Decrypts DHCP cache data with HMAC integrity verification
     .PARAMETER EncryptedText
         The Base64-encoded encrypted data
     .PARAMETER Password
         SecureString password for decryption
+    .DESCRIPTION
+        Verifies HMAC before decryption to detect tampering.
+        Throws error if HMAC verification fails or password is wrong.
     #>
     param(
         [string]$EncryptedText,
@@ -92,36 +112,106 @@ function Unprotect-DHCPCache {
         # Decode from Base64
         $encryptedData = [Convert]::FromBase64String($EncryptedText)
 
-        # Extract salt (first 16 bytes)
-        $salt = New-Object byte[] 16
-        [Array]::Copy($encryptedData, 0, $salt, 0, 16)
+        # Check if this has HMAC (new format) or old format
+        # Old format: salt(16) + encrypted
+        # New format: salt(16) + hmac(32) + encrypted
+        $hasHMAC = $encryptedData.Length -gt 48  # Minimum for new format
 
-        # Extract encrypted content (remaining bytes)
-        $encryptedBytes = New-Object byte[] ($encryptedData.Length - 16)
-        [Array]::Copy($encryptedData, 16, $encryptedBytes, 0, $encryptedBytes.Length)
+        if ($hasHMAC) {
+            # Extract salt (first 16 bytes)
+            $salt = New-Object byte[] 16
+            [Array]::Copy($encryptedData, 0, $salt, 0, 16)
 
-        # Derive key from password using PBKDF2 (must match encryption)
-        $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordPlain, $salt, 10000)
-        $key = $pbkdf2.GetBytes(32)  # 256-bit key
-        $iv = $pbkdf2.GetBytes(16)   # 128-bit IV
+            # Extract HMAC (next 32 bytes)
+            $storedHmac = New-Object byte[] 32
+            [Array]::Copy($encryptedData, 16, $storedHmac, 0, 32)
 
-        # Create AES decryptor
-        $aes = [System.Security.Cryptography.Aes]::Create()
-        $aes.Key = $key
-        $aes.IV = $iv
-        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
-        $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+            # Extract encrypted content (remaining bytes)
+            $encryptedBytes = New-Object byte[] ($encryptedData.Length - 48)
+            [Array]::Copy($encryptedData, 48, $encryptedBytes, 0, $encryptedBytes.Length)
 
-        # Decrypt the data
-        $decryptor = $aes.CreateDecryptor()
-        $decryptedBytes = $decryptor.TransformFinalBlock($encryptedBytes, 0, $encryptedBytes.Length)
-        $plainText = [System.Text.Encoding]::UTF8.GetString($decryptedBytes)
+            # Derive keys from password using PBKDF2 (must match encryption)
+            $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordPlain, $salt, 10000)
+            $encryptionKey = $pbkdf2.GetBytes(32)  # 256-bit AES key
+            $iv = $pbkdf2.GetBytes(16)   # 128-bit IV
+            $hmacKey = $pbkdf2.GetBytes(32)  # 256-bit HMAC key
 
-        # Clean up
-        $aes.Dispose()
-        $decryptor.Dispose()
+            # Verify HMAC to detect tampering
+            $hmac = New-Object System.Security.Cryptography.HMACSHA256
+            $hmac.Key = $hmacKey
+            $dataToVerify = New-Object byte[] ($salt.Length + $encryptedBytes.Length)
+            [Array]::Copy($salt, 0, $dataToVerify, 0, $salt.Length)
+            [Array]::Copy($encryptedBytes, 0, $dataToVerify, $salt.Length, $encryptedBytes.Length)
+            $computedHmac = $hmac.ComputeHash($dataToVerify)
 
-        return $plainText
+            # Constant-time comparison to prevent timing attacks
+            $hmacValid = $true
+            for ($i = 0; $i -lt 32; $i++) {
+                if ($storedHmac[$i] -ne $computedHmac[$i]) {
+                    $hmacValid = $false
+                }
+            }
+
+            if (-not $hmacValid) {
+                $hmac.Dispose()
+                throw "INTEGRITY CHECK FAILED - Data has been tampered with or password is incorrect!"
+            }
+
+            $hmac.Dispose()
+
+            # Create AES decryptor
+            $aes = [System.Security.Cryptography.Aes]::Create()
+            $aes.Key = $encryptionKey
+            $aes.IV = $iv
+            $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+            $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+
+            # Decrypt the data
+            $decryptor = $aes.CreateDecryptor()
+            $decryptedBytes = $decryptor.TransformFinalBlock($encryptedBytes, 0, $encryptedBytes.Length)
+            $plainText = [System.Text.Encoding]::UTF8.GetString($decryptedBytes)
+
+            # Clean up
+            $aes.Dispose()
+            $decryptor.Dispose()
+
+            return $plainText
+        }
+        else {
+            # Old format without HMAC - still support for backward compatibility
+            # Extract salt (first 16 bytes)
+            $salt = New-Object byte[] 16
+            [Array]::Copy($encryptedData, 0, $salt, 0, 16)
+
+            # Extract encrypted content (remaining bytes)
+            $encryptedBytes = New-Object byte[] ($encryptedData.Length - 16)
+            [Array]::Copy($encryptedData, 16, $encryptedBytes, 0, $encryptedBytes.Length)
+
+            # Derive key from password using PBKDF2
+            $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordPlain, $salt, 10000)
+            $key = $pbkdf2.GetBytes(32)  # 256-bit key
+            $iv = $pbkdf2.GetBytes(16)   # 128-bit IV
+
+            # Create AES decryptor
+            $aes = [System.Security.Cryptography.Aes]::Create()
+            $aes.Key = $key
+            $aes.IV = $iv
+            $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+            $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+
+            # Decrypt the data
+            $decryptor = $aes.CreateDecryptor()
+            $decryptedBytes = $decryptor.TransformFinalBlock($encryptedBytes, 0, $encryptedBytes.Length)
+            $plainText = [System.Text.Encoding]::UTF8.GetString($decryptedBytes)
+
+            # Clean up
+            $aes.Dispose()
+            $decryptor.Dispose()
+
+            Write-Warning "Old cache format detected (no HMAC). Please refresh cache to upgrade security."
+
+            return $plainText
+        }
     }
     catch {
         throw "Decryption failed - Invalid password or corrupted data: $($_.Exception.Message)"
@@ -316,14 +406,99 @@ function Update-DHCPServerCache {
 function Get-CachedDHCPScopes {
     <#
     .SYNOPSIS
-        Gets DHCP scopes from encrypted cache file
+        Gets DHCP scopes from encrypted cache file with auto-migration
     .DESCRIPTION
-        Reads cached DHCP scope list from encrypted JSON file. Prompts for password.
-        Returns empty array if cache doesn't exist or decryption fails.
+        Reads cached DHCP scope list from encrypted file. Automatically detects
+        and offers to encrypt old unencrypted .json files. Prompts for password.
     #>
-    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.dat"
+    $cacheFileDat = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.dat"
+    $cacheFileJson = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.json"
 
-    if (Test-Path $cacheFile) {
+    # Check for old unencrypted .json file first
+    if ((Test-Path $cacheFileJson) -and -not (Test-Path $cacheFileDat)) {
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "SECURITY WARNING: Unencrypted DHCP cache file detected!`n`n" +
+            "File: dhcp_scopes_cache.json`n`n" +
+            "This file contains sensitive network information and is NOT encrypted.`n`n" +
+            "Would you like to encrypt it now? (Recommended)`n`n" +
+            "The old unencrypted file will be deleted after successful encryption.",
+            "Encrypt Unencrypted Cache?",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            try {
+                # Read old unencrypted cache
+                $jsonContent = Get-Content $cacheFileJson -Raw
+                $cache = $jsonContent | ConvertFrom-Json
+
+                # Prompt for password to encrypt
+                $password = Get-DHCPCachePassword -Action "Save"
+                if (-not $password) {
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Encryption cancelled. Old unencrypted file remains.`n`nPlease encrypt it as soon as possible for security.",
+                        "Encryption Cancelled",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Warning
+                    )
+                    return $cache.Scopes
+                }
+
+                # Encrypt the cache
+                $encryptedData = Protect-DHCPCache -PlainText $jsonContent -Password $password
+                $encryptedData | Set-Content $cacheFileDat -Force
+
+                # Delete old unencrypted file
+                Remove-Item $cacheFileJson -Force
+
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Cache encrypted successfully!`n`n" +
+                    "Old unencrypted file deleted.`n" +
+                    "New encrypted file: dhcp_scopes_cache.dat`n`n" +
+                    "You will need this password to load the cache in the future.",
+                    "Encryption Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+
+                return $cache.Scopes
+            }
+            catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to encrypt cache file:`n`n$($_.Exception.Message)`n`n" +
+                    "Old unencrypted file remains.",
+                    "Encryption Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+
+                # Still try to return the scopes
+                try {
+                    $jsonContent = Get-Content $cacheFileJson -Raw
+                    $cache = $jsonContent | ConvertFrom-Json
+                    return $cache.Scopes
+                }
+                catch {
+                    return @()
+                }
+            }
+        }
+        else {
+            # User declined encryption, load from unencrypted file
+            try {
+                $jsonContent = Get-Content $cacheFileJson -Raw
+                $cache = $jsonContent | ConvertFrom-Json
+                return $cache.Scopes
+            }
+            catch {
+                return @()
+            }
+        }
+    }
+
+    # Load from encrypted .dat file
+    if (Test-Path $cacheFileDat) {
         try {
             # Prompt for password
             $password = Get-DHCPCachePassword -Action "Load"
@@ -333,14 +508,7 @@ function Get-CachedDHCPScopes {
             }
 
             # Read encrypted data
-            $encryptedContent = Get-Content $cacheFile -Raw
-
-            # Check if this is an old unencrypted cache (starts with '{' for JSON)
-            if ($encryptedContent.TrimStart().StartsWith('{')) {
-                Write-Warning "Old unencrypted cache detected. Please refresh the cache to encrypt it."
-                $cache = $encryptedContent | ConvertFrom-Json
-                return $cache.Scopes
-            }
+            $encryptedContent = Get-Content $cacheFileDat -Raw
 
             # Decrypt the cache
             $decryptedJson = Unprotect-DHCPCache -EncryptedText $encryptedContent -Password $password
@@ -353,7 +521,12 @@ function Get-CachedDHCPScopes {
             # Decryption failed or cache corrupted
             Write-Warning "Failed to load DHCP cache: $($_.Exception.Message)"
             [System.Windows.Forms.MessageBox]::Show(
-                "Failed to decrypt DHCP cache. Invalid password or corrupted file.`n`nError: $($_.Exception.Message)",
+                "Failed to decrypt DHCP cache.`n`n" +
+                "Possible causes:`n" +
+                "- Incorrect password`n" +
+                "- File tampering detected (HMAC verification failed)`n" +
+                "- Corrupted file`n`n" +
+                "Error: $($_.Exception.Message)",
                 "Decryption Failed",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
