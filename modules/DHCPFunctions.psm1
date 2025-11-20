@@ -547,10 +547,14 @@ function Get-DHCPScopeStatistics {
                             $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 60 -ErrorAction SilentlyContinue
                             if ($Option60 -and $Option60.Value) {
                                 # Extract just the Value property
-                                $Option60Map[$Scope.ScopeId] = $Option60.Value -join ','
+                                $valueStr = $Option60.Value -join ','
+                                $Option60Map[$Scope.ScopeId] = $valueStr
+                                $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Value='$valueStr' (Type: $($Option60.Value.GetType().Name))"
+                            } else {
+                                $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Not set or empty"
                             }
                         } catch {
-                            # Ignore Option 60 lookup failures
+                            $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Lookup failed - $($_.Exception.Message)"
                         }
                     }
                     $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
@@ -567,10 +571,14 @@ function Get-DHCPScopeStatistics {
                             $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 43 -ErrorAction SilentlyContinue
                             if ($Option43 -and $Option43.Value) {
                                 # Extract just the Value property
-                                $Option43Map[$Scope.ScopeId] = $Option43.Value -join ','
+                                $valueStr = $Option43.Value -join ','
+                                $Option43Map[$Scope.ScopeId] = $valueStr
+                                $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Value='$valueStr' (Type: $($Option43.Value.GetType().Name))"
+                            } else {
+                                $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Not set or empty"
                             }
                         } catch {
-                            # Ignore Option 43 lookup failures
+                            $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Lookup failed - $($_.Exception.Message)"
                         }
                     }
                     $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
