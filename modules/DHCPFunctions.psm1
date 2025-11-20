@@ -602,7 +602,9 @@ function Get-DHCPScopeStatistics {
 
                                 if ($Option60) {
                                     $rawValue = $Option60.Value
-                                    $diagnosticInfo = "Option60 exists: Type=$($rawValue.GetType().Name), Count=$($rawValue.Count if $rawValue -is [Array] else 'N/A')"
+                                    $valueType = $rawValue.GetType().Name
+                                    $valueCount = if ($rawValue -is [Array]) { $rawValue.Count } else { 'N/A' }
+                                    $diagnosticInfo = "Option60 exists: Type=$valueType, Count=$valueCount"
                                     $processedValue = $rawValue -join ','
                                 } else {
                                     $diagnosticInfo = "Option60 object is null (option not configured on scope)"
@@ -691,7 +693,9 @@ function Get-DHCPScopeStatistics {
 
                                 if ($Option43) {
                                     $rawValue = $Option43.Value
-                                    $diagnosticInfo = "Option43 exists: Type=$($rawValue.GetType().Name), Count=$($rawValue.Count if $rawValue -is [Array] else 'N/A')"
+                                    $valueType = $rawValue.GetType().Name
+                                    $valueCount = if ($rawValue -is [Array]) { $rawValue.Count } else { 'N/A' }
+                                    $diagnosticInfo = "Option43 exists: Type=$valueType, Count=$valueCount"
                                     $processedValue = $rawValue -join ','
                                 } else {
                                     $diagnosticInfo = "Option43 object is null (option not configured on scope)"
