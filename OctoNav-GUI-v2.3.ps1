@@ -1703,8 +1703,11 @@ $script:lstDHCPScopes.Add_ItemCheck({
                 $checkedScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $checkedDisplayName } | Select-Object -First 1
 
                 if ($checkedScope -and -not [string]::IsNullOrWhiteSpace($checkedScope.ScopeId)) {
+                    # Capture all needed variables for the closure
                     $targetScopeId = $checkedScope.ScopeId
-                    $checkedIndex = $e.Index  # Capture the index value for use in closure
+                    $checkedIndex = $e.Index
+                    $allScopesSnapshot = $script:allDHCPScopes
+                    $listBox = $script:lstDHCPScopes
 
                     # Set flag to prevent infinite recursion
                     $script:isAutoSelecting = $true
@@ -1714,24 +1717,42 @@ $script:lstDHCPScopes.Add_ItemCheck({
                     $autoSelectTimer.Interval = 10
                     $autoSelectTimer.Add_Tick({
                         try {
+                            # Validate controls still exist
+                            if (-not $listBox -or $listBox.IsDisposed) {
+                                return
+                            }
+
+                            if (-not $allScopesSnapshot -or $allScopesSnapshot.Count -eq 0) {
+                                return
+                            }
+
                             # Find all scopes with the same ScopeId and check them
-                            for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-                                if ($i -ne $checkedIndex -and -not $script:lstDHCPScopes.GetItemChecked($i)) {
-                                    $itemDisplayName = $script:lstDHCPScopes.Items[$i].ToString()
-                                    $itemScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
+                            for ($i = 0; $i -lt $listBox.Items.Count; $i++) {
+                                if ($i -ne $checkedIndex -and -not $listBox.GetItemChecked($i)) {
+                                    $item = $listBox.Items[$i]
+                                    if (-not $item) {
+                                        continue
+                                    }
+
+                                    $itemDisplayName = $item.ToString()
+                                    $itemScope = $allScopesSnapshot | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
 
                                     if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
-                                        $script:lstDHCPScopes.SetItemChecked($i, $true)
+                                        $listBox.SetItemChecked($i, $true)
                                     }
                                 }
                             }
                         } catch {
                             # Silently handle errors in timer to avoid crashes
-                            Write-Log -Message "Auto-select error: $($_.Exception.Message)" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                            # Don't try to log as that could cause additional null references
                         } finally {
                             # Stop the timer and reset flag
-                            $autoSelectTimer.Stop()
-                            $autoSelectTimer.Dispose()
+                            try {
+                                $autoSelectTimer.Stop()
+                                $autoSelectTimer.Dispose()
+                            } catch {
+                                # Ignore disposal errors
+                            }
                             $script:isAutoSelecting = $false
                         }
                     })
@@ -1741,7 +1762,7 @@ $script:lstDHCPScopes.Add_ItemCheck({
         }
     } catch {
         # Prevent unhandled exceptions from crashing the application
-        Write-Log -Message "Error in auto-select handler: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        # Reset flag to avoid lock-up - don't log as that could cause additional errors
         $script:isAutoSelecting = $false
     }
 })
