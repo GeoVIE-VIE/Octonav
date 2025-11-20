@@ -1709,6 +1709,9 @@ $script:lstDHCPScopes.Add_ItemCheck({
                     $allScopesSnapshot = $script:allDHCPScopes
                     $listBox = $script:lstDHCPScopes
 
+                    # Log for debugging
+                    Write-Log -Message "Auto-select: Looking for scopes with ScopeId=$targetScopeId" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
                     # Set flag to prevent infinite recursion
                     $script:isAutoSelecting = $true
 
@@ -1726,6 +1729,7 @@ $script:lstDHCPScopes.Add_ItemCheck({
                                 return
                             }
 
+                            $matchCount = 0
                             # Find all scopes with the same ScopeId and check them
                             for ($i = 0; $i -lt $listBox.Items.Count; $i++) {
                                 if ($i -ne $checkedIndex -and -not $listBox.GetItemChecked($i)) {
@@ -1739,12 +1743,22 @@ $script:lstDHCPScopes.Add_ItemCheck({
 
                                     if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
                                         $listBox.SetItemChecked($i, $true)
+                                        $matchCount++
                                     }
                                 }
                             }
+
+                            # Log results
+                            if ($matchCount -gt 0) {
+                                Write-Log -Message "Auto-select: Selected $matchCount additional scope(s) with matching ScopeId" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                            }
                         } catch {
-                            # Silently handle errors in timer to avoid crashes
-                            # Don't try to log as that could cause additional null references
+                            # Log error for debugging
+                            try {
+                                Write-Log -Message "Auto-select error: $($_.Exception.Message)" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                            } catch {
+                                # Ignore logging errors
+                            }
                         } finally {
                             # Stop the timer and reset flag
                             try {

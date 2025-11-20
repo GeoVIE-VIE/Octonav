@@ -532,6 +532,20 @@ function Get-DHCPScopeStatistics {
 
                         $dnsServers = $DNSServerMap[$Scope.ScopeId]
 
+                        # Calculate percentage if not provided or if null
+                        $percentageValue = if ($null -ne $Stats.Percentage) {
+                            $Stats.Percentage
+                        } elseif ($Stats.Free -ne $null -and $Stats.InUse -ne $null) {
+                            $total = $Stats.Free + $Stats.InUse
+                            if ($total -gt 0) {
+                                [math]::Round(($Stats.InUse / $total) * 100, 2)
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+
                         # Create result object
                         $ServerStats += [PSCustomObject]@{
                             ScopeId = $Stats.ScopeId
@@ -542,12 +556,12 @@ function Get-DHCPScopeStatistics {
                             EndRange = $Stats.EndRange
                             Free = $Stats.Free
                             InUse = $Stats.InUse
-                            Percentage = $Stats.Percentage
+                            Percentage = $percentageValue
                             Reserved = $Stats.Reserved
                             Pending = $Stats.Pending
                             AddressesFree = $Stats.Free
                             AddressesInUse = $Stats.InUse
-                            PercentageInUse = $Stats.Percentage
+                            PercentageInUse = $percentageValue
                             DNSServers = $dnsServers
                         }
                     } else {
