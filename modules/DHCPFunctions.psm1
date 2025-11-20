@@ -545,9 +545,9 @@ function Get-DHCPScopeStatistics {
                     foreach ($Scope in $Scopes) {
                         try {
                             $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 60 -ErrorAction SilentlyContinue
-                            if ($Option60) {
-                                $opt60Info = "ID:$($Option60.OptionId), Name:$($Option60.Name), Value:$($Option60.Value -join ',')"
-                                $Option60Map[$Scope.ScopeId] = $opt60Info
+                            if ($Option60 -and $Option60.Value) {
+                                # Extract just the Value property
+                                $Option60Map[$Scope.ScopeId] = $Option60.Value -join ','
                             }
                         } catch {
                             # Ignore Option 60 lookup failures
@@ -565,9 +565,9 @@ function Get-DHCPScopeStatistics {
                     foreach ($Scope in $Scopes) {
                         try {
                             $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 43 -ErrorAction SilentlyContinue
-                            if ($Option43) {
-                                $opt43Info = "ID:$($Option43.OptionId), Name:$($Option43.Name), Value:$($Option43.Value -join ',')"
-                                $Option43Map[$Scope.ScopeId] = $opt43Info
+                            if ($Option43 -and $Option43.Value) {
+                                # Extract just the Value property
+                                $Option43Map[$Scope.ScopeId] = $Option43.Value -join ','
                             }
                         } catch {
                             # Ignore Option 43 lookup failures
