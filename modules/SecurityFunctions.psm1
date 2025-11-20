@@ -129,7 +129,11 @@ function Test-PasswordComplexity {
 function Protect-WithDPAPI {
     <#
     .SYNOPSIS
-        Encrypts data using Windows DPAPI (current user scope)
+        Encrypts data using Windows DPAPI (machine scope for team sharing)
+    .DESCRIPTION
+        Uses LocalMachine scope instead of CurrentUser to allow all users
+        on the same machine to share the same encrypted configuration.
+        This enables team deployment where everyone uses the same password.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -141,7 +145,7 @@ function Protect-WithDPAPI {
         $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
             $bytes,
             $null,
-            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
         return [Convert]::ToBase64String($encrypted)
     }
@@ -153,7 +157,10 @@ function Protect-WithDPAPI {
 function Unprotect-WithDPAPI {
     <#
     .SYNOPSIS
-        Decrypts data using Windows DPAPI
+        Decrypts data using Windows DPAPI (machine scope for team sharing)
+    .DESCRIPTION
+        Uses LocalMachine scope to match Protect-WithDPAPI.
+        Allows any user on the same machine to decrypt the configuration.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -165,7 +172,7 @@ function Unprotect-WithDPAPI {
         $decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect(
             $encrypted,
             $null,
-            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
         return [System.Text.Encoding]::UTF8.GetString($decrypted)
     }
