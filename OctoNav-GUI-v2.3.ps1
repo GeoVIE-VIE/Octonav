@@ -1355,8 +1355,19 @@ $btnCollectDHCP.Add_Click({
                 $debugLog += "Background: Filters = $($filters -join ', ')"
                 $debugLog += "Background: Filters count = $($filters.Count)"
 
+                # Flatten servers array if it was nested during argument passing
+                # The comma operator in ArgumentList can create nested arrays
+                if ($servers -is [array] -and $servers.Count -eq 1 -and $servers[0] -is [array]) {
+                    $debugLog += "Background: Detected nested server array - flattening"
+                    $servers = $servers[0]
+                }
+
                 # Filter out null/empty servers to prevent errors
-                $servers = @($servers | Where-Object { $_ -ne $null -and -not [string]::IsNullOrWhiteSpace($_) })
+                $servers = @($servers | Where-Object {
+                    $_ -ne $null -and
+                    $_ -is [string] -and
+                    -not [string]::IsNullOrWhiteSpace($_)
+                })
 
                 $debugLog += "Background: Servers = $($servers -join ', ')"
                 $debugLog += "Background: Servers count = $($servers.Count)"
