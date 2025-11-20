@@ -2176,12 +2176,16 @@ function Get-DNATaskOutputDetails {
         Extracted from DNACAPEiv6_COMPLETE(1).txt for robust output parsing
     #>
     param(
-        [Parameter(Mandatory=$true)]
         $RawOutput,
         [string]$Command
     )
 
     $cleanOutput = ""
+
+    # Handle null or empty responses
+    if ($null -eq $RawOutput) {
+        return ""
+    }
 
     # Handle string responses (simplest case)
     if ($RawOutput -is [string]) {
