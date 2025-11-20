@@ -2165,7 +2165,6 @@ $txtFilterHostname = New-Object System.Windows.Forms.TextBox
 $txtFilterHostname.Size = New-Object System.Drawing.Size(200, 20)
 $txtFilterHostname.Location = New-Object System.Drawing.Point(135, 28)
 $txtFilterHostname.Enabled = $false
-$txtFilterHostname.PlaceholderText = "Type to filter..."
 $dnaFilterGroupBox.Controls.Add($txtFilterHostname)
 
 # Family Filter (ComboBox)
