@@ -348,6 +348,130 @@ function Add-DNATreeNode {
     $ParentNode.Nodes.Add($node) | Out-Null
 }
 
+function Populate-DNAFilterComboBoxes {
+    <#
+    .SYNOPSIS
+        Populates DNA Center filter ComboBoxes with unique values from loaded devices
+    #>
+    param(
+        [System.Windows.Forms.ComboBox]$FamilyComboBox,
+        [System.Windows.Forms.ComboBox]$RoleComboBox,
+        [System.Windows.Forms.ComboBox]$IPComboBox
+    )
+
+    if (-not $global:allDNADevices -or $global:allDNADevices.Count -eq 0) {
+        return
+    }
+
+    # Populate Family ComboBox
+    $families = $global:allDNADevices | Where-Object { $_.family } | Select-Object -ExpandProperty family -Unique | Sort-Object
+    $FamilyComboBox.Items.Clear()
+    $FamilyComboBox.Items.Add("All") | Out-Null
+    foreach ($family in $families) {
+        $FamilyComboBox.Items.Add($family) | Out-Null
+    }
+    $FamilyComboBox.SelectedIndex = 0
+
+    # Populate Role ComboBox
+    $roles = $global:allDNADevices | Where-Object { $_.role } | Select-Object -ExpandProperty role -Unique | Sort-Object
+    $RoleComboBox.Items.Clear()
+    $RoleComboBox.Items.Add("All") | Out-Null
+    foreach ($role in $roles) {
+        $RoleComboBox.Items.Add($role) | Out-Null
+    }
+    $RoleComboBox.SelectedIndex = 0
+
+    # Populate IP Address ComboBox (only show unique IPs, sorted)
+    $ips = $global:allDNADevices | Where-Object { $_.managementIpAddress } | Select-Object -ExpandProperty managementIpAddress -Unique | Sort-Object { [System.Version]$_ }
+    $IPComboBox.Items.Clear()
+    $IPComboBox.Items.Add("All") | Out-Null
+    foreach ($ip in $ips) {
+        $IPComboBox.Items.Add($ip) | Out-Null
+    }
+    $IPComboBox.SelectedIndex = 0
+}
+
+function Update-DNADeviceList {
+    <#
+    .SYNOPSIS
+        Filters and populates the DNA Center device CheckedListBox based on current filter criteria
+    #>
+    param(
+        [System.Windows.Forms.CheckedListBox]$DeviceListBox,
+        [System.Windows.Forms.TextBox]$HostnameFilter,
+        [System.Windows.Forms.ComboBox]$FamilyFilter,
+        [System.Windows.Forms.ComboBox]$RoleFilter,
+        [System.Windows.Forms.ComboBox]$IPFilter,
+        [System.Windows.Forms.Label]$StatusLabel,
+        [System.Windows.Forms.CheckBox]$SelectAllCheckbox
+    )
+
+    if (-not $global:allDNADevices -or $global:allDNADevices.Count -eq 0) {
+        $DeviceListBox.Items.Clear()
+        $StatusLabel.Text = "Showing: 0 devices | Selected: 0"
+        return
+    }
+
+    # Store currently checked device IDs
+    $checkedDeviceIds = @()
+    for ($i = 0; $i -lt $DeviceListBox.Items.Count; $i++) {
+        if ($DeviceListBox.GetItemChecked($i)) {
+            # Extract device ID from the item text (format: "hostname - ip - role - family [id]")
+            $itemText = $DeviceListBox.Items[$i].ToString()
+            if ($itemText -match '\[([^\]]+)\]$') {
+                $checkedDeviceIds += $matches[1]
+            }
+        }
+    }
+
+    # Apply filters
+    $filtered = $global:allDNADevices | Where-Object {
+        $matchesHostname = [string]::IsNullOrWhiteSpace($HostnameFilter.Text) -or ($_.hostname -and $_.hostname -like "*$($HostnameFilter.Text)*")
+        $matchesFamily = ($FamilyFilter.SelectedItem -eq "All") -or ($_.family -eq $FamilyFilter.SelectedItem)
+        $matchesRole = ($RoleFilter.SelectedItem -eq "All") -or ($_.role -eq $RoleFilter.SelectedItem)
+        $matchesIP = ($IPFilter.SelectedItem -eq "All") -or ($_.managementIpAddress -eq $IPFilter.SelectedItem)
+
+        $matchesHostname -and $matchesFamily -and $matchesRole -and $matchesIP
+    }
+
+    # Populate CheckedListBox
+    $DeviceListBox.BeginUpdate()
+    $DeviceListBox.Items.Clear()
+
+    $checkedCount = 0
+    foreach ($device in $filtered) {
+        $hostname = if ($device.hostname) { $device.hostname } else { "N/A" }
+        $ip = if ($device.managementIpAddress) { $device.managementIpAddress } else { "N/A" }
+        $role = if ($device.role) { $device.role } else { "N/A" }
+        $family = if ($device.family) { $device.family } else { "N/A" }
+        $deviceId = if ($device.id) { $device.id } else { "N/A" }
+
+        # Format: "hostname - ip - role - family [id]"
+        $displayText = "$hostname - $ip - $role - $family [$deviceId]"
+        $index = $DeviceListBox.Items.Add($displayText)
+
+        # Restore checked state if device was previously checked
+        if ($checkedDeviceIds -contains $deviceId) {
+            $DeviceListBox.SetItemChecked($index, $true)
+            $checkedCount++
+        }
+    }
+
+    $DeviceListBox.EndUpdate()
+
+    # Update status label
+    $StatusLabel.Text = "Showing: $($filtered.Count) devices | Selected: $checkedCount"
+
+    # Update Select All checkbox state
+    if ($filtered.Count -eq 0) {
+        $SelectAllCheckbox.Checked = $false
+        $SelectAllCheckbox.Enabled = $false
+    } else {
+        $SelectAllCheckbox.Enabled = $true
+        $SelectAllCheckbox.Checked = ($checkedCount -eq $filtered.Count)
+    }
+}
+
 # ============================================
 # INITIALIZE SETTINGS & GLOBAL VARIABLES
 # ============================================
@@ -2023,86 +2147,115 @@ $btnLoadDevices.Location = New-Object System.Drawing.Point(500, 63)
 $btnLoadDevices.Enabled = $false
 $dnaConnGroupBox.Controls.Add($btnLoadDevices)
 
-# Device Filter Group
+# Device Filter & Selection Group (Enhanced)
 $dnaFilterGroupBox = New-Object System.Windows.Forms.GroupBox
-$dnaFilterGroupBox.Text = "Device Filtering (Optional)"
-$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(940, 100)
+$dnaFilterGroupBox.Text = "Device Filtering & Selection"
+$dnaFilterGroupBox.Size = New-Object System.Drawing.Size(940, 350)
 $dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
 $tab3.Controls.Add($dnaFilterGroupBox)
 
-# Hostname Filter
+# Row 1: Hostname Search
 $lblFilterHostname = New-Object System.Windows.Forms.Label
-$lblFilterHostname.Text = "Hostname:"
-$lblFilterHostname.Size = New-Object System.Drawing.Size(80, 20)
+$lblFilterHostname.Text = "Hostname Search:"
+$lblFilterHostname.Size = New-Object System.Drawing.Size(110, 20)
 $lblFilterHostname.Location = New-Object System.Drawing.Point(20, 30)
 $dnaFilterGroupBox.Controls.Add($lblFilterHostname)
 
 $txtFilterHostname = New-Object System.Windows.Forms.TextBox
-$txtFilterHostname.Size = New-Object System.Drawing.Size(150, 20)
-$txtFilterHostname.Location = New-Object System.Drawing.Point(110, 28)
+$txtFilterHostname.Size = New-Object System.Drawing.Size(200, 20)
+$txtFilterHostname.Location = New-Object System.Drawing.Point(135, 28)
 $txtFilterHostname.Enabled = $false
+$txtFilterHostname.PlaceholderText = "Type to filter..."
 $dnaFilterGroupBox.Controls.Add($txtFilterHostname)
 
-# IP Address Filter
-$lblFilterIPAddress = New-Object System.Windows.Forms.Label
-$lblFilterIPAddress.Text = "IP Address:"
-$lblFilterIPAddress.Size = New-Object System.Drawing.Size(80, 20)
-$lblFilterIPAddress.Location = New-Object System.Drawing.Point(280, 30)
-$dnaFilterGroupBox.Controls.Add($lblFilterIPAddress)
-
-$txtFilterIPAddress = New-Object System.Windows.Forms.TextBox
-$txtFilterIPAddress.Size = New-Object System.Drawing.Size(150, 20)
-$txtFilterIPAddress.Location = New-Object System.Drawing.Point(370, 28)
-$txtFilterIPAddress.Enabled = $false
-$dnaFilterGroupBox.Controls.Add($txtFilterIPAddress)
-
-# Role Filter
-$lblFilterRole = New-Object System.Windows.Forms.Label
-$lblFilterRole.Text = "Role:"
-$lblFilterRole.Size = New-Object System.Drawing.Size(80, 20)
-$lblFilterRole.Location = New-Object System.Drawing.Point(540, 30)
-$dnaFilterGroupBox.Controls.Add($lblFilterRole)
-
-$txtFilterRole = New-Object System.Windows.Forms.TextBox
-$txtFilterRole.Size = New-Object System.Drawing.Size(150, 20)
-$txtFilterRole.Location = New-Object System.Drawing.Point(630, 28)
-$txtFilterRole.Enabled = $false
-$dnaFilterGroupBox.Controls.Add($txtFilterRole)
-
-# Family Filter
+# Family Filter (ComboBox)
 $lblFilterFamily = New-Object System.Windows.Forms.Label
 $lblFilterFamily.Text = "Family:"
-$lblFilterFamily.Size = New-Object System.Drawing.Size(80, 20)
-$lblFilterFamily.Location = New-Object System.Drawing.Point(20, 65)
+$lblFilterFamily.Size = New-Object System.Drawing.Size(50, 20)
+$lblFilterFamily.Location = New-Object System.Drawing.Point(360, 30)
 $dnaFilterGroupBox.Controls.Add($lblFilterFamily)
 
-$txtFilterFamily = New-Object System.Windows.Forms.TextBox
-$txtFilterFamily.Size = New-Object System.Drawing.Size(150, 20)
-$txtFilterFamily.Location = New-Object System.Drawing.Point(110, 63)
-$txtFilterFamily.Enabled = $false
-$dnaFilterGroupBox.Controls.Add($txtFilterFamily)
+$cmbFilterFamily = New-Object System.Windows.Forms.ComboBox
+$cmbFilterFamily.Size = New-Object System.Drawing.Size(180, 25)
+$cmbFilterFamily.Location = New-Object System.Drawing.Point(415, 28)
+$cmbFilterFamily.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$cmbFilterFamily.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($cmbFilterFamily)
 
-# Apply Filter Button
+# Role Filter (ComboBox)
+$lblFilterRole = New-Object System.Windows.Forms.Label
+$lblFilterRole.Text = "Role:"
+$lblFilterRole.Size = New-Object System.Drawing.Size(40, 20)
+$lblFilterRole.Location = New-Object System.Drawing.Point(620, 30)
+$dnaFilterGroupBox.Controls.Add($lblFilterRole)
+
+$cmbFilterRole = New-Object System.Windows.Forms.ComboBox
+$cmbFilterRole.Size = New-Object System.Drawing.Size(180, 25)
+$cmbFilterRole.Location = New-Object System.Drawing.Point(665, 28)
+$cmbFilterRole.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$cmbFilterRole.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($cmbFilterRole)
+
+# Row 2: IP Address Filter (ComboBox)
+$lblFilterIPAddress = New-Object System.Windows.Forms.Label
+$lblFilterIPAddress.Text = "IP Address:"
+$lblFilterIPAddress.Size = New-Object System.Drawing.Size(110, 20)
+$lblFilterIPAddress.Location = New-Object System.Drawing.Point(20, 65)
+$dnaFilterGroupBox.Controls.Add($lblFilterIPAddress)
+
+$cmbFilterIPAddress = New-Object System.Windows.Forms.ComboBox
+$cmbFilterIPAddress.Size = New-Object System.Drawing.Size(200, 25)
+$cmbFilterIPAddress.Location = New-Object System.Drawing.Point(135, 63)
+$cmbFilterIPAddress.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$cmbFilterIPAddress.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($cmbFilterIPAddress)
+
+# Select All Checkbox
+$chkSelectAll = New-Object System.Windows.Forms.CheckBox
+$chkSelectAll.Text = "Select All (Current Filter)"
+$chkSelectAll.Size = New-Object System.Drawing.Size(180, 25)
+$chkSelectAll.Location = New-Object System.Drawing.Point(360, 63)
+$chkSelectAll.Enabled = $false
+$dnaFilterGroupBox.Controls.Add($chkSelectAll)
+
+# Apply Selection Button
 $btnApplyDeviceFilter = New-Object System.Windows.Forms.Button
-$btnApplyDeviceFilter.Text = "Apply Filter"
-$btnApplyDeviceFilter.Size = New-Object System.Drawing.Size(120, 25)
-$btnApplyDeviceFilter.Location = New-Object System.Drawing.Point(280, 63)
+$btnApplyDeviceFilter.Text = "Apply Selection"
+$btnApplyDeviceFilter.Size = New-Object System.Drawing.Size(120, 28)
+$btnApplyDeviceFilter.Location = New-Object System.Drawing.Point(565, 61)
 $btnApplyDeviceFilter.Enabled = $false
 $dnaFilterGroupBox.Controls.Add($btnApplyDeviceFilter)
 
 # Reset Filter Button
 $btnResetDeviceFilter = New-Object System.Windows.Forms.Button
-$btnResetDeviceFilter.Text = "Reset Filter"
-$btnResetDeviceFilter.Size = New-Object System.Drawing.Size(120, 25)
-$btnResetDeviceFilter.Location = New-Object System.Drawing.Point(410, 63)
+$btnResetDeviceFilter.Text = "Reset All"
+$btnResetDeviceFilter.Size = New-Object System.Drawing.Size(120, 28)
+$btnResetDeviceFilter.Location = New-Object System.Drawing.Point(695, 61)
 $btnResetDeviceFilter.Enabled = $false
 $dnaFilterGroupBox.Controls.Add($btnResetDeviceFilter)
 
+# Device Selection Label
+$lblDeviceListTitle = New-Object System.Windows.Forms.Label
+$lblDeviceListTitle.Text = "Available Devices (check devices to select):"
+$lblDeviceListTitle.Size = New-Object System.Drawing.Size(400, 20)
+$lblDeviceListTitle.Location = New-Object System.Drawing.Point(20, 100)
+$lblDeviceListTitle.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
+$dnaFilterGroupBox.Controls.Add($lblDeviceListTitle)
+
+# CheckedListBox for Device Selection
+$lstDevices = New-Object System.Windows.Forms.CheckedListBox
+$lstDevices.Size = New-Object System.Drawing.Size(900, 180)
+$lstDevices.Location = New-Object System.Drawing.Point(20, 125)
+$lstDevices.CheckOnClick = $true
+$lstDevices.Enabled = $false
+$lstDevices.Font = New-Object System.Drawing.Font("Consolas", 9)
+$dnaFilterGroupBox.Controls.Add($lstDevices)
+
 # Device Selection Status
 $lblDeviceSelectionStatus = New-Object System.Windows.Forms.Label
-$lblDeviceSelectionStatus.Text = "Selected devices: None"
-$lblDeviceSelectionStatus.Size = New-Object System.Drawing.Size(400, 20)
-$lblDeviceSelectionStatus.Location = New-Object System.Drawing.Point(540, 68)
+$lblDeviceSelectionStatus.Text = "Showing: 0 devices | Selected: 0"
+$lblDeviceSelectionStatus.Size = New-Object System.Drawing.Size(500, 20)
+$lblDeviceSelectionStatus.Location = New-Object System.Drawing.Point(20, 315)
 $lblDeviceSelectionStatus.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
 $lblDeviceSelectionStatus.ForeColor = [System.Drawing.Color]::DarkBlue
 $dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
@@ -2111,7 +2264,7 @@ $dnaFilterGroupBox.Controls.Add($lblDeviceSelectionStatus)
 $dnaTreeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaTreeGroupBox.Text = "DNA Center Functions - TreeView (Double-click to Execute)"
 $dnaTreeGroupBox.Size = New-Object System.Drawing.Size(460, 270)
-$dnaTreeGroupBox.Location = New-Object System.Drawing.Point(10, 270)
+$dnaTreeGroupBox.Location = New-Object System.Drawing.Point(10, 520)
 $tab3.Controls.Add($dnaTreeGroupBox)
 
 # TreeView for DNA Center Functions
@@ -2200,7 +2353,7 @@ $script:dnaTreeView.ContextMenuStrip = $dnaTreeContextMenu
 $dnaFavoritesGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFavoritesGroupBox.Text = "Favorite Functions"
 $dnaFavoritesGroupBox.Size = New-Object System.Drawing.Size(460, 270)
-$dnaFavoritesGroupBox.Location = New-Object System.Drawing.Point(480, 270)
+$dnaFavoritesGroupBox.Location = New-Object System.Drawing.Point(480, 520)
 $tab3.Controls.Add($dnaFavoritesGroupBox)
 
 $script:lstFavorites = New-Object System.Windows.Forms.ListBox
@@ -2303,12 +2456,17 @@ $btnLoadDevices.Add_Click({
         $success = Get-AllDNADevices -LogBox $dnaLogBox
 
         if ($success) {
+            # Populate filter ComboBoxes with unique values from loaded devices
+            Populate-DNAFilterComboBoxes -FamilyComboBox $cmbFilterFamily -RoleComboBox $cmbFilterRole -IPComboBox $cmbFilterIPAddress
+
+            # Populate device list with all devices
+            Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+
             # Enable filter controls
-            foreach ($control in @($txtFilterHostname, $txtFilterIPAddress, $txtFilterRole, $txtFilterFamily, $btnApplyDeviceFilter, $btnResetDeviceFilter)) {
+            foreach ($control in @($txtFilterHostname, $cmbFilterIPAddress, $cmbFilterRole, $cmbFilterFamily, $lstDevices, $chkSelectAll, $btnApplyDeviceFilter, $btnResetDeviceFilter)) {
                 $control.Enabled = $true
             }
 
-            $lblDeviceSelectionStatus.Text = "Selected devices: All ($($global:allDNADevices.Count))"
             Update-StatusBar -Status "Ready - Loaded $($global:allDNADevices.Count) devices from DNA Center" -StatusLabel $script:statusLabel -ProgressBar $script:progressBar -ProgressLabel $script:progressLabel
 
             [System.Windows.Forms.MessageBox]::Show("Devices loaded successfully!`nTotal: $($global:allDNADevices.Count)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -2324,35 +2482,125 @@ $btnLoadDevices.Add_Click({
 
 $btnApplyDeviceFilter.Add_Click({
     try {
-        $result = Select-DNADevices -Hostname $txtFilterHostname.Text -IPAddress $txtFilterIPAddress.Text -Role $txtFilterRole.Text -Family $txtFilterFamily.Text -LogBox $dnaLogBox
+        # Get checked devices from CheckedListBox
+        $selectedDevices = @()
+        for ($i = 0; $i -lt $lstDevices.Items.Count; $i++) {
+            if ($lstDevices.GetItemChecked($i)) {
+                $itemText = $lstDevices.Items[$i].ToString()
+                # Extract device ID from format: "hostname - ip - role - family [id]"
+                if ($itemText -match '\[([^\]]+)\]$') {
+                    $deviceId = $matches[1]
+                    $device = $global:allDNADevices | Where-Object { $_.id -eq $deviceId }
+                    if ($device) {
+                        $selectedDevices += $device
+                    }
+                }
+            }
+        }
 
-        if ($result.Count -eq 0) {
-            $lblDeviceSelectionStatus.Text = "Selected devices: 0 of $($global:allDNADevices.Count)"
-            [System.Windows.Forms.MessageBox]::Show("No devices matched the provided filters.", "No Results", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        # Update global selected devices
+        $global:selectedDNADevices = $selectedDevices
+
+        if ($selectedDevices.Count -eq 0) {
+            Write-Log -Message "No devices selected. DNA Center functions will not have any target devices." -Color "Yellow" -LogBox $dnaLogBox
+            [System.Windows.Forms.MessageBox]::Show("No devices selected.`nPlease check devices to select them for DNA Center operations.", "No Selection", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         } else {
-            $lblDeviceSelectionStatus.Text = "Selected devices: $($result.Count) of $($global:allDNADevices.Count)"
-            [System.Windows.Forms.MessageBox]::Show("Filters applied successfully.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            Write-Log -Message "Applied selection: $($selectedDevices.Count) device(s) selected for DNA Center operations" -Color "Green" -LogBox $dnaLogBox
+            [System.Windows.Forms.MessageBox]::Show("Selection applied successfully!`nSelected: $($selectedDevices.Count) device(s)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
     } catch {
-        Write-Log -Message "Error applying filters: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
-        [System.Windows.Forms.MessageBox]::Show("Error applying filters: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        Write-Log -Message "Error applying selection: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
+        [System.Windows.Forms.MessageBox]::Show("Error applying selection: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 })
 
 $btnResetDeviceFilter.Add_Click({
     try {
-        Reset-DNADeviceSelection -LogBox $dnaLogBox
+        # Reset filters
         $txtFilterHostname.Clear()
-        $txtFilterIPAddress.Clear()
-        $txtFilterRole.Clear()
-        $txtFilterFamily.Clear()
+        $cmbFilterIPAddress.SelectedIndex = 0
+        $cmbFilterRole.SelectedIndex = 0
+        $cmbFilterFamily.SelectedIndex = 0
+        $chkSelectAll.Checked = $false
 
-        $lblDeviceSelectionStatus.Text = "Selected devices: All ($($global:allDNADevices.Count))"
-        [System.Windows.Forms.MessageBox]::Show("Device selection reset to all loaded devices.", "Reset", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        # Uncheck all devices in the list
+        for ($i = 0; $i -lt $lstDevices.Items.Count; $i++) {
+            $lstDevices.SetItemChecked($i, $false)
+        }
+
+        # Refresh device list (will show all devices)
+        Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+
+        # Reset selection to all devices
+        Reset-DNADeviceSelection -LogBox $dnaLogBox
+
+        [System.Windows.Forms.MessageBox]::Show("Filters and selection have been reset.", "Reset", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     } catch {
         Write-Log -Message "Error resetting filters: $($_.Exception.Message)" -Color "Red" -LogBox $dnaLogBox
         [System.Windows.Forms.MessageBox]::Show("Error resetting filters: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
+})
+
+# Live filtering event handlers for DNA Center device selection
+# Flag to prevent recursive updates when Select All is clicked
+$script:updatingCheckboxes = $false
+
+$txtFilterHostname.Add_TextChanged({
+    if ($lstDevices.Enabled) {
+        Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+    }
+})
+
+$cmbFilterFamily.Add_SelectedIndexChanged({
+    if ($lstDevices.Enabled -and $cmbFilterFamily.SelectedIndex -ge 0) {
+        Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+    }
+})
+
+$cmbFilterRole.Add_SelectedIndexChanged({
+    if ($lstDevices.Enabled -and $cmbFilterRole.SelectedIndex -ge 0) {
+        Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+    }
+})
+
+$cmbFilterIPAddress.Add_SelectedIndexChanged({
+    if ($lstDevices.Enabled -and $cmbFilterIPAddress.SelectedIndex -ge 0) {
+        Update-DNADeviceList -DeviceListBox $lstDevices -HostnameFilter $txtFilterHostname -FamilyFilter $cmbFilterFamily -RoleFilter $cmbFilterRole -IPFilter $cmbFilterIPAddress -StatusLabel $lblDeviceSelectionStatus -SelectAllCheckbox $chkSelectAll
+    }
+})
+
+# Select All checkbox handler
+$chkSelectAll.Add_CheckedChanged({
+    if ($lstDevices.Enabled -and -not $script:updatingCheckboxes) {
+        $script:updatingCheckboxes = $true
+        try {
+            for ($i = 0; $i -lt $lstDevices.Items.Count; $i++) {
+                $lstDevices.SetItemChecked($i, $chkSelectAll.Checked)
+            }
+            # Update status label
+            $checkedCount = if ($chkSelectAll.Checked) { $lstDevices.Items.Count } else { 0 }
+            $lblDeviceSelectionStatus.Text = "Showing: $($lstDevices.Items.Count) devices | Selected: $checkedCount"
+        } finally {
+            $script:updatingCheckboxes = $false
+        }
+    }
+})
+
+# CheckedListBox ItemCheck event to update status in real-time
+$lstDevices.Add_ItemCheck({
+    param($sender, $e)
+    if ($script:updatingCheckboxes) { return }
+
+    # Use BeginInvoke to ensure the checked state is updated before counting
+    $lstDevices.BeginInvoke([Action]{
+        $checkedCount = 0
+        for ($i = 0; $i -lt $lstDevices.Items.Count; $i++) {
+            if ($lstDevices.GetItemChecked($i)) {
+                $checkedCount++
+            }
+        }
+        $lblDeviceSelectionStatus.Text = "Showing: $($lstDevices.Items.Count) devices | Selected: $checkedCount"
+    })
 })
 
 # ============================================
