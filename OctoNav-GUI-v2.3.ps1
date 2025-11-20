@@ -402,7 +402,7 @@ $mainForm.Text = "OctoNav v2.3 - Network Management Tool"
 $mainForm.Size = New-Object System.Drawing.Size($script:Settings.WindowSize.Width, $script:Settings.WindowSize.Height)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = "Sizable"
-$mainForm.MinimumSize = New-Object System.Drawing.Size(1260, 600)
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1245, 600)
 
 if ($script:Settings.WindowMaximized) {
     $mainForm.WindowState = "Maximized"
@@ -877,7 +877,7 @@ $tab2.Controls.Add($lblDHCPInfo)
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Selection"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(560, 150)
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(920, 150)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab2.Controls.Add($dhcpServerGroupBox)
 
@@ -951,7 +951,7 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 # Scope Selection Group
 $dhcpScopeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpScopeGroupBox.Text = "Scope Selection (Optional)"
-$dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(560, 160)
+$dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(920, 160)
 $dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 200)
 $tab2.Controls.Add($dhcpScopeGroupBox)
 
@@ -1040,7 +1040,7 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(560, 100)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 100)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
@@ -1100,7 +1100,7 @@ $dhcpOptionsGroupBox.Controls.Add($lblConcurrencyNote)
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
-$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(560, 65)
+$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(920, 65)
 $dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 455)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
@@ -1137,7 +1137,7 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 # Collection Log Label (right side)
 $lblCollectionLog = New-Object System.Windows.Forms.Label
 $lblCollectionLog.Text = "Collection Log"
-$lblCollectionLog.Location = New-Object System.Drawing.Point(950, 15)
+$lblCollectionLog.Location = New-Object System.Drawing.Point(945, 15)
 $lblCollectionLog.Size = New-Object System.Drawing.Size(200, 20)
 $lblCollectionLog.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $lblCollectionLog.ForeColor = [System.Drawing.Color]::DarkBlue
@@ -1146,7 +1146,7 @@ $tab2.Controls.Add($lblCollectionLog)
 # DHCP Log (right side panel)
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
 $dhcpLogBox.Size = New-Object System.Drawing.Size(280, 480)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(950, 40)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(945, 40)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
