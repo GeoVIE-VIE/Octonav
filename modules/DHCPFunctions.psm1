@@ -597,36 +597,16 @@ function Get-DHCPScopeStatistics {
                             param($ServerName, $ScopeId)
                             try {
                                 $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -OptionId 60 -ErrorAction SilentlyContinue
-
-                                $rawValue = $null
-                                $processedValue = $null
-                                $diagnosticInfo = "Option60 object is null"
-
-                                if ($Option60) {
-                                    $rawValue = $Option60.Value
-                                    $valueType = $rawValue.GetType().Name
-                                    $valueCount = if ($rawValue -is [Array]) { $rawValue.Count } else { 'N/A' }
-                                    $diagnosticInfo = "Option60 exists: Type=$valueType, Count=$valueCount"
-                                    $processedValue = $rawValue -join ','
-                                } else {
-                                    $diagnosticInfo = "Option60 object is null (option not configured on scope)"
-                                }
-
                                 return [PSCustomObject]@{
                                     ScopeId = $ScopeId
-                                    Value = $processedValue
-                                    RawValue = $rawValue
-                                    Diagnostic = $diagnosticInfo
+                                    Value = if ($Option60) { $Option60.Value -join ',' } else { $null }
                                     Success = $true
                                 }
                             } catch {
                                 return [PSCustomObject]@{
                                     ScopeId = $ScopeId
                                     Value = $null
-                                    RawValue = $null
-                                    Diagnostic = "Exception: $($_.Exception.Message)"
                                     Success = $false
-                                    Error = $_.Exception.Message
                                 }
                             }
                         }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
@@ -641,24 +621,11 @@ function Get-DHCPScopeStatistics {
                     # Collect results
                     foreach ($Job in $Jobs) {
                         $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
-                        $scriptDebug += "[SB-$ServerName] Option 60 EndInvoke returned: Count=$($resultArray.Count), Type=$($resultArray.GetType().Name)"
-
                         if ($resultArray -and $resultArray.Count -gt 0) {
                             $result = $resultArray[0]
-                            $scriptDebug += "[SB-$ServerName] Option 60 Scope $($result.ScopeId): Diagnostic='$($result.Diagnostic)'"
-                            $scriptDebug += "[SB-$ServerName] Option 60 Scope $($result.ScopeId): Value='$($result.Value)', Success=$($result.Success)"
-
                             if ($result.Value) {
                                 $Option60Map[$result.ScopeId] = $result.Value
-                                $scriptDebug += "[SB-$ServerName] Option 60 ADDED to map: Scope=$($result.ScopeId), Value='$($result.Value)'"
-                            } else {
-                                $scriptDebug += "[SB-$ServerName] Option 60 NOT added (Value is null/empty) for scope $($result.ScopeId)"
-                                if ($result.Error) {
-                                    $scriptDebug += "[SB-$ServerName] Option 60 Error: $($result.Error)"
-                                }
                             }
-                        } else {
-                            $scriptDebug += "[SB-$ServerName] Option 60 EndInvoke returned empty/null array"
                         }
                         $Job.PowerShell.Dispose()
                     }
@@ -667,8 +634,7 @@ function Get-DHCPScopeStatistics {
                     $RunspacePool.Dispose()
 
                     $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s (parallel)"
-                    $scriptDebug += "[SB-$ServerName] Option 60 Map contains $($Option60Map.Count) entries: $($Option60Map.Keys -join ', ')"
+                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s - collected $($Option60Map.Count) values"
                 }
 
                 # Optional: Build Option 43 map if requested
@@ -689,36 +655,16 @@ function Get-DHCPScopeStatistics {
                             param($ServerName, $ScopeId)
                             try {
                                 $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -OptionId 43 -ErrorAction SilentlyContinue
-
-                                $rawValue = $null
-                                $processedValue = $null
-                                $diagnosticInfo = "Option43 object is null"
-
-                                if ($Option43) {
-                                    $rawValue = $Option43.Value
-                                    $valueType = $rawValue.GetType().Name
-                                    $valueCount = if ($rawValue -is [Array]) { $rawValue.Count } else { 'N/A' }
-                                    $diagnosticInfo = "Option43 exists: Type=$valueType, Count=$valueCount"
-                                    $processedValue = $rawValue -join ','
-                                } else {
-                                    $diagnosticInfo = "Option43 object is null (option not configured on scope)"
-                                }
-
                                 return [PSCustomObject]@{
                                     ScopeId = $ScopeId
-                                    Value = $processedValue
-                                    RawValue = $rawValue
-                                    Diagnostic = $diagnosticInfo
+                                    Value = if ($Option43) { $Option43.Value -join ',' } else { $null }
                                     Success = $true
                                 }
                             } catch {
                                 return [PSCustomObject]@{
                                     ScopeId = $ScopeId
                                     Value = $null
-                                    RawValue = $null
-                                    Diagnostic = "Exception: $($_.Exception.Message)"
                                     Success = $false
-                                    Error = $_.Exception.Message
                                 }
                             }
                         }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
@@ -733,24 +679,11 @@ function Get-DHCPScopeStatistics {
                     # Collect results
                     foreach ($Job in $Jobs) {
                         $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
-                        $scriptDebug += "[SB-$ServerName] Option 43 EndInvoke returned: Count=$($resultArray.Count), Type=$($resultArray.GetType().Name)"
-
                         if ($resultArray -and $resultArray.Count -gt 0) {
                             $result = $resultArray[0]
-                            $scriptDebug += "[SB-$ServerName] Option 43 Scope $($result.ScopeId): Diagnostic='$($result.Diagnostic)'"
-                            $scriptDebug += "[SB-$ServerName] Option 43 Scope $($result.ScopeId): Value='$($result.Value)', Success=$($result.Success)"
-
                             if ($result.Value) {
                                 $Option43Map[$result.ScopeId] = $result.Value
-                                $scriptDebug += "[SB-$ServerName] Option 43 ADDED to map: Scope=$($result.ScopeId), Value='$($result.Value)'"
-                            } else {
-                                $scriptDebug += "[SB-$ServerName] Option 43 NOT added (Value is null/empty) for scope $($result.ScopeId)"
-                                if ($result.Error) {
-                                    $scriptDebug += "[SB-$ServerName] Option 43 Error: $($result.Error)"
-                                }
                             }
-                        } else {
-                            $scriptDebug += "[SB-$ServerName] Option 43 EndInvoke returned empty/null array"
                         }
                         $Job.PowerShell.Dispose()
                     }
@@ -759,8 +692,7 @@ function Get-DHCPScopeStatistics {
                     $RunspacePool.Dispose()
 
                     $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s (parallel)"
-                    $scriptDebug += "[SB-$ServerName] Option 43 Map contains $($Option43Map.Count) entries: $($Option43Map.Keys -join ', ')"
+                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s - collected $($Option43Map.Count) values"
                 }
 
                 # Match filtered scopes with their statistics
@@ -780,8 +712,6 @@ function Get-DHCPScopeStatistics {
                         $dnsServers = $DNSServerMap[$Scope.ScopeId]
                         $option60Info = $Option60Map[$Scope.ScopeId]
                         $option43Info = $Option43Map[$Scope.ScopeId]
-
-                        $scriptDebug += "[SB-$ServerName] Scope $($Scope.ScopeId): DNS='$dnsServers', Option60='$option60Info', Option43='$option43Info'"
 
                         # Calculate percentage if not provided or if null
                         $percentageValue = if ($null -ne $Stats.Percentage) {
