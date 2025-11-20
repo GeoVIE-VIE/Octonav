@@ -666,6 +666,7 @@ function Get-DHCPScopeStatistics {
 
                     $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
                     $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s (parallel)"
+                    $scriptDebug += "[SB-$ServerName] Option 60 Map contains $($Option60Map.Count) entries: $($Option60Map.Keys -join ', ')"
                 }
 
                 # Optional: Build Option 43 map if requested
@@ -757,6 +758,7 @@ function Get-DHCPScopeStatistics {
 
                     $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
                     $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s (parallel)"
+                    $scriptDebug += "[SB-$ServerName] Option 43 Map contains $($Option43Map.Count) entries: $($Option43Map.Keys -join ', ')"
                 }
 
                 # Match filtered scopes with their statistics
@@ -776,6 +778,8 @@ function Get-DHCPScopeStatistics {
                         $dnsServers = $DNSServerMap[$Scope.ScopeId]
                         $option60Info = $Option60Map[$Scope.ScopeId]
                         $option43Info = $Option43Map[$Scope.ScopeId]
+
+                        $scriptDebug += "[SB-$ServerName] Scope $($Scope.ScopeId): DNS='$dnsServers', Option60='$option60Info', Option43='$option43Info'"
 
                         # Calculate percentage if not provided or if null
                         $percentageValue = if ($null -ne $Stats.Percentage) {
