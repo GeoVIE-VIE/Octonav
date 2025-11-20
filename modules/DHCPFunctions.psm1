@@ -125,9 +125,14 @@ function Get-DHCPScopeStatistics {
         DNS server (Option ID 6) lookup. Integrates with OctoNav GUI via logging
         and status bar callback.
 
+    .PARAMETER SelectedScopes
+        Array of pre-selected scope objects (with ScopeId and Server properties).
+        If provided, only these specific scopes will be queried (takes precedence over filters).
+        Format: @( @{ScopeId='10.0.1.0'; Server='dhcp1.domain.com'}, ... )
+
     .PARAMETER ScopeFilters
         Array of scope name filters to apply. Case-insensitive partial matching.
-        If empty, all scopes are returned.
+        If empty, all scopes are returned. Ignored if SelectedScopes is provided.
 
     .PARAMETER SpecificServers
         Array of specific DHCP server names to query. If empty, auto-discovers
@@ -158,6 +163,9 @@ function Get-DHCPScopeStatistics {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
+        [object[]]$SelectedScopes = @(),
+
+        [Parameter(Mandatory = $false)]
         [string[]]$ScopeFilters = @(),
 
         [Parameter(Mandatory = $false)]
@@ -184,9 +192,38 @@ function Get-DHCPScopeStatistics {
 
     try {
         $script:DHCPDebugLog += "[DHCP] Get-DHCPScopeStatistics called"
+        $script:DHCPDebugLog += "[DHCP] SelectedScopes: $($SelectedScopes.Count) items"
         $script:DHCPDebugLog += "[DHCP] ScopeFilters: $($ScopeFilters.Count) items - $($ScopeFilters -join ', ')"
         $script:DHCPDebugLog += "[DHCP] SpecificServers: $($SpecificServers.Count) items - $($SpecificServers -join ', ')"
         $script:DHCPDebugLog += "[DHCP] IncludeDNS: $IncludeDNS"
+
+        # -------------------------
+        # Handle pre-selected scopes (takes precedence)
+        # -------------------------
+        if ($SelectedScopes -and $SelectedScopes.Count -gt 0) {
+            $script:DHCPDebugLog += "[DHCP] Using pre-selected scopes (bypassing filters)"
+            Write-Log -Message "Querying $($SelectedScopes.Count) pre-selected scope(s)..." -Color 'Info' -LogBox $LogBox -Theme $null
+            Invoke-StatusBar -Callback $StatusBarCallback -Status "Processing $($SelectedScopes.Count) selected scopes..." -Progress 10 -ProgressText 'Grouping scopes by server...'
+
+            # Group scopes by server
+            $scopesByServer = @{}
+            foreach ($scope in $SelectedScopes) {
+                $server = $scope.Server
+                if (-not $scopesByServer.ContainsKey($server)) {
+                    $scopesByServer[$server] = @()
+                }
+                $scopesByServer[$server] += $scope
+            }
+
+            $script:DHCPDebugLog += "[DHCP] Grouped into $($scopesByServer.Keys.Count) server(s)"
+
+            # Use these servers instead of discovering
+            $SpecificServers = @($scopesByServer.Keys)
+            # Clear filters since we have specific scopes
+            $ScopeFilters = @()
+
+            $script:DHCPDebugLog += "[DHCP] Will query servers: $($SpecificServers -join ', ')"
+        }
 
         # -------------------------
         # Determine DHCP servers
@@ -305,7 +342,8 @@ function Get-DHCPScopeStatistics {
             param(
                 [string]$ServerName,
                 [string[]]$ScopeFilters,
-                [bool]$IncludeDNS
+                [bool]$IncludeDNS,
+                [string[]]$SelectedScopeIds = @()
             )
 
             $ErrorActionPreference = 'Stop'
@@ -323,19 +361,42 @@ function Get-DHCPScopeStatistics {
 
             try {
                 $scriptDebug += "[SB-$ServerName] Scriptblock started"
+                $scriptDebug += "[SB-$ServerName] SelectedScopeIds: $($SelectedScopeIds.Count) items - $($SelectedScopeIds -join ', ')"
                 $scriptDebug += "[SB-$ServerName] ScopeFilters: $($ScopeFilters -join ', ')"
                 $scriptDebug += "[SB-$ServerName] IncludeDNS: $IncludeDNS"
 
                 Import-Module DhcpServer -ErrorAction Stop
                 $scriptDebug += "[SB-$ServerName] DhcpServer module imported"
 
-                $scriptDebug += "[SB-$ServerName] Querying scopes from $ServerName..."
-                $scopeStart = Get-Date
-                $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
-                $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
-                $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s"
+                # If specific scope IDs provided, use them directly
+                if ($SelectedScopeIds -and $SelectedScopeIds.Count -gt 0) {
+                    $scriptDebug += "[SB-$ServerName] Using $($SelectedScopeIds.Count) pre-selected scope ID(s)"
 
-                if (-not $Scopes) {
+                    # Get scope metadata for the selected IDs
+                    $Scopes = @()
+                    foreach ($scopeId in $SelectedScopeIds) {
+                        try {
+                            $scope = Get-DhcpServerv4Scope -ComputerName $ServerName -ScopeId $scopeId -ErrorAction SilentlyContinue
+                            if ($scope) {
+                                $Scopes += $scope
+                            } else {
+                                $scriptDebug += "[SB-$ServerName] WARNING: ScopeId $scopeId not found on server"
+                            }
+                        } catch {
+                            $scriptDebug += "[SB-$ServerName] ERROR querying scope $scopeId : $($_.Exception.Message)"
+                        }
+                    }
+                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) from selected IDs"
+                } else {
+                    # Original logic: Get all scopes then filter
+                    $scriptDebug += "[SB-$ServerName] Querying all scopes from $ServerName..."
+                    $scopeStart = Get-Date
+                    $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
+                    $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
+                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s"
+                }
+
+                if (-not $Scopes -or $Scopes.Count -eq 0) {
                     $scriptDebug += "[SB-$ServerName] No scopes found on server"
                     $ResultObject.Message = 'No scopes found on server. Check permissions or DHCP service status.'
                     $ResultObject.ScriptDebug = $scriptDebug
@@ -349,8 +410,8 @@ function Get-DHCPScopeStatistics {
                     $scriptDebug += "[SB-$ServerName]   - ScopeId: $($s.ScopeId), Name: $($s.Name), Description: $descText"
                 }
 
-                # Scope name filtering
-                if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
+                # Scope name filtering (only if not using pre-selected scopes)
+                if ((-not $SelectedScopeIds -or $SelectedScopeIds.Count -eq 0) -and ($ScopeFilters -and $ScopeFilters.Count -gt 0)) {
                     $scriptDebug += "[SB-$ServerName] Applying filters to scope names: $($ScopeFilters -join ', ')"
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
@@ -493,7 +554,14 @@ function Get-DHCPScopeStatistics {
             $Server = $DHCPServers[$ServerIndex]
             $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
 
-            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+            # Get selected scope IDs for this server (if using pre-selected scopes)
+            $selectedScopeIdsArg = if ($scopesByServer -and $scopesByServer.ContainsKey($Server)) {
+                ,@($scopesByServer[$Server] | ForEach-Object { $_.ScopeId })
+            } else {
+                ,@()
+            }
+
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
             $Jobs += @{
                 Job = $Job
                 ServerName = $Server
@@ -557,7 +625,14 @@ function Get-DHCPScopeStatistics {
                     $Server = $DHCPServers[$ServerIndex]
                     $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+                    # Get selected scope IDs for this server (if using pre-selected scopes)
+                    $selectedScopeIdsArg = if ($scopesByServer -and $scopesByServer.ContainsKey($Server)) {
+                        ,@($scopesByServer[$Server] | ForEach-Object { $_.ScopeId })
+                    } else {
+                        ,@()
+                    }
+
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server
@@ -585,7 +660,14 @@ function Get-DHCPScopeStatistics {
                     $Server = $DHCPServers[$ServerIndex]
                     $filtersArg = if ($ScopeFilters) { ,@($ScopeFilters) } else { ,@() }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS
+                    # Get selected scope IDs for this server (if using pre-selected scopes)
+                    $selectedScopeIdsArg = if ($scopesByServer -and $scopesByServer.ContainsKey($Server)) {
+                        ,@($scopesByServer[$Server] | ForEach-Object { $_.ScopeId })
+                    } else {
+                        ,@()
+                    }
+
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server

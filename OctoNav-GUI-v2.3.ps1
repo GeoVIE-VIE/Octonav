@@ -876,38 +876,83 @@ $lblServerNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing
 $lblServerNote.ForeColor = [System.Drawing.Color]::Gray
 $dhcpServerGroupBox.Controls.Add($lblServerNote)
 
-# Scope Filtering Group
-$dhcpFilterGroupBox = New-Object System.Windows.Forms.GroupBox
-$dhcpFilterGroupBox.Text = "Scope Filtering (Optional)"
-$dhcpFilterGroupBox.Size = New-Object System.Drawing.Size(940, 75)
-$dhcpFilterGroupBox.Location = New-Object System.Drawing.Point(10, 200)
-$tab2.Controls.Add($dhcpFilterGroupBox)
+# Scope Selection Group
+$dhcpScopeGroupBox = New-Object System.Windows.Forms.GroupBox
+$dhcpScopeGroupBox.Text = "Scope Selection (Optional)"
+$dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(940, 160)
+$dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 200)
+$tab2.Controls.Add($dhcpScopeGroupBox)
 
-$lblScopeFilter = New-Object System.Windows.Forms.Label
-$lblScopeFilter.Text = 'Filter by scope names (comma-separated, leave blank for all scopes):'
-$lblScopeFilter.Size = New-Object System.Drawing.Size(450, 20)
-$lblScopeFilter.Location = New-Object System.Drawing.Point(15, 25)
-$dhcpFilterGroupBox.Controls.Add($lblScopeFilter)
+# Label for scope cache
+$lblScopeCache = New-Object System.Windows.Forms.Label
+$lblScopeCache.Text = "Select specific scopes from cache (leave empty to collect all):"
+$lblScopeCache.Size = New-Object System.Drawing.Size(400, 20)
+$lblScopeCache.Location = New-Object System.Drawing.Point(15, 20)
+$dhcpScopeGroupBox.Controls.Add($lblScopeCache)
 
-$lblFilterExample = New-Object System.Windows.Forms.Label
-$lblFilterExample.Text = "Example: VLAN100, Guest-Network, Lab"
-$lblFilterExample.Size = New-Object System.Drawing.Size(400, 20)
-$lblFilterExample.Location = New-Object System.Drawing.Point(480, 25)
-$lblFilterExample.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblFilterExample.ForeColor = [System.Drawing.Color]::Gray
-$dhcpFilterGroupBox.Controls.Add($lblFilterExample)
+# Refresh scope cache button
+$script:btnRefreshScopeCache = New-Object System.Windows.Forms.Button
+$script:btnRefreshScopeCache.Text = "Refresh Cache"
+$script:btnRefreshScopeCache.Size = New-Object System.Drawing.Size(120, 25)
+$script:btnRefreshScopeCache.Location = New-Object System.Drawing.Point(420, 17)
+$dhcpScopeGroupBox.Controls.Add($script:btnRefreshScopeCache)
 
-$txtScopeFilter = New-Object System.Windows.Forms.TextBox
-$txtScopeFilter.Size = New-Object System.Drawing.Size(900, 20)
-$txtScopeFilter.Location = New-Object System.Drawing.Point(15, 45)
-$txtScopeFilter.MaxLength = 500
-$dhcpFilterGroupBox.Controls.Add($txtScopeFilter)
+# Cache status label
+$script:lblScopeCacheStatus = New-Object System.Windows.Forms.Label
+$script:lblScopeCacheStatus.Text = "Cache: Not loaded"
+$script:lblScopeCacheStatus.Size = New-Object System.Drawing.Size(350, 20)
+$script:lblScopeCacheStatus.Location = New-Object System.Drawing.Point(550, 21)
+$script:lblScopeCacheStatus.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Gray
+$dhcpScopeGroupBox.Controls.Add($script:lblScopeCacheStatus)
+
+# Filter textbox for scope list
+$lblScopeListFilter = New-Object System.Windows.Forms.Label
+$lblScopeListFilter.Text = "Filter list:"
+$lblScopeListFilter.Size = New-Object System.Drawing.Size(60, 20)
+$lblScopeListFilter.Location = New-Object System.Drawing.Point(15, 47)
+$dhcpScopeGroupBox.Controls.Add($lblScopeListFilter)
+
+$script:txtScopeListFilter = New-Object System.Windows.Forms.TextBox
+$script:txtScopeListFilter.Size = New-Object System.Drawing.Size(390, 20)
+$script:txtScopeListFilter.Location = New-Object System.Drawing.Point(80, 45)
+$script:txtScopeListFilter.MaxLength = 100
+$dhcpScopeGroupBox.Controls.Add($script:txtScopeListFilter)
+
+# CheckedListBox for scope selection
+$script:lstDHCPScopes = New-Object System.Windows.Forms.CheckedListBox
+$script:lstDHCPScopes.Size = New-Object System.Drawing.Size(690, 75)
+$script:lstDHCPScopes.Location = New-Object System.Drawing.Point(15, 70)
+$script:lstDHCPScopes.CheckOnClick = $true
+$dhcpScopeGroupBox.Controls.Add($script:lstDHCPScopes)
+
+# Select All / None buttons for scopes
+$btnSelectAllScopes = New-Object System.Windows.Forms.Button
+$btnSelectAllScopes.Text = "Select All"
+$btnSelectAllScopes.Size = New-Object System.Drawing.Size(100, 30)
+$btnSelectAllScopes.Location = New-Object System.Drawing.Point(720, 70)
+$dhcpScopeGroupBox.Controls.Add($btnSelectAllScopes)
+
+$btnSelectNoneScopes = New-Object System.Windows.Forms.Button
+$btnSelectNoneScopes.Text = "Select None"
+$btnSelectNoneScopes.Size = New-Object System.Drawing.Size(100, 30)
+$btnSelectNoneScopes.Location = New-Object System.Drawing.Point(720, 105)
+$dhcpScopeGroupBox.Controls.Add($btnSelectNoneScopes)
+
+# Note label
+$lblScopeNote = New-Object System.Windows.Forms.Label
+$lblScopeNote.Text = "Note: Scope cache is separate from collection. Refresh cache to load all scopes, then select specific ones to query."
+$lblScopeNote.Location = New-Object System.Drawing.Point(15, 147)
+$lblScopeNote.Size = New-Object System.Drawing.Size(900, 15)
+$lblScopeNote.Font = New-Object System.Drawing.Font("Arial", 7, [System.Drawing.FontStyle]::Italic)
+$lblScopeNote.ForeColor = [System.Drawing.Color]::Gray
+$dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
 $dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(940, 75)
-$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 285)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
 $chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
@@ -928,7 +973,7 @@ $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
 $dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(940, 65)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 455)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -964,7 +1009,7 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 # DHCP Log
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
 $dhcpLogBox.Size = New-Object System.Drawing.Size(940, 180)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 445)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 530)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
@@ -982,10 +1027,30 @@ $btnCollectDHCP.Add_Click({
         $btnExportDHCP.Enabled = $false
         $script:dhcpStopRequested = $false
 
-        # Parse scope filters (case-insensitive - module handles ToUpper conversion)
+        # Check for selected scopes from cache (new approach - takes precedence)
+        $selectedScopes = @()
+        if ($script:lstDHCPScopes.CheckedItems.Count -gt 0) {
+            # Extract ScopeId and Server from DisplayName format: "Name (ScopeId) - Server"
+            foreach ($item in $script:lstDHCPScopes.CheckedItems) {
+                $displayName = $item.ToString()
+                # Find matching scope in cache
+                $matchingScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $displayName }
+                if ($matchingScope) {
+                    $selectedScopes += [PSCustomObject]@{
+                        ScopeId = $matchingScope.ScopeId
+                        Server = $matchingScope.Server
+                        Name = $matchingScope.Name
+                    }
+                }
+            }
+            Write-Log -Message "Using $($selectedScopes.Count) pre-selected scope(s) from cache" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
+        # Parse scope filters (old approach - only used if no scopes selected from cache)
         $scopeFilters = @()
-        if (-not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
+        if ($selectedScopes.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($txtScopeFilter.Text)) {
             $scopeFilters = $txtScopeFilter.Text.Split(',') | ForEach-Object { $_.Trim() }
+            Write-Log -Message "No scopes selected - using filter-based collection" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         }
 
         # Gather servers from both CheckedListBox and manual entry
@@ -1081,12 +1146,13 @@ $btnCollectDHCP.Add_Click({
 
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
-            param($filters, $servers, $dns, $stopRef, $scriptRoot)
+            param($selectedScopes, $filters, $servers, $dns, $stopRef, $scriptRoot)
 
             $debugLog = @()
 
             try {
                 $debugLog += "Background: Starting collection"
+                $debugLog += "Background: SelectedScopes count = $($selectedScopes.Count)"
                 $debugLog += "Background: Filters = $($filters -join ', ')"
                 $debugLog += "Background: Filters count = $($filters.Count)"
                 $debugLog += "Background: Servers = $($servers -join ', ')"
@@ -1112,6 +1178,7 @@ $btnCollectDHCP.Add_Click({
 
                 # Call collection function
                 $debugLog += "Background: About to call Get-DHCPScopeStatistics"
+                $debugLog += "Background:   - SelectedScopes count: $($selectedScopes.Count)"
                 $debugLog += "Background:   - ScopeFilters count: $($filters.Count)"
                 $debugLog += "Background:   - SpecificServers count: $($servers.Count)"
                 if ($servers.Count -gt 0) {
@@ -1119,7 +1186,7 @@ $btnCollectDHCP.Add_Click({
                 }
                 $debugLog += "Background:   - IncludeDNS: $dns"
 
-                $result = Get-DHCPScopeStatistics -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+                $result = Get-DHCPScopeStatistics -SelectedScopes $selectedScopes -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
 
                 $debugLog += "Background: Collection completed"
                 $debugLog += "Background: Result Success = $($result.Success)"
@@ -1151,7 +1218,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @((,$scopeFilters), (,$specificServers), $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
+        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
@@ -1354,6 +1421,95 @@ $btnSelectAll.Add_Click({
 $btnSelectNone.Add_Click({
     for ($i = 0; $i -lt $script:lstDHCPServers.Items.Count; $i++) {
         $script:lstDHCPServers.SetItemChecked($i, $false)
+    }
+})
+
+# Event Handler: Refresh Scope Cache
+$script:btnRefreshScopeCache.Add_Click({
+    try {
+        Write-Log -Message "Refreshing scope cache..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        $script:btnRefreshScopeCache.Enabled = $false
+        $script:lblScopeCacheStatus.Text = "Cache: Updating..."
+        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Orange
+
+        # Get selected servers or use all if none selected
+        $serversToQuery = @()
+        if ($script:lstDHCPServers.CheckedItems.Count -gt 0) {
+            foreach ($item in $script:lstDHCPServers.CheckedItems) {
+                $itemStr = $item.ToString()
+                if ($itemStr -match '^(.+?)\s+\(') {
+                    $serversToQuery += $matches[1].Trim()
+                } else {
+                    $serversToQuery += $itemStr.Trim()
+                }
+            }
+        }
+
+        # Update cache (runs in foreground - shows progress)
+        $scopes = if ($serversToQuery.Count -gt 0) {
+            Update-DHCPScopeCache -Servers $serversToQuery
+        } else {
+            Update-DHCPScopeCache
+        }
+
+        # Store all scopes for filtering
+        $script:allDHCPScopes = $scopes
+
+        # Populate list with display names
+        $script:lstDHCPScopes.Items.Clear()
+        foreach ($scope in $scopes) {
+            $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+        }
+
+        $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
+        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) found" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+    } catch {
+        $script:lblScopeCacheStatus.Text = "Cache: Error"
+        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Red
+        Write-Log -Message "Error refreshing scope cache: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+    } finally {
+        $script:btnRefreshScopeCache.Enabled = $true
+    }
+})
+
+# Event Handler: Scope List Filter (real-time filtering)
+$script:txtScopeListFilter.Add_TextChanged({
+    if (-not $script:allDHCPScopes) {
+        return
+    }
+
+    $filterText = $script:txtScopeListFilter.Text.Trim()
+    $script:lstDHCPScopes.Items.Clear()
+
+    if ([string]::IsNullOrWhiteSpace($filterText)) {
+        # No filter - show all
+        foreach ($scope in $script:allDHCPScopes) {
+            $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+        }
+    } else {
+        # Filter by DisplayName (case-insensitive)
+        $filterUpper = $filterText.ToUpper()
+        foreach ($scope in $script:allDHCPScopes) {
+            if ($scope.DisplayName.ToUpper().Contains($filterUpper)) {
+                $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+            }
+        }
+    }
+})
+
+# Event Handler: Select All Scopes
+$btnSelectAllScopes.Add_Click({
+    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+        $script:lstDHCPScopes.SetItemChecked($i, $true)
+    }
+})
+
+# Event Handler: Select None Scopes
+$btnSelectNoneScopes.Add_Click({
+    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+        $script:lstDHCPScopes.SetItemChecked($i, $false)
     }
 })
 
@@ -1940,6 +2096,29 @@ Update-Dashboard
 # Select dashboard tab if configured
 if ($script:Settings.ShowDashboardOnStartup) {
     $tabControl.SelectedIndex = 0
+}
+
+# Load cached DHCP scopes if available
+try {
+    $cachedScopes = Get-CachedDHCPScopes
+    if ($cachedScopes -and @($cachedScopes).Count -gt 0) {
+        $script:allDHCPScopes = $cachedScopes
+        foreach ($scope in $cachedScopes) {
+            $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+        }
+        $cacheFile = Join-Path $PSScriptRoot "dhcp_scopes_cache.json"
+        if (Test-Path $cacheFile) {
+            $cacheInfo = Get-Content $cacheFile -Raw | ConvertFrom-Json
+            $lastUpdate = [DateTime]::Parse($cacheInfo.LastUpdated)
+            $script:lblScopeCacheStatus.Text = "Cache: $($cachedScopes.Count) scope(s) loaded ($($lastUpdate.ToString('MM/dd HH:mm')))"
+            $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        } else {
+            $script:lblScopeCacheStatus.Text = "Cache: $($cachedScopes.Count) scope(s) loaded"
+            $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        }
+    }
+} catch {
+    # Silently continue if cache loading fails
 }
 
 # Show the form
