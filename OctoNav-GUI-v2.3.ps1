@@ -969,6 +969,29 @@ $lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing
 $lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
 $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
 
+# Concurrency limit control
+$lblConcurrency = New-Object System.Windows.Forms.Label
+$lblConcurrency.Text = "Parallel Operations:"
+$lblConcurrency.Size = New-Object System.Drawing.Size(120, 20)
+$lblConcurrency.Location = New-Object System.Drawing.Point(600, 30)
+$dhcpOptionsGroupBox.Controls.Add($lblConcurrency)
+
+$script:numConcurrency = New-Object System.Windows.Forms.NumericUpDown
+$script:numConcurrency.Minimum = 20
+$script:numConcurrency.Maximum = 50
+$script:numConcurrency.Value = 20
+$script:numConcurrency.Size = New-Object System.Drawing.Size(60, 20)
+$script:numConcurrency.Location = New-Object System.Drawing.Point(720, 28)
+$dhcpOptionsGroupBox.Controls.Add($script:numConcurrency)
+
+$lblConcurrencyNote = New-Object System.Windows.Forms.Label
+$lblConcurrencyNote.Text = "(20-50 servers at once)"
+$lblConcurrencyNote.Size = New-Object System.Drawing.Size(150, 20)
+$lblConcurrencyNote.Location = New-Object System.Drawing.Point(785, 30)
+$lblConcurrencyNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblConcurrencyNote.ForeColor = [System.Drawing.Color]::Gray
+$dhcpOptionsGroupBox.Controls.Add($lblConcurrencyNote)
+
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
@@ -1445,11 +1468,14 @@ $script:btnRefreshScopeCache.Add_Click({
             }
         }
 
-        # Update cache (runs in foreground - shows progress)
+        # Get concurrency limit from UI
+        $throttleLimit = [int]$script:numConcurrency.Value
+
+        # Update cache (runs in parallel now)
         $scopes = if ($serversToQuery.Count -gt 0) {
-            Update-DHCPScopeCache -Servers $serversToQuery
+            Update-DHCPScopeCache -Servers $serversToQuery -ThrottleLimit $throttleLimit
         } else {
-            Update-DHCPScopeCache
+            Update-DHCPScopeCache -ThrottleLimit $throttleLimit
         }
 
         # Store all scopes for filtering
