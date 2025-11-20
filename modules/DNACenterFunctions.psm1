@@ -2335,7 +2335,7 @@ function Invoke-CommandRunner {
 
     # Warning label
     $lblWarning = New-Object System.Windows.Forms.Label
-    $lblWarning.Text = "⚠ Note: Pipes (|) are not supported by DNA Center API. Use plain commands only."
+    $lblWarning.Text = "! Note: Pipes (|) are not supported by DNA Center API. Use plain commands only."
     $lblWarning.Location = New-Object System.Drawing.Point(20, $y)
     $lblWarning.Size = New-Object System.Drawing.Size(650, 20)
     $lblWarning.ForeColor = [System.Drawing.Color]::DarkOrange
@@ -2632,7 +2632,7 @@ function Invoke-CommandRunner {
                                 Output = if ($useConsolidatedCSV) { $filteredOutput } else { "" }
                             }
 
-                            Write-Log -Message "[$hostname] ✓ Complete" -Color "Green" -LogBox $LogBox
+                            Write-Log -Message "[$hostname] OK Complete" -Color "Green" -LogBox $LogBox
                         } else {
                             $allResults += [PSCustomObject]@{
                                 Hostname = $hostname
@@ -2643,7 +2643,7 @@ function Invoke-CommandRunner {
                                 OutputLength = 0
                                 Output = ""
                             }
-                            Write-Log -Message "[$hostname] ✗ TIMEOUT - No file ID received after $maxWait seconds" -Color "Red" -LogBox $LogBox
+                            Write-Log -Message "[$hostname] X TIMEOUT - No file ID received after $maxWait seconds" -Color "Red" -LogBox $LogBox
                         }
                     } else {
                         $allResults += [PSCustomObject]@{
@@ -2655,7 +2655,7 @@ function Invoke-CommandRunner {
                             OutputLength = 0
                             Output = ""
                         }
-                        Write-Log -Message "[$hostname] ✗ FAILED - Command submission failed (no task ID returned)" -Color "Red" -LogBox $LogBox
+                        Write-Log -Message "[$hostname] X FAILED - Command submission failed (no task ID returned)" -Color "Red" -LogBox $LogBox
                     }
                 } catch {
                     $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
@@ -2668,7 +2668,7 @@ function Invoke-CommandRunner {
                         OutputLength = 0
                         Output = ""
                     }
-                    Write-Log -Message "[$hostname] ✗ ERROR: $sanitizedError" -Color "Red" -LogBox $LogBox
+                    Write-Log -Message "[$hostname] X ERROR: $sanitizedError" -Color "Red" -LogBox $LogBox
                 }
 
                 # Small delay between commands
@@ -2690,9 +2690,9 @@ function Invoke-CommandRunner {
             Write-Log -Message "Concatenated text: $concatPath" -Color "Green" -LogBox $LogBox
         }
 
-        Write-Log -Message "═══════════════════════════════════════" -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "=========================================" -Color "Cyan" -LogBox $LogBox
         Write-Log -Message "Command execution complete!" -Color "Green" -LogBox $LogBox
-        Write-Log -Message "═══════════════════════════════════════" -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "=========================================" -Color "Cyan" -LogBox $LogBox
 
         # Calculate statistics
         $successCount = ($allResults | Where-Object { $_.Status -eq "Success" }).Count
@@ -2719,7 +2719,7 @@ function Invoke-CommandRunner {
             Write-Log -Message "" -LogBox $LogBox
             Write-Log -Message "Failed Operations:" -Color "Yellow" -LogBox $LogBox
             foreach ($failed in $failedDevices) {
-                Write-Log -Message "  ✗ $($failed.Hostname) - $($failed.Command): $($failed.Status)" -Color "Red" -LogBox $LogBox
+                Write-Log -Message "  X $($failed.Hostname) - $($failed.Command): $($failed.Status)" -Color "Red" -LogBox $LogBox
             }
         }
 
