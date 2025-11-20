@@ -2584,29 +2584,7 @@ function Invoke-CommandRunner {
 
                             if ([string]::IsNullOrWhiteSpace($outputText)) {
                                 Write-Log -Message "[$hostname] Warning: Empty output received (output text is blank)" -Color "Yellow" -LogBox $LogBox
-
-                                # Save debug info safely for PS 5.1 compatibility
-                                try {
-                                    $responseType = if ($null -ne $fileResponse) { $fileResponse.GetType().FullName } else { "null" }
-                                    $responsePreview = "null"
-                                    if ($null -ne $fileResponse) {
-                                        try {
-                                            $jsonStr = $fileResponse | ConvertTo-Json -Depth 2 -Compress
-                                            if ($jsonStr.Length -gt 200) {
-                                                $responsePreview = $jsonStr.Substring(0, 200) + "..."
-                                            } else {
-                                                $responsePreview = $jsonStr
-                                            }
-                                        } catch {
-                                            $responsePreview = $fileResponse.ToString()
-                                        }
-                                    }
-                                    Write-Log -Message "[$hostname] Debug - File ID: $fileId, Type: $responseType" -Color "Gray" -LogBox $LogBox
-                                    Write-Log -Message "[$hostname] Debug - Preview: $responsePreview" -Color "Gray" -LogBox $LogBox
-                                } catch {
-                                    Write-Log -Message "[$hostname] Debug - File ID: $fileId (inspection failed)" -Color "Gray" -LogBox $LogBox
-                                }
-
+                                Write-Log -Message "[$hostname] Debug - File ID: $fileId" -Color "Gray" -LogBox $LogBox
                                 $outputText = ""
                             } else {
                                 $lineCount = ($outputText -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
