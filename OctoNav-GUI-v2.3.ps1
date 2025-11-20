@@ -1020,14 +1020,6 @@ $script:lblVisibleScopes.Font = New-Object System.Drawing.Font("Arial", 7, [Syst
 $script:lblVisibleScopes.ForeColor = [System.Drawing.Color]::DarkBlue
 $dhcpScopeGroupBox.Controls.Add($script:lblVisibleScopes)
 
-# Auto-match Scope ID checkbox (disabled by default - use filter + Select All instead)
-$script:chkAutoMatchScopes = New-Object System.Windows.Forms.CheckBox
-$script:chkAutoMatchScopes.Text = "Auto-select matching Scope IDs"
-$script:chkAutoMatchScopes.Size = New-Object System.Drawing.Size(200, 20)
-$script:chkAutoMatchScopes.Location = New-Object System.Drawing.Point(720, 140)
-$script:chkAutoMatchScopes.Checked = $false
-$dhcpScopeGroupBox.Controls.Add($script:chkAutoMatchScopes)
-
 # Note label
 $lblScopeNote = New-Object System.Windows.Forms.Label
 $lblScopeNote.Text = "Workflow: Refresh cache → Filter (optional) → Select All Visible → Collect DHCP Statistics"
@@ -1549,9 +1541,11 @@ $btnCollectDHCP.Add_Click({
                         Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                     }
 
-                    # Format data with specific columns in order (matching optimized script)
-                    if ($includeDNS) {
+                    # Format data with specific columns in order (check if DNSServers column exists)
+                    $hasDNSColumn = $dataToExport.Count -gt 0 -and ($dataToExport[0].PSObject.Properties.Name -contains 'DNSServers') -and $includeDNS
+                    if ($hasDNSColumn) {
                         $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+                        Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                     } else {
                         $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
                     }
@@ -1882,9 +1876,10 @@ $btnExportDHCP.Add_Click({
         }
 
         # Format data with specific columns in order (check if DNSServers column exists)
-        $hasDNSColumn = $dataToExport[0].PSObject.Properties.Name -contains 'DNSServers'
+        $hasDNSColumn = $dataToExport.Count -gt 0 -and ($dataToExport[0].PSObject.Properties.Name -contains 'DNSServers')
         if ($hasDNSColumn) {
             $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+            Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         } else {
             $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
         }
