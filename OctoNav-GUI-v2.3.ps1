@@ -1222,15 +1222,21 @@ $btnCollectDHCP.Add_Click({
 
             if ($actualResult -and $actualResult.Success) {
                 Write-Log -Message "DEBUG: Entering Success=true branch" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult.Results is array? $($actualResult.Results -is [System.Collections.ICollection])" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: actualResult.Results.Count before assignment = $($actualResult.Results.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-                # Ensure Results is an array (even if empty)
-                $script:dhcpResults = if ($actualResult.Results) {
-                    @($actualResult.Results)
+                # Convert ArrayList to regular array to avoid assignment issues
+                if ($actualResult.Results -and $actualResult.Results.Count -gt 0) {
+                    $script:dhcpResults = @()
+                    foreach ($item in $actualResult.Results) {
+                        $script:dhcpResults += $item
+                    }
                 } else {
-                    @()
+                    $script:dhcpResults = @()
                 }
 
                 Write-Log -Message "DEBUG: Assigned to script:dhcpResults, count = $($script:dhcpResults.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "DEBUG: script:dhcpResults type = $($script:dhcpResults.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 Write-Log -Message "DEBUG: btnExportDHCP state BEFORE enable = $($btnExportDHCP.Enabled)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                 if ($script:dhcpResults.Count -gt 0) {
