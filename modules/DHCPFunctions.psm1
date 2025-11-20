@@ -376,7 +376,7 @@ function Get-DHCPScopeStatistics {
                     $Scopes = @()
                     foreach ($scopeId in $SelectedScopeIds) {
                         try {
-                            $scope = Get-DhcpServerv4Scope -ComputerName $ServerName -ScopeId $scopeId -ErrorAction SilentlyContinue
+                            $scope = Get-DhcpServerv4Scope -ComputerName $ServerName -ScopeId $scopeId -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
                             if ($scope) {
                                 $Scopes += $scope
                             } else {
@@ -391,7 +391,7 @@ function Get-DHCPScopeStatistics {
                     # Original logic: Get all scopes then filter
                     $scriptDebug += "[SB-$ServerName] Querying all scopes from $ServerName..."
                     $scopeStart = Get-Date
-                    $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop
+                    $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop -WarningAction SilentlyContinue
                     $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
                     $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s"
                 }

@@ -183,8 +183,8 @@ function Update-DHCPScopeCache {
             Write-Progress -Activity "Caching DHCP Scopes" -Status "Querying $server ($processedServers/$totalServers)" -PercentComplete (($processedServers / $totalServers) * 100)
 
             try {
-                # Get all scopes from this server
-                $scopes = Get-DhcpServerv4Scope -ComputerName $server -ErrorAction SilentlyContinue
+                # Get all scopes from this server (suppress version warnings)
+                $scopes = Get-DhcpServerv4Scope -ComputerName $server -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 
                 if ($scopes) {
                     foreach ($scope in $scopes) {
