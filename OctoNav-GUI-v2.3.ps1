@@ -1159,11 +1159,16 @@ $btnCollectDHCP.Add_Click({
         # Check for selected scopes from cache (new approach - takes precedence)
         $selectedScopes = @()
         if ($script:lstDHCPScopes.CheckedItems.Count -gt 0) {
+            Write-Log -Message "DEBUG: Processing $($script:lstDHCPScopes.CheckedItems.Count) checked scope(s)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
             # Extract ScopeId and Server from DisplayName format: "Name (ScopeId) - Server"
             foreach ($item in $script:lstDHCPScopes.CheckedItems) {
                 $displayName = $item.ToString()
-                # Find matching scope in cache
-                $matchingScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $displayName }
+                Write-Log -Message "DEBUG: Looking for scope: $displayName" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+                # Find matching scope in cache - use First to handle duplicates
+                $matchingScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $displayName } | Select-Object -First 1
+
                 if ($matchingScope) {
                     # Validate that essential properties are not null/empty
                     if ([string]::IsNullOrWhiteSpace($matchingScope.Server) -or
@@ -1178,9 +1183,14 @@ $btnCollectDHCP.Add_Click({
                         Server = [string]$matchingScope.Server
                         Name = [string]$matchingScope.Name
                     }
+                    Write-Log -Message "DEBUG: Added scope $($matchingScope.ScopeId) from server $($matchingScope.Server)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                } else {
+                    Write-Log -Message "WARNING: Could not find scope in cache: $displayName" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 }
             }
             Write-Log -Message "Using $($selectedScopes.Count) pre-selected scope(s) from cache" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        } else {
+            Write-Log -Message "DEBUG: No scopes checked in list (CheckedItems.Count = 0)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         }
 
         # Parse scope filters (old approach - only used if no scopes selected from cache)
