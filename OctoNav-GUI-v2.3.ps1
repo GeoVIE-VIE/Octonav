@@ -1151,7 +1151,12 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: checkedServers array contents: $($checkedServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: checkedServers count: $($checkedServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-        $specificServers = @($checkedServers) + @($manualServers) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        # Combine and filter - ensure we always have a proper array (even if empty)
+        $combinedServers = @($checkedServers) + @($manualServers)
+        $specificServers = @($combinedServers | Where-Object {
+            $_ -ne $null -and
+            -not [string]::IsNullOrWhiteSpace($_)
+        } | Select-Object -Unique)
 
         Write-Log -Message "DEBUG: specificServers after combine: $($specificServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: specificServers count: $($specificServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
@@ -1188,13 +1193,19 @@ $btnCollectDHCP.Add_Click({
                 $debugLog += "Background: SelectedScopes count = $($selectedScopes.Count)"
                 $debugLog += "Background: Filters = $($filters -join ', ')"
                 $debugLog += "Background: Filters count = $($filters.Count)"
+
+                # Filter out null/empty servers to prevent errors
+                $servers = @($servers | Where-Object { $_ -ne $null -and -not [string]::IsNullOrWhiteSpace($_) })
+
                 $debugLog += "Background: Servers = $($servers -join ', ')"
                 $debugLog += "Background: Servers count = $($servers.Count)"
-                $debugLog += "Background: Servers type = $($servers.GetType().FullName)"
                 if ($servers.Count -gt 0) {
+                    $debugLog += "Background: Servers type = $($servers.GetType().FullName)"
                     $debugLog += "Background:   - First server: '$($servers[0])'"
-                    $debugLog += "Background:   - First server type: $($servers[0].GetType().FullName)"
-                    $debugLog += "Background:   - First server length: $($servers[0].Length)"
+                    if ($servers[0] -ne $null) {
+                        $debugLog += "Background:   - First server type: $($servers[0].GetType().FullName)"
+                        $debugLog += "Background:   - First server length: $($servers[0].Length)"
+                    }
                 }
                 $debugLog += "Background: IncludeDNS = $dns"
 
