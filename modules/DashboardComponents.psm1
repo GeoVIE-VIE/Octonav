@@ -151,15 +151,19 @@ function Get-CachedDHCPScopes {
 function Update-DHCPScopeCache {
     <#
     .SYNOPSIS
-        Queries all DHCP servers and caches all scopes
+        Queries all DHCP servers and caches all scopes using parallel processing
     .DESCRIPTION
         Retrieves all scopes from all domain DHCP servers and saves metadata to cache.
         Does NOT cache statistics (they change frequently), only scope metadata.
+        Uses parallel job pool for improved performance.
     .PARAMETER Servers
         Optional array of specific servers to query. If not provided, queries all domain servers.
+    .PARAMETER ThrottleLimit
+        Maximum number of concurrent server operations. Default is 20.
     #>
     param(
-        [string[]]$Servers = @()
+        [string[]]$Servers = @(),
+        [int]$ThrottleLimit = 20
     )
 
     $cacheFile = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.json"
@@ -174,35 +178,133 @@ function Update-DHCPScopeCache {
             $Servers = $dhcpServers.DnsName
         }
 
-        $allScopes = @()
-        $processedServers = 0
         $totalServers = $Servers.Count
+        if ($totalServers -eq 0) {
+            Write-Warning "No DHCP servers found"
+            return @()
+        }
 
-        foreach ($server in $Servers) {
-            $processedServers++
-            Write-Progress -Activity "Caching DHCP Scopes" -Status "Querying $server ($processedServers/$totalServers)" -PercentComplete (($processedServers / $totalServers) * 100)
+        # Per-server script block
+        $ScriptBlock = {
+            param([string]$ServerName)
 
+            $resultScopes = @()
             try {
-                # Get all scopes from this server
-                $scopes = Get-DhcpServerv4Scope -ComputerName $server -ErrorAction SilentlyContinue
+                Import-Module DhcpServer -ErrorAction Stop
+                $scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 
                 if ($scopes) {
                     foreach ($scope in $scopes) {
-                        $allScopes += [PSCustomObject]@{
+                        $resultScopes += [PSCustomObject]@{
                             ScopeId = $scope.ScopeId.ToString()
                             Name = $scope.Name
                             Description = if ($scope.Description) { $scope.Description } else { "" }
-                            Server = $server
+                            Server = $ServerName
                             SubnetMask = $scope.SubnetMask.ToString()
                             StartRange = $scope.StartRange.ToString()
                             EndRange = $scope.EndRange.ToString()
                             State = $scope.State
-                            DisplayName = "$($scope.Name) ($($scope.ScopeId)) - $server"
+                            DisplayName = "$($scope.Name) ($($scope.ScopeId)) - $ServerName"
                         }
                     }
                 }
+
+                return [PSCustomObject]@{
+                    Success = $true
+                    ServerName = $ServerName
+                    Scopes = $resultScopes
+                    Error = $null
+                }
             } catch {
-                Write-Warning "Failed to query scopes from $server : $($_.Exception.Message)"
+                return [PSCustomObject]@{
+                    Success = $false
+                    ServerName = $ServerName
+                    Scopes = @()
+                    Error = $_.Exception.Message
+                }
+            }
+        }
+
+        # Initialize job pool
+        $MaxConcurrentJobs = if ($totalServers -lt $ThrottleLimit) { $totalServers } else { $ThrottleLimit }
+        $Jobs = @()
+        $allScopes = @()
+        $ServerIndex = 0
+        $CompletedCount = 0
+
+        # Start initial batch of jobs
+        while ($ServerIndex -lt $totalServers -and $Jobs.Count -lt $MaxConcurrentJobs) {
+            $Server = $Servers[$ServerIndex]
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server
+            $Jobs += @{
+                Job = $Job
+                ServerName = $Server
+                Processed = $false
+            }
+            $ServerIndex++
+        }
+
+        # Monitor and maintain constant pool
+        while ($Jobs | Where-Object { -not $_.Processed }) {
+            Start-Sleep -Milliseconds 500
+
+            # Check for completed jobs
+            $CompletedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Completed' -and -not $_.Processed }
+            foreach ($CompletedJob in $CompletedInRound) {
+                $CompletedCount++
+                $CompletedJob.Processed = $true
+
+                try {
+                    $ServerResult = Receive-Job -Job $CompletedJob.Job -ErrorAction Stop
+
+                    Write-Progress -Activity "Caching DHCP Scopes" -Status "Completed: $($CompletedJob.ServerName) ($CompletedCount/$totalServers)" -PercentComplete (($CompletedCount / $totalServers) * 100)
+
+                    if ($ServerResult.Success -and $ServerResult.Scopes) {
+                        $allScopes += $ServerResult.Scopes
+                    } elseif (-not $ServerResult.Success) {
+                        Write-Warning "Failed to query scopes from $($CompletedJob.ServerName): $($ServerResult.Error)"
+                    }
+                } catch {
+                    Write-Warning "Error receiving results from $($CompletedJob.ServerName): $($_.Exception.Message)"
+                }
+
+                Remove-Job -Job $CompletedJob.Job -Force
+
+                # Start next job to maintain pool
+                if ($ServerIndex -lt $totalServers) {
+                    $Server = $Servers[$ServerIndex]
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server
+                        Processed = $false
+                    }
+                    $ServerIndex++
+                }
+            }
+
+            # Check for failed jobs
+            $FailedInRound = $Jobs | Where-Object { $_.Job.State -eq 'Failed' -and -not $_.Processed }
+            foreach ($FailedJob in $FailedInRound) {
+                $CompletedCount++
+                $FailedJob.Processed = $true
+
+                Write-Progress -Activity "Caching DHCP Scopes" -Status "Failed: $($FailedJob.ServerName) ($CompletedCount/$totalServers)" -PercentComplete (($CompletedCount / $totalServers) * 100)
+                Write-Warning "Job failed for server: $($FailedJob.ServerName)"
+
+                Remove-Job -Job $FailedJob.Job -Force
+
+                # Start next job to maintain pool
+                if ($ServerIndex -lt $totalServers) {
+                    $Server = $Servers[$ServerIndex]
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server
+                    $Jobs += @{
+                        Job = $Job
+                        ServerName = $Server
+                        Processed = $false
+                    }
+                    $ServerIndex++
+                }
             }
         }
 
