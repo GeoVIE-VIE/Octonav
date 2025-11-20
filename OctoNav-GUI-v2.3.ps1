@@ -1548,25 +1548,38 @@ $btnCollectDHCP.Add_Click({
                     # Format data with specific columns in order (build column list dynamically)
                     $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
 
+                    # Debug: Log checkbox states during auto-export
+                    Write-Log -Message "DEBUG AUTO-EXPORT: includeDNS=$($script:includeDNS), includeOption60=$($script:includeOption60), includeOption43=$($script:includeOption43)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
                     if ($dataToExport.Count -gt 0) {
                         $firstItem = $dataToExport[0]
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'DNSServers') -and $script:includeDNS) {
+                        # Debug: Log available properties
+                        $availableProps = $firstItem.PSObject.Properties.Name -join ', '
+                        Write-Log -Message "DEBUG AUTO-EXPORT: Available properties: $availableProps" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+                        $hasDNS = $firstItem.PSObject.Properties.Name -contains 'DNSServers'
+                        $hasOpt60 = $firstItem.PSObject.Properties.Name -contains 'Option60'
+                        $hasOpt43 = $firstItem.PSObject.Properties.Name -contains 'Option43'
+                        Write-Log -Message "DEBUG AUTO-EXPORT: hasDNS=$hasDNS, hasOpt60=$hasOpt60, hasOpt43=$hasOpt43" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+                        if ($hasDNS -and $script:includeDNS) {
                             $exportColumns += 'DNSServers'
                             Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'Option60') -and $script:includeOption60) {
+                        if ($hasOpt60 -and $script:includeOption60) {
                             $exportColumns += 'Option60'
                             Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'Option43') -and $script:includeOption43) {
+                        if ($hasOpt43 -and $script:includeOption43) {
                             $exportColumns += 'Option43'
                             Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
                     }
 
+                    Write-Log -Message "DEBUG AUTO-EXPORT: Final export columns: $($exportColumns -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                     $exportData = $dataToExport | Select-Object $exportColumns
 
                     $exportedPath = Export-ToCSV -Data $exportData -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
