@@ -220,6 +220,78 @@ function Invoke-BackgroundOperation
 # HELPER FUNCTIONS
 # ============================================
 
+function Group-DHCPScopesByScopeId {
+    <#
+    .SYNOPSIS
+        Groups DHCP scope statistics by Scope ID and aggregates redundant scopes
+    .DESCRIPTION
+        When the same scope exists on multiple servers (for redundancy),
+        this function groups them by Scope ID and aggregates the statistics.
+    .PARAMETER ScopeData
+        Array of scope objects with properties: ScopeId, DHCPServer, Description,
+        AddressesFree, AddressesInUse, PercentageInUse, DNSServers (optional)
+    .OUTPUTS
+        Array of grouped scope objects with combined servers and aggregated statistics
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$ScopeData
+    )
+
+    # Group scopes by ScopeId
+    $groupedScopes = $ScopeData | Group-Object -Property ScopeId
+
+    $aggregatedResults = @()
+    foreach ($group in $groupedScopes) {
+        $scopes = $group.Group
+
+        # Get first scope for name/description (should be the same across redundant scopes)
+        $firstScope = $scopes[0]
+
+        # Combine server names
+        $combinedServers = ($scopes | ForEach-Object { $_.DHCPServer }) -join ', '
+
+        # Aggregate statistics
+        $totalFree = ($scopes | Measure-Object -Property AddressesFree -Sum).Sum
+        $totalInUse = ($scopes | Measure-Object -Property AddressesInUse -Sum).Sum
+        $totalAddresses = $totalFree + $totalInUse
+
+        # Calculate percentage
+        $percentageInUse = 0
+        if ($totalAddresses -gt 0) {
+            $percentageInUse = [math]::Round(($totalInUse / $totalAddresses) * 100, 2)
+        }
+
+        # Build aggregated object
+        $aggregated = [PSCustomObject]@{
+            ScopeId = $group.Name
+            DHCPServer = $combinedServers
+            Description = $firstScope.Description
+            AddressesFree = $totalFree
+            AddressesInUse = $totalInUse
+            PercentageInUse = $percentageInUse
+        }
+
+        # Add DNS servers if they exist
+        if ($firstScope.PSObject.Properties.Name -contains 'DNSServers') {
+            # Combine unique DNS servers from all redundant scopes
+            $allDNS = @()
+            foreach ($scope in $scopes) {
+                if (-not [string]::IsNullOrWhiteSpace($scope.DNSServers)) {
+                    $dnsEntries = $scope.DNSServers -split ',' | ForEach-Object { $_.Trim() }
+                    $allDNS += $dnsEntries
+                }
+            }
+            $uniqueDNS = $allDNS | Select-Object -Unique
+            $aggregated | Add-Member -NotePropertyName DNSServers -NotePropertyValue ($uniqueDNS -join ', ')
+        }
+
+        $aggregatedResults += $aggregated
+    }
+
+    return $aggregatedResults
+}
+
 function Get-DNACenterServers {
     <#
     .SYNOPSIS
@@ -951,7 +1023,7 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(560, 75)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(560, 100)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
@@ -968,6 +1040,22 @@ $lblDNSWarning.Location = New-Object System.Drawing.Point(270, 30)
 $lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
 $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
+
+# Group by Scope ID checkbox
+$script:chkGroupByScope = New-Object System.Windows.Forms.CheckBox
+$script:chkGroupByScope.Text = "Group Redundant Scopes by Scope ID"
+$script:chkGroupByScope.Size = New-Object System.Drawing.Size(280, 20)
+$script:chkGroupByScope.Location = New-Object System.Drawing.Point(15, 55)
+$script:chkGroupByScope.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($script:chkGroupByScope)
+
+$lblGroupWarning = New-Object System.Windows.Forms.Label
+$lblGroupWarning.Text = "(Aggregates statistics for scopes with same Scope ID)"
+$lblGroupWarning.Size = New-Object System.Drawing.Size(350, 20)
+$lblGroupWarning.Location = New-Object System.Drawing.Point(300, 55)
+$lblGroupWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblGroupWarning.ForeColor = [System.Drawing.Color]::DarkGreen
+$dhcpOptionsGroupBox.Controls.Add($lblGroupWarning)
 
 # Concurrency limit control
 $lblConcurrency = New-Object System.Windows.Forms.Label
@@ -1383,11 +1471,19 @@ $btnCollectDHCP.Add_Click({
 
                     Write-Log -Message "Auto-exporting $($script:dhcpResults.Count) scope(s)..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
+                    # Apply grouping if enabled
+                    $dataToExport = $script:dhcpResults
+                    if ($script:chkGroupByScope.Checked) {
+                        Write-Log -Message "Grouping redundant scopes by Scope ID..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        $dataToExport = Group-DHCPScopesByScopeId -ScopeData $script:dhcpResults
+                        Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    }
+
                     # Format data with specific columns in order (matching optimized script)
                     if ($includeDNS) {
-                        $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+                        $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
                     } else {
-                        $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+                        $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
                     }
 
                     $exportedPath = Export-ToCSV -Data $exportData -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
@@ -1593,12 +1689,20 @@ $btnExportDHCP.Add_Click({
 
         Write-Log -Message "Exporting $($script:dhcpResults.Count) scope(s) to CSV..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
+        # Apply grouping if enabled
+        $dataToExport = $script:dhcpResults
+        if ($script:chkGroupByScope.Checked) {
+            Write-Log -Message "Grouping redundant scopes by Scope ID..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            $dataToExport = Group-DHCPScopesByScopeId -ScopeData $script:dhcpResults
+            Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
         # Format data with specific columns in order (check if DNSServers column exists)
-        $hasDNSColumn = $script:dhcpResults[0].PSObject.Properties.Name -contains 'DNSServers'
+        $hasDNSColumn = $dataToExport[0].PSObject.Properties.Name -contains 'DNSServers'
         if ($hasDNSColumn) {
-            $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
+            $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
         } else {
-            $exportData = $script:dhcpResults | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+            $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
         }
 
         $exportedPath = Export-ToCSV -Data $exportData -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
