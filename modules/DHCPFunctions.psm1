@@ -386,126 +386,71 @@ function Get-DHCPScopeStatistics {
                     $scriptDebug += "[SB-$ServerName] After filtering: $(@($Scopes).Count) scope(s) remaining"
                 }
 
-                # Choose statistics query method based on whether filtering was applied
+                # Always use bulk query for statistics (fastest - 1 network call)
+                $scriptDebug += "[SB-$ServerName] Bulk querying statistics for all scopes on server..."
                 $statsStart = Get-Date
-                $ServerStats = @()
 
-                if ($ScopeFilters -and $ScopeFilters.Count -gt 0) {
-                    # FILTERED MODE: Query statistics for ONLY the filtered scopes (per-scope queries)
-                    $scriptDebug += "[SB-$ServerName] Filtered mode: Querying statistics for $(@($Scopes).Count) specific scope(s)..."
+                $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
+                $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
+                $scriptDebug += "[SB-$ServerName] Bulk query retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s"
 
+                # Optional: Build DNS server map if requested (only for filtered scopes if filter was applied)
+                $DNSServerMap = @{}
+                if ($IncludeDNS) {
+                    $scriptDebug += "[SB-$ServerName] Retrieving DNS options for $(@($Scopes).Count) scope(s)..."
+                    $dnsStart = Get-Date
                     foreach ($Scope in $Scopes) {
                         try {
-                            # Query statistics for this specific scope
-                            $Stats = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ScopeId $Scope.ScopeId -ErrorAction Stop
-
-                            if ($Stats) {
-                                # Build description field
-                                $scopeDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
-                                    $Scope.Description
-                                } else {
-                                    $Scope.Name
-                                }
-
-                                # Optional DNS lookup for this scope
-                                $dnsServers = $null
-                                if ($IncludeDNS) {
-                                    try {
-                                        $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
-                                        if ($DNSOption) {
-                                            $dnsServers = $DNSOption.Value -join ','
-                                        }
-                                    } catch {
-                                        # Ignore DNS lookup failures
-                                    }
-                                }
-
-                                # Create result object
-                                $ServerStats += [PSCustomObject]@{
-                                    ScopeId = $Stats.ScopeId
-                                    DHCPServer = $ServerName
-                                    Description = $scopeDescription
-                                    SubnetMask = $Stats.SubnetMask
-                                    StartRange = $Stats.StartRange
-                                    EndRange = $Stats.EndRange
-                                    Free = $Stats.Free
-                                    InUse = $Stats.InUse
-                                    Percentage = $Stats.Percentage
-                                    Reserved = $Stats.Reserved
-                                    Pending = $Stats.Pending
-                                    AddressesFree = $Stats.Free
-                                    AddressesInUse = $Stats.InUse
-                                    PercentageInUse = $Stats.Percentage
-                                    DNSServers = $dnsServers
-                                }
+                            $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
+                            if ($DNSOption) {
+                                $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
                             }
                         } catch {
-                            $scriptDebug += "[SB-$ServerName] ERROR querying statistics for scope $($Scope.ScopeId): $($_.Exception.Message)"
+                            # Ignore DNS lookup failures
                         }
                     }
-                } else {
-                    # UNFILTERED MODE: Bulk query all statistics at once (much faster)
-                    $scriptDebug += "[SB-$ServerName] Unfiltered mode: Bulk querying statistics for all $(@($Scopes).Count) scope(s)..."
-
-                    $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
-                    $scriptDebug += "[SB-$ServerName] Bulk query retrieved statistics for $(@($AllStatsRaw).Count) scope(s)"
-
-                    # Optional: Build DNS server map if requested
-                    $DNSServerMap = @{}
-                    if ($IncludeDNS) {
-                        $scriptDebug += "[SB-$ServerName] Retrieving DNS options for all scopes..."
-                        foreach ($Scope in $Scopes) {
-                            try {
-                                $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
-                                if ($DNSOption) {
-                                    $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
-                                }
-                            } catch {
-                                # Ignore DNS lookup failures
-                            }
-                        }
-                    }
-
-                    # Match scopes with their statistics
-                    foreach ($Scope in $Scopes) {
-                        $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
-
-                        if ($Stats) {
-                            # Build description field
-                            $scopeDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
-                                $Scope.Description
-                            } else {
-                                $Scope.Name
-                            }
-
-                            $dnsServers = $DNSServerMap[$Scope.ScopeId]
-
-                            # Create result object
-                            $ServerStats += [PSCustomObject]@{
-                                ScopeId = $Stats.ScopeId
-                                DHCPServer = $ServerName
-                                Description = $scopeDescription
-                                SubnetMask = $Stats.SubnetMask
-                                StartRange = $Stats.StartRange
-                                EndRange = $Stats.EndRange
-                                Free = $Stats.Free
-                                InUse = $Stats.InUse
-                                Percentage = $Stats.Percentage
-                                Reserved = $Stats.Reserved
-                                Pending = $Stats.Pending
-                                AddressesFree = $Stats.Free
-                                AddressesInUse = $Stats.InUse
-                                PercentageInUse = $Stats.Percentage
-                                DNSServers = $dnsServers
-                            }
-                        } else {
-                            $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId)"
-                        }
-                    }
+                    $dnsDuration = ((Get-Date) - $dnsStart).TotalSeconds
+                    $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s"
                 }
 
-                $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
-                $scriptDebug += "[SB-$ServerName] Statistics query completed in $([math]::Round($statsDuration, 2))s"
+                # Match filtered scopes with their statistics
+                $scriptDebug += "[SB-$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..."
+                $ServerStats = @()
+                foreach ($Scope in $Scopes) {
+                    $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
+
+                    if ($Stats) {
+                        # Build description field
+                        $scopeDescription = if (-not [string]::IsNullOrWhiteSpace($Scope.Description)) {
+                            $Scope.Description
+                        } else {
+                            $Scope.Name
+                        }
+
+                        $dnsServers = $DNSServerMap[$Scope.ScopeId]
+
+                        # Create result object
+                        $ServerStats += [PSCustomObject]@{
+                            ScopeId = $Stats.ScopeId
+                            DHCPServer = $ServerName
+                            Description = $scopeDescription
+                            SubnetMask = $Stats.SubnetMask
+                            StartRange = $Stats.StartRange
+                            EndRange = $Stats.EndRange
+                            Free = $Stats.Free
+                            InUse = $Stats.InUse
+                            Percentage = $Stats.Percentage
+                            Reserved = $Stats.Reserved
+                            Pending = $Stats.Pending
+                            AddressesFree = $Stats.Free
+                            AddressesInUse = $Stats.InUse
+                            PercentageInUse = $Stats.Percentage
+                            DNSServers = $dnsServers
+                        }
+                    } else {
+                        $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId)"
+                    }
+                }
 
                 # Filter out any nulls
                 $ServerStats = @($ServerStats | Where-Object { $_ -ne $null })
