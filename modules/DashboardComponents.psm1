@@ -123,6 +123,103 @@ function Update-DHCPServerCache {
     return @()
 }
 
+function Get-CachedDHCPScopes {
+    <#
+    .SYNOPSIS
+        Gets DHCP scopes from cache file
+    .DESCRIPTION
+        Reads cached DHCP scope list from JSON file. Returns empty array if cache doesn't exist.
+    #>
+    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.json"
+
+    if (Test-Path $cacheFile) {
+        try {
+            $cache = Get-Content $cacheFile -Raw | ConvertFrom-Json
+            return $cache.Scopes
+        } catch {
+            # Cache file corrupted, return empty
+            Write-Warning "DHCP scope cache file corrupted"
+        }
+    }
+
+    return @()
+}
+
+function Update-DHCPScopeCache {
+    <#
+    .SYNOPSIS
+        Queries all DHCP servers and caches all scopes
+    .DESCRIPTION
+        Retrieves all scopes from all domain DHCP servers and saves metadata to cache.
+        Does NOT cache statistics (they change frequently), only scope metadata.
+    .PARAMETER Servers
+        Optional array of specific servers to query. If not provided, queries all domain servers.
+    #>
+    param(
+        [string[]]$Servers = @()
+    )
+
+    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.json"
+
+    try {
+        # Get DHCP servers
+        if ($Servers.Count -eq 0) {
+            $dhcpServers = Get-DhcpServerInDC -ErrorAction Stop
+            $Servers = $dhcpServers.DnsName
+        }
+
+        $allScopes = @()
+        $processedServers = 0
+        $totalServers = $Servers.Count
+
+        foreach ($server in $Servers) {
+            $processedServers++
+            Write-Progress -Activity "Caching DHCP Scopes" -Status "Querying $server ($processedServers/$totalServers)" -PercentComplete (($processedServers / $totalServers) * 100)
+
+            try {
+                # Get all scopes from this server
+                $scopes = Get-DhcpServerv4Scope -ComputerName $server -ErrorAction SilentlyContinue
+
+                if ($scopes) {
+                    foreach ($scope in $scopes) {
+                        $allScopes += [PSCustomObject]@{
+                            ScopeId = $scope.ScopeId.ToString()
+                            Name = $scope.Name
+                            Description = if ($scope.Description) { $scope.Description } else { "" }
+                            Server = $server
+                            SubnetMask = $scope.SubnetMask.ToString()
+                            StartRange = $scope.StartRange.ToString()
+                            EndRange = $scope.EndRange.ToString()
+                            State = $scope.State
+                            DisplayName = "$($scope.Name) ($($scope.ScopeId)) - $server"
+                        }
+                    }
+                }
+            } catch {
+                Write-Warning "Failed to query scopes from $server : $($_.Exception.Message)"
+            }
+        }
+
+        Write-Progress -Activity "Caching DHCP Scopes" -Completed
+
+        # Create cache object
+        $cache = @{
+            LastUpdated = (Get-Date).ToString("o")
+            TotalScopes = $allScopes.Count
+            ServerCount = $Servers.Count
+            Scopes = $allScopes
+        }
+
+        # Save to JSON file
+        $cache | ConvertTo-Json -Depth 3 | Set-Content $cacheFile -Force
+
+        return $allScopes
+    } catch {
+        Write-Warning "Failed to build DHCP scope cache: $($_.Exception.Message)"
+        return @()
+    }
+}
+
 function Get-SystemHealthSummary {
     <#
     .SYNOPSIS
@@ -218,6 +315,8 @@ Export-ModuleMember -Function @(
     'Update-DashboardPanel',
     'Get-CachedDHCPServers',
     'Update-DHCPServerCache',
+    'Get-CachedDHCPScopes',
+    'Update-DHCPScopeCache',
     'Get-SystemHealthSummary',
     'New-QuickActionButton',
     'Get-RecentActivity'
