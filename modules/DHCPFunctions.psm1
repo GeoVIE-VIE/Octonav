@@ -518,71 +518,172 @@ function Get-DHCPScopeStatistics {
                 $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
                 $scriptDebug += "[SB-$ServerName] Bulk query retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s"
 
-                # Optional: Build DNS server map if requested (only for filtered scopes if filter was applied)
+                # Optional: Build DNS server map if requested (parallel processing)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving DNS options for $(@($Scopes).Count) scope(s)..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving DNS options for $(@($Scopes).Count) scope(s) in parallel..."
                     $dnsStart = Get-Date
+
+                    # Use runspace pool for parallel scope processing
+                    $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 10)
+                    $RunspacePool.Open()
+                    $Jobs = @()
+
                     foreach ($Scope in $Scopes) {
-                        try {
-                            $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 6 -ErrorAction SilentlyContinue
-                            if ($DNSOption) {
-                                $DNSServerMap[$Scope.ScopeId] = $DNSOption.Value -join ','
+                        $PowerShell = [powershell]::Create()
+                        $PowerShell.RunspacePool = $RunspacePool
+                        [void]$PowerShell.AddScript({
+                            param($ServerName, $ScopeId)
+                            try {
+                                $DNSOption = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -OptionId 6 -ErrorAction SilentlyContinue
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = if ($DNSOption) { $DNSOption.Value -join ',' } else { $null }
+                                    Success = $true
+                                }
+                            } catch {
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = $null
+                                    Success = $false
+                                    Error = $_.Exception.Message
+                                }
                             }
-                        } catch {
-                            # Ignore DNS lookup failures
+                        }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
+
+                        $Jobs += [PSCustomObject]@{
+                            PowerShell = $PowerShell
+                            Handle = $PowerShell.BeginInvoke()
+                            ScopeId = $Scope.ScopeId
                         }
                     }
+
+                    # Collect results
+                    foreach ($Job in $Jobs) {
+                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($result.Value) {
+                            $DNSServerMap[$result.ScopeId] = $result.Value
+                        }
+                        $Job.PowerShell.Dispose()
+                    }
+
+                    $RunspacePool.Close()
+                    $RunspacePool.Dispose()
+
                     $dnsDuration = ((Get-Date) - $dnsStart).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s"
+                    $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s (parallel)"
                 }
 
                 # Optional: Build Option 60 map if requested
                 $Option60Map = @{}
                 if ($IncludeOption60) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving Option 60 for $(@($Scopes).Count) scope(s)..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 60 for $(@($Scopes).Count) scope(s) in parallel..."
                     $opt60Start = Get-Date
+
+                    # Use runspace pool for parallel scope processing
+                    $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 10)
+                    $RunspacePool.Open()
+                    $Jobs = @()
+
                     foreach ($Scope in $Scopes) {
-                        try {
-                            $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 60 -ErrorAction SilentlyContinue
-                            if ($Option60 -and $Option60.Value) {
-                                # Extract just the Value property
-                                $valueStr = $Option60.Value -join ','
-                                $Option60Map[$Scope.ScopeId] = $valueStr
-                                $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Value='$valueStr' (Type: $($Option60.Value.GetType().Name))"
-                            } else {
-                                $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Not set or empty"
+                        $PowerShell = [powershell]::Create()
+                        $PowerShell.RunspacePool = $RunspacePool
+                        [void]$PowerShell.AddScript({
+                            param($ServerName, $ScopeId)
+                            try {
+                                $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -OptionId 60 -ErrorAction SilentlyContinue
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = if ($Option60 -and $Option60.Value) { $Option60.Value -join ',' } else { $null }
+                                    Success = $true
+                                }
+                            } catch {
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = $null
+                                    Success = $false
+                                    Error = $_.Exception.Message
+                                }
                             }
-                        } catch {
-                            $scriptDebug += "[SB-$ServerName] Option 60 for scope $($Scope.ScopeId): Lookup failed - $($_.Exception.Message)"
+                        }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
+
+                        $Jobs += [PSCustomObject]@{
+                            PowerShell = $PowerShell
+                            Handle = $PowerShell.BeginInvoke()
+                            ScopeId = $Scope.ScopeId
                         }
                     }
+
+                    # Collect results
+                    foreach ($Job in $Jobs) {
+                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($result.Value) {
+                            $Option60Map[$result.ScopeId] = $result.Value
+                        }
+                        $Job.PowerShell.Dispose()
+                    }
+
+                    $RunspacePool.Close()
+                    $RunspacePool.Dispose()
+
                     $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s"
+                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s (parallel)"
                 }
 
                 # Optional: Build Option 43 map if requested
                 $Option43Map = @{}
                 if ($IncludeOption43) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving Option 43 for $(@($Scopes).Count) scope(s)..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 43 for $(@($Scopes).Count) scope(s) in parallel..."
                     $opt43Start = Get-Date
+
+                    # Use runspace pool for parallel scope processing
+                    $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 10)
+                    $RunspacePool.Open()
+                    $Jobs = @()
+
                     foreach ($Scope in $Scopes) {
-                        try {
-                            $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 43 -ErrorAction SilentlyContinue
-                            if ($Option43 -and $Option43.Value) {
-                                # Extract just the Value property
-                                $valueStr = $Option43.Value -join ','
-                                $Option43Map[$Scope.ScopeId] = $valueStr
-                                $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Value='$valueStr' (Type: $($Option43.Value.GetType().Name))"
-                            } else {
-                                $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Not set or empty"
+                        $PowerShell = [powershell]::Create()
+                        $PowerShell.RunspacePool = $RunspacePool
+                        [void]$PowerShell.AddScript({
+                            param($ServerName, $ScopeId)
+                            try {
+                                $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -OptionId 43 -ErrorAction SilentlyContinue
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = if ($Option43 -and $Option43.Value) { $Option43.Value -join ',' } else { $null }
+                                    Success = $true
+                                }
+                            } catch {
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = $null
+                                    Success = $false
+                                    Error = $_.Exception.Message
+                                }
                             }
-                        } catch {
-                            $scriptDebug += "[SB-$ServerName] Option 43 for scope $($Scope.ScopeId): Lookup failed - $($_.Exception.Message)"
+                        }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
+
+                        $Jobs += [PSCustomObject]@{
+                            PowerShell = $PowerShell
+                            Handle = $PowerShell.BeginInvoke()
+                            ScopeId = $Scope.ScopeId
                         }
                     }
+
+                    # Collect results
+                    foreach ($Job in $Jobs) {
+                        $result = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($result.Value) {
+                            $Option43Map[$result.ScopeId] = $result.Value
+                        }
+                        $Job.PowerShell.Dispose()
+                    }
+
+                    $RunspacePool.Close()
+                    $RunspacePool.Dispose()
+
                     $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s"
+                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s (parallel)"
                 }
 
                 # Match filtered scopes with their statistics
