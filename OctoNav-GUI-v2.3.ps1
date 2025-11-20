@@ -1000,8 +1000,8 @@ $dhcpScopeGroupBox.Controls.Add($script:lstDHCPScopes)
 
 # Select All / None buttons for scopes
 $btnSelectAllScopes = New-Object System.Windows.Forms.Button
-$btnSelectAllScopes.Text = "Select All"
-$btnSelectAllScopes.Size = New-Object System.Drawing.Size(100, 30)
+$btnSelectAllScopes.Text = "Select All Visible"
+$btnSelectAllScopes.Size = New-Object System.Drawing.Size(120, 30)
 $btnSelectAllScopes.Location = New-Object System.Drawing.Point(720, 70)
 $dhcpScopeGroupBox.Controls.Add($btnSelectAllScopes)
 
@@ -1011,21 +1011,30 @@ $btnSelectNoneScopes.Size = New-Object System.Drawing.Size(100, 30)
 $btnSelectNoneScopes.Location = New-Object System.Drawing.Point(720, 105)
 $dhcpScopeGroupBox.Controls.Add($btnSelectNoneScopes)
 
-# Auto-match Scope ID checkbox
+# Visible items count label
+$script:lblVisibleScopes = New-Object System.Windows.Forms.Label
+$script:lblVisibleScopes.Text = ""
+$script:lblVisibleScopes.Size = New-Object System.Drawing.Size(120, 15)
+$script:lblVisibleScopes.Location = New-Object System.Drawing.Point(845, 78)
+$script:lblVisibleScopes.Font = New-Object System.Drawing.Font("Arial", 7, [System.Drawing.FontStyle]::Italic)
+$script:lblVisibleScopes.ForeColor = [System.Drawing.Color]::DarkBlue
+$dhcpScopeGroupBox.Controls.Add($script:lblVisibleScopes)
+
+# Auto-match Scope ID checkbox (disabled by default - use filter + Select All instead)
 $script:chkAutoMatchScopes = New-Object System.Windows.Forms.CheckBox
 $script:chkAutoMatchScopes.Text = "Auto-select matching Scope IDs"
 $script:chkAutoMatchScopes.Size = New-Object System.Drawing.Size(200, 20)
 $script:chkAutoMatchScopes.Location = New-Object System.Drawing.Point(720, 140)
-$script:chkAutoMatchScopes.Checked = $true
+$script:chkAutoMatchScopes.Checked = $false
 $dhcpScopeGroupBox.Controls.Add($script:chkAutoMatchScopes)
 
 # Note label
 $lblScopeNote = New-Object System.Windows.Forms.Label
-$lblScopeNote.Text = "Note: Scope cache is separate from collection. Refresh cache to load all scopes, then select specific ones to query."
+$lblScopeNote.Text = "Workflow: Refresh cache → Filter (optional) → Select All Visible → Collect DHCP Statistics"
 $lblScopeNote.Location = New-Object System.Drawing.Point(15, 147)
 $lblScopeNote.Size = New-Object System.Drawing.Size(900, 15)
 $lblScopeNote.Font = New-Object System.Drawing.Font("Arial", 7, [System.Drawing.FontStyle]::Italic)
-$lblScopeNote.ForeColor = [System.Drawing.Color]::Gray
+$lblScopeNote.ForeColor = [System.Drawing.Color]::DarkGreen
 $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 
 # Collection Options Group
@@ -1639,6 +1648,9 @@ $script:btnRefreshScopeCache.Add_Click({
             $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
         }
 
+        # Update visible count label
+        $script:lblVisibleScopes.Text = "($($scopes.Count) visible)"
+
         $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
         $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
         Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) found" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
@@ -1675,6 +1687,9 @@ $script:txtScopeListFilter.Add_TextChanged({
             }
         }
     }
+
+    # Update visible count label
+    $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
 })
 
 # Event Handler: Select All Scopes
