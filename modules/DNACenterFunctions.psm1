@@ -658,6 +658,28 @@ function Select-DNADevices {
     return $filtered
 }
 
+function Reset-DNADeviceSelection {
+    <#
+    .SYNOPSIS
+        Resets device selection to all loaded devices
+    .DESCRIPTION
+        Clears any applied filters and resets selection to all loaded devices
+    .PARAMETER LogBox
+        Optional RichTextBox for logging output
+    #>
+    param(
+        [System.Windows.Forms.RichTextBox]$LogBox
+    )
+
+    if (-not $global:allDNADevices -or $global:allDNADevices.Count -eq 0) {
+        Write-Log -Message "No devices loaded" -Color "Red" -LogBox $LogBox
+        return
+    }
+
+    $global:selectedDNADevices = $global:allDNADevices
+    Write-Log -Message "Device selection reset to all loaded devices ($($global:allDNADevices.Count) devices)" -Color "Green" -LogBox $LogBox
+}
+
 # ============================================
 # DNA CENTER API FUNCTIONS
 # ============================================
@@ -2474,6 +2496,7 @@ Export-ModuleMember -Function @(
     'Connect-DNACenter',
     'Get-AllDNADevices',
     'Select-DNADevices',
+    'Reset-DNADeviceSelection',
 
     # DNA Center API Functions
     'Get-NetworkDevicesBasic',
