@@ -93,6 +93,9 @@ function Update-DHCPServerCache {
     $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
 
     try {
+        # Import DHCP Server module (required for Get-DhcpServerInDC)
+        Import-Module DhcpServer -ErrorAction Stop
+
         # Discover DHCP servers from AD
         $dhcpServers = Get-DhcpServerInDC -ErrorAction Stop
 
@@ -162,6 +165,9 @@ function Update-DHCPScopeCache {
     $cacheFile = Join-Path $PSScriptRoot "..\dhcp_scopes_cache.json"
 
     try {
+        # Import DHCP Server module (required for Get-DhcpServerInDC and Get-DhcpServerv4Scope)
+        Import-Module DhcpServer -ErrorAction Stop
+
         # Get DHCP servers
         if ($Servers.Count -eq 0) {
             $dhcpServers = Get-DhcpServerInDC -ErrorAction Stop

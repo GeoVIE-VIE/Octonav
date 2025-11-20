@@ -112,7 +112,7 @@ try {
     Import-Module "$scriptPath\modules\NetworkConfigFunctions.psm1" -Force -Global -ErrorAction Stop
 
     # Verify critical module functions are available
-    $criticalFunctions = @('Write-Log', 'New-EnhancedStatusBar')
+    $criticalFunctions = @('Write-Log', 'New-EnhancedStatusBar', 'Update-DHCPScopeCache', 'Get-CachedDHCPScopes')
     $missingFunctions = @()
 
     foreach ($func in $criticalFunctions) {
