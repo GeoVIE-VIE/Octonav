@@ -341,18 +341,131 @@ function Update-DashboardPanel {
 function Get-CachedDHCPServers {
     <#
     .SYNOPSIS
-        Gets DHCP servers from cache file
+        Gets DHCP servers from encrypted cache file with auto-migration
     .DESCRIPTION
-        Reads cached DHCP server list from JSON file. Returns empty array if cache doesn't exist.
+        Reads cached DHCP server list from encrypted file. Automatically detects
+        and offers to encrypt old unencrypted .json files. Prompts for password.
     #>
-    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
+    $cacheFileDat = Join-Path $PSScriptRoot "..\dhcp_servers_cache.dat"
+    $cacheFileJson = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
 
-    if (Test-Path $cacheFile) {
+    # Check for old unencrypted .json file first
+    if ((Test-Path $cacheFileJson) -and -not (Test-Path $cacheFileDat)) {
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "SECURITY WARNING: Unencrypted DHCP servers cache file detected!`n`n" +
+            "File: dhcp_servers_cache.json`n`n" +
+            "This file contains sensitive network information and is NOT encrypted.`n`n" +
+            "Would you like to encrypt it now? (Recommended)`n`n" +
+            "The old unencrypted file will be deleted after successful encryption.",
+            "Encrypt Unencrypted Cache?",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            try {
+                # Read old unencrypted cache
+                $jsonContent = Get-Content $cacheFileJson -Raw
+                $cache = $jsonContent | ConvertFrom-Json
+
+                # Prompt for password to encrypt
+                $password = Get-DHCPCachePassword -Action "Save"
+                if (-not $password) {
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Encryption cancelled. Old unencrypted file remains.`n`nPlease encrypt it as soon as possible for security.",
+                        "Encryption Cancelled",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Warning
+                    )
+                    return $cache.Servers
+                }
+
+                # Encrypt the cache
+                $encryptedData = Protect-DHCPCache -PlainText $jsonContent -Password $password
+                $encryptedData | Set-Content $cacheFileDat -Force
+
+                # Delete old unencrypted file
+                Remove-Item $cacheFileJson -Force
+
+                [System.Windows.Forms.MessageBox]::Show(
+                    "DHCP servers cache encrypted successfully!`n`n" +
+                    "Old unencrypted file deleted.`n" +
+                    "New encrypted file: dhcp_servers_cache.dat`n`n" +
+                    "You will need this password to load the cache in the future.",
+                    "Encryption Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+
+                return $cache.Servers
+            }
+            catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to encrypt cache file:`n`n$($_.Exception.Message)`n`n" +
+                    "Old unencrypted file remains.",
+                    "Encryption Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+
+                # Still try to return the servers
+                try {
+                    $jsonContent = Get-Content $cacheFileJson -Raw
+                    $cache = $jsonContent | ConvertFrom-Json
+                    return $cache.Servers
+                }
+                catch {
+                    return @()
+                }
+            }
+        }
+        else {
+            # User declined encryption, load from unencrypted file
+            try {
+                $jsonContent = Get-Content $cacheFileJson -Raw
+                $cache = $jsonContent | ConvertFrom-Json
+                return $cache.Servers
+            }
+            catch {
+                return @()
+            }
+        }
+    }
+
+    # Load from encrypted .dat file
+    if (Test-Path $cacheFileDat) {
         try {
-            $cache = Get-Content $cacheFile -Raw | ConvertFrom-Json
+            # Prompt for password
+            $password = Get-DHCPCachePassword -Action "Load"
+            if (-not $password) {
+                Write-Warning "Password required to load DHCP servers cache"
+                return @()
+            }
+
+            # Read encrypted data
+            $encryptedContent = Get-Content $cacheFileDat -Raw
+
+            # Decrypt the cache
+            $decryptedJson = Unprotect-DHCPCache -EncryptedText $encryptedContent -Password $password
+
+            # Parse JSON
+            $cache = $decryptedJson | ConvertFrom-Json
             return $cache.Servers
-        } catch {
-            # Cache file corrupted, return empty
+        }
+        catch {
+            # Decryption failed or cache corrupted
+            Write-Warning "Failed to load DHCP servers cache: $($_.Exception.Message)"
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to decrypt DHCP servers cache.`n`n" +
+                "Possible causes:`n" +
+                "- Incorrect password`n" +
+                "- File tampering detected (HMAC verification failed)`n" +
+                "- Corrupted file`n`n" +
+                "Error: $($_.Exception.Message)",
+                "Decryption Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
         }
     }
 
@@ -362,12 +475,13 @@ function Get-CachedDHCPServers {
 function Update-DHCPServerCache {
     <#
     .SYNOPSIS
-        Discovers DHCP servers and updates cache file
+        Discovers DHCP servers and updates encrypted cache file
     .DESCRIPTION
-        Queries Active Directory for DHCP servers and saves to cache.
+        Queries Active Directory for DHCP servers and saves to encrypted cache.
+        Prompts for password to encrypt the cache file.
         Returns the discovered servers.
     #>
-    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.json"
+    $cacheFile = Join-Path $PSScriptRoot "..\dhcp_servers_cache.dat"
 
     try {
         # Import DHCP Server module (required for Get-DhcpServerInDC)
@@ -384,6 +498,19 @@ function Update-DHCPServerCache {
                 }
             })
 
+            # Prompt for password to encrypt cache
+            $password = Get-DHCPCachePassword -Action "Save"
+            if (-not $password) {
+                Write-Warning "Password required to save encrypted DHCP servers cache. Cache not saved."
+                [System.Windows.Forms.MessageBox]::Show(
+                    "DHCP servers cache was NOT saved because no password was provided.`n`nThe servers were discovered but the cache file requires a password for encryption.",
+                    "Cache Not Saved",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+                return $serverList
+            }
+
             # Create cache object
             $cache = @{
                 LastUpdated = (Get-Date).ToString("o")
@@ -391,8 +518,25 @@ function Update-DHCPServerCache {
                 Servers = $serverList
             }
 
-            # Save to JSON file
-            $cache | ConvertTo-Json -Depth 3 | Set-Content $cacheFile -Force
+            # Convert to JSON
+            $jsonData = $cache | ConvertTo-Json -Depth 3
+
+            # Encrypt and save
+            try {
+                $encryptedData = Protect-DHCPCache -PlainText $jsonData -Password $password
+                $encryptedData | Set-Content $cacheFile -Force
+
+                Write-Host "DHCP servers cache encrypted and saved successfully to: $cacheFile" -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "Failed to encrypt and save DHCP servers cache: $($_.Exception.Message)"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to save encrypted DHCP servers cache.`n`nError: $($_.Exception.Message)",
+                    "Encryption Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+            }
 
             return $serverList
         }
