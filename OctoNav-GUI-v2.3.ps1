@@ -1173,18 +1173,20 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-            $actualResult = if ($result -is [System.Collections.ICollection] -and $result.Count -gt 0) {
-                Write-Log -Message "DEBUG: Extracting first item from collection (count=$($result.Count))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            # Extract actual result - avoid using if return value due to PowerShell array unwrapping
+            $actualResult = $null
+            if ($result -is [System.Collections.ICollection] -and $result.Count -gt 0) {
+                Write-Log -Message "DEBUG: Extracting from PSDataCollection (count=$($result.Count))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 # Check if result[0] has the expected structure
                 if ($result[0].PSObject.Properties.Name -contains 'Success') {
-                    $result[0]
+                    Write-Log -Message "DEBUG: result[0] has Success property - using it" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $actualResult = $result[0]
                 } else {
-                    # The entire result IS the return value (not wrapped)
-                    Write-Log -Message "DEBUG: Result not wrapped - using entire result object" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    $result
+                    Write-Log -Message "DEBUG: result[0] does NOT have Success - using entire result" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $actualResult = $result
                 }
             } else {
-                $result
+                $actualResult = $result
             }
 
             Write-Log -Message "DEBUG: ActualResult type: $($actualResult.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
