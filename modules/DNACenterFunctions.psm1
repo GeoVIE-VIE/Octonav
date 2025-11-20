@@ -2172,7 +2172,7 @@ function Invoke-CommandRunner {
     .SYNOPSIS
         Executes CLI commands on multiple devices
     .DESCRIPTION
-        Interactive command execution with output filtering
+        Interactive command execution with output filtering matching DNACAPEiv6 behavior
     #>
     param([System.Windows.Forms.RichTextBox]$LogBox)
 
@@ -2182,39 +2182,42 @@ function Invoke-CommandRunner {
         return
     }
 
-    $devices = if ($global:selectedDNADevices.Count -gt 0) { $global:selectedDNADevices } else { $global:allDNADevices }
+    # Use ONLY selected devices - do NOT fallback to all devices
+    $devices = $global:selectedDNADevices
 
     if (-not $devices -or $devices.Count -eq 0) {
-        Write-Log -Message "No devices available" -Color "Red" -LogBox $LogBox
-        [System.Windows.Forms.MessageBox]::Show("Please load devices first", "No Devices", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        Write-Log -Message "No devices selected. Please use the device selection checkboxes and click 'Apply Selection'." -Color "Yellow" -LogBox $LogBox
+        [System.Windows.Forms.MessageBox]::Show("No devices selected!`n`nPlease:`n1. Check the devices you want in the device list`n2. Click 'Apply Selection' button`n3. Then try running CLI Command Runner again", "No Devices Selected", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         return
     }
 
-    # Create command input dialog
+    # Create main command input dialog with enhanced UI
     $cmdForm = New-Object System.Windows.Forms.Form
-    $cmdForm.Text = "Execute CLI Command"
-    $cmdForm.Size = New-Object System.Drawing.Size(600, 350)
+    $cmdForm.Text = "CLI Command Runner"
+    $cmdForm.Size = New-Object System.Drawing.Size(700, 600)
     $cmdForm.StartPosition = "CenterParent"
     $cmdForm.FormBorderStyle = "FixedDialog"
     $cmdForm.MaximizeBox = $false
 
-    $y = 20
+    $y = 15
 
     # Info label
     $lblInfo = New-Object System.Windows.Forms.Label
-    $lblInfo.Text = "Execute CLI command on $($devices.Count) device(s)"
+    $lblInfo.Text = "Execute CLI commands on $($devices.Count) selected device(s)"
     $lblInfo.Location = New-Object System.Drawing.Point(20, $y)
-    $lblInfo.Size = New-Object System.Drawing.Size(550, 20)
-    $lblInfo.Font = New-Object System.Drawing.Font("Arial", 10, [System.Drawing.FontStyle]::Bold)
+    $lblInfo.Size = New-Object System.Drawing.Size(650, 20)
+    $lblInfo.Font = New-Object System.Drawing.Font("Arial", 11, [System.Drawing.FontStyle]::Bold)
+    $lblInfo.ForeColor = [System.Drawing.Color]::DarkBlue
     $cmdForm.Controls.Add($lblInfo)
 
     $y += 30
 
     # Command label
     $lblCommand = New-Object System.Windows.Forms.Label
-    $lblCommand.Text = "CLI Command(s) - one per line:"
+    $lblCommand.Text = "CLI Command(s) - Enter one command per line:"
     $lblCommand.Location = New-Object System.Drawing.Point(20, $y)
-    $lblCommand.Size = New-Object System.Drawing.Size(200, 20)
+    $lblCommand.Size = New-Object System.Drawing.Size(400, 20)
+    $lblCommand.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
     $cmdForm.Controls.Add($lblCommand)
 
     $y += 25
@@ -2224,50 +2227,106 @@ function Invoke-CommandRunner {
     $txtCommand.Multiline = $true
     $txtCommand.ScrollBars = "Vertical"
     $txtCommand.Location = New-Object System.Drawing.Point(20, $y)
-    $txtCommand.Size = New-Object System.Drawing.Size(550, 100)
+    $txtCommand.Size = New-Object System.Drawing.Size(650, 120)
     $txtCommand.Font = New-Object System.Drawing.Font("Consolas", 9)
     $cmdForm.Controls.Add($txtCommand)
 
-    $y += 110
+    $y += 130
 
     # Warning label
     $lblWarning = New-Object System.Windows.Forms.Label
-    $lblWarning.Text = "Note: Pipes (|) are not supported. Use plain commands only."
+    $lblWarning.Text = "⚠ Note: Pipes (|) are not supported by DNA Center API. Use plain commands only."
     $lblWarning.Location = New-Object System.Drawing.Point(20, $y)
-    $lblWarning.Size = New-Object System.Drawing.Size(550, 20)
+    $lblWarning.Size = New-Object System.Drawing.Size(650, 20)
     $lblWarning.ForeColor = [System.Drawing.Color]::DarkOrange
     $cmdForm.Controls.Add($lblWarning)
 
     $y += 30
 
-    # Output filter label
-    $lblFilter = New-Object System.Windows.Forms.Label
-    $lblFilter.Text = "Output Filters (optional, comma-separated patterns, OR logic):"
-    $lblFilter.Location = New-Object System.Drawing.Point(20, $y)
-    $lblFilter.Size = New-Object System.Drawing.Size(400, 20)
-    $cmdForm.Controls.Add($lblFilter)
+    # Output format section
+    $lblFormat = New-Object System.Windows.Forms.Label
+    $lblFormat.Text = "Output Format:"
+    $lblFormat.Location = New-Object System.Drawing.Point(20, $y)
+    $lblFormat.Size = New-Object System.Drawing.Size(150, 20)
+    $lblFormat.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
+    $cmdForm.Controls.Add($lblFormat)
+
+    $y += 25
+
+    # Output format radio buttons
+    $rbSeparate = New-Object System.Windows.Forms.RadioButton
+    $rbSeparate.Text = "Separate files per device (hostname_command.txt)"
+    $rbSeparate.Location = New-Object System.Drawing.Point(35, $y)
+    $rbSeparate.Size = New-Object System.Drawing.Size(600, 20)
+    $rbSeparate.Checked = $true
+    $cmdForm.Controls.Add($rbSeparate)
+
+    $y += 25
+
+    $rbConsolidated = New-Object System.Windows.Forms.RadioButton
+    $rbConsolidated.Text = "Single consolidated CSV with all results"
+    $rbConsolidated.Location = New-Object System.Drawing.Point(35, $y)
+    $rbConsolidated.Size = New-Object System.Drawing.Size(600, 20)
+    $cmdForm.Controls.Add($rbConsolidated)
+
+    $y += 25
+
+    $rbBoth = New-Object System.Windows.Forms.RadioButton
+    $rbBoth.Text = "Both formats (separate files + consolidated CSV)"
+    $rbBoth.Location = New-Object System.Drawing.Point(35, $y)
+    $rbBoth.Size = New-Object System.Drawing.Size(600, 20)
+    $cmdForm.Controls.Add($rbBoth)
+
+    $y += 25
+
+    $rbAll = New-Object System.Windows.Forms.RadioButton
+    $rbAll.Text = "All formats (separate + CSV + concatenated text file)"
+    $rbAll.Location = New-Object System.Drawing.Point(35, $y)
+    $rbAll.Size = New-Object System.Drawing.Size(600, 20)
+    $cmdForm.Controls.Add($rbAll)
+
+    $y += 35
+
+    # Filter section
+    $lblFilterInfo = New-Object System.Windows.Forms.Label
+    $lblFilterInfo.Text = "Output Filters (optional - matches any line containing these patterns, case-insensitive):"
+    $lblFilterInfo.Location = New-Object System.Drawing.Point(20, $y)
+    $lblFilterInfo.Size = New-Object System.Drawing.Size(650, 20)
+    $lblFilterInfo.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Bold)
+    $cmdForm.Controls.Add($lblFilterInfo)
+
+    $y += 25
+
+    $lblFilterExample = New-Object System.Windows.Forms.Label
+    $lblFilterExample.Text = "Enter patterns separated by commas (e.g: up, Gigabit, 192.168)"
+    $lblFilterExample.Location = New-Object System.Drawing.Point(20, $y)
+    $lblFilterExample.Size = New-Object System.Drawing.Size(650, 20)
+    $lblFilterExample.ForeColor = [System.Drawing.Color]::Gray
+    $cmdForm.Controls.Add($lblFilterExample)
 
     $y += 25
 
     # Filter textbox
     $txtFilter = New-Object System.Windows.Forms.TextBox
     $txtFilter.Location = New-Object System.Drawing.Point(20, $y)
-    $txtFilter.Size = New-Object System.Drawing.Size(550, 20)
+    $txtFilter.Size = New-Object System.Drawing.Size(650, 20)
+    $txtFilter.Font = New-Object System.Drawing.Font("Consolas", 9)
     $cmdForm.Controls.Add($txtFilter)
 
     $y += 40
 
-    # Execute button
+    # Buttons
     $btnExecute = New-Object System.Windows.Forms.Button
-    $btnExecute.Text = "Execute"
+    $btnExecute.Text = "Execute Commands"
     $btnExecute.Location = New-Object System.Drawing.Point(20, $y)
-    $btnExecute.Size = New-Object System.Drawing.Size(100, 30)
+    $btnExecute.Size = New-Object System.Drawing.Size(140, 35)
+    $btnExecute.BackColor = [System.Drawing.Color]::LightGreen
     $cmdForm.Controls.Add($btnExecute)
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "Cancel"
-    $btnCancel.Location = New-Object System.Drawing.Point(130, $y)
-    $btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(170, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 35)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $cmdForm.Controls.Add($btnCancel)
     $cmdForm.CancelButton = $btnCancel
@@ -2296,7 +2355,12 @@ function Invoke-CommandRunner {
         return
     }
 
-    # Parse filters (comma-separated) - matches DNACAPEiv6_COMPLETE behavior
+    # Determine output format
+    $useSeparateFiles = $rbSeparate.Checked -or $rbBoth.Checked -or $rbAll.Checked
+    $useConsolidatedCSV = $rbConsolidated.Checked -or $rbBoth.Checked -or $rbAll.Checked
+    $useConcatenatedText = $rbAll.Checked
+
+    # Parse filters (comma-separated)
     $outputFilters = @()
     $filterText = $txtFilter.Text.Trim()
     if (-not [string]::IsNullOrWhiteSpace($filterText)) {
@@ -2306,7 +2370,18 @@ function Invoke-CommandRunner {
         }
     }
 
+    $formatDesc = if ($useSeparateFiles -and $useConsolidatedCSV -and $useConcatenatedText) {
+        "separate files + CSV + concatenated text"
+    } elseif ($useSeparateFiles -and $useConsolidatedCSV) {
+        "separate files + CSV"
+    } elseif ($useSeparateFiles) {
+        "separate files per device"
+    } else {
+        "consolidated CSV"
+    }
+
     Write-Log -Message "Executing $($commandLines.Count) command(s) on $($devices.Count) device(s)..." -Color "Cyan" -LogBox $LogBox
+    Write-Log -Message "Output format: $formatDesc" -Color "Cyan" -LogBox $LogBox
 
     foreach ($cmd in $commandLines) {
         Write-Log -Message "Command: $cmd" -Color "Yellow" -LogBox $LogBox
@@ -2318,13 +2393,18 @@ function Invoke-CommandRunner {
         New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
 
         $allResults = @()
+        $concatenatedContent = ""
+
+        $totalOps = $devices.Count * $commandLines.Count
+        $currentOp = 0
 
         foreach ($device in $devices) {
             $hostname = if ($device.hostname) { $device.hostname } else { "Unknown" }
             $deviceId = $device.id
 
             foreach ($cmd in $commandLines) {
-                Write-Log -Message "[$hostname] Submitting: $cmd" -Color "Gray" -LogBox $LogBox
+                $currentOp++
+                Write-Log -Message "[$currentOp/$totalOps] [$hostname] Submitting: $cmd" -Color "Gray" -LogBox $LogBox
 
                 $requestBody = @{
                     "name" = "GUI-Cmd-$hostname-$(Get-Random)"
@@ -2407,19 +2487,35 @@ function Invoke-CommandRunner {
                                 }
                             }
 
-                            # Apply filters if specified - matches DNACAPEiv6_COMPLETE behavior
+                            # Apply filters if specified
                             $filteredOutput = $outputText
                             if ($outputFilters.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($outputText)) {
                                 $lines = $outputText -split "`n"
                                 $filteredLines = Invoke-Filters -Lines $lines -Filters $outputFilters
                                 $filteredOutput = $filteredLines -join "`n"
+
+                                $originalLines = ($lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+                                $filteredLineCount = ($filteredLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+                                Write-Log -Message "[$hostname] Filtered: $filteredLineCount/$originalLines lines matched" -Color "Yellow" -LogBox $LogBox
                             }
 
-                            # Save to individual file
-                            $safeHostname = Get-SafeFileName -InputName $hostname
-                            $safeCommand = Get-SafeFileName -InputName $cmd
-                            $outputFile = Join-Path -Path $outputFolder -ChildPath "${safeHostname}_${safeCommand}.txt"
-                            $filteredOutput | Out-File -FilePath $outputFile -Encoding UTF8
+                            # Save to individual file (if requested)
+                            $outputFile = "N/A"
+                            if ($useSeparateFiles) {
+                                $safeHostname = Get-SafeFileName -InputName $hostname
+                                $safeCommand = Get-SafeFileName -InputName $cmd
+                                $outputFile = Join-Path -Path $outputFolder -ChildPath "${safeHostname}_${safeCommand}.txt"
+                                $filteredOutput | Out-File -FilePath $outputFile -Encoding UTF8
+                            }
+
+                            # Add to concatenated content (if requested)
+                            if ($useConcatenatedText) {
+                                $concatenatedContent += "=" * 80 + "`n"
+                                $concatenatedContent += "Device: $hostname`n"
+                                $concatenatedContent += "Command: $cmd`n"
+                                $concatenatedContent += "=" * 80 + "`n"
+                                $concatenatedContent += $filteredOutput + "`n`n"
+                            }
 
                             $allResults += [PSCustomObject]@{
                                 Hostname = $hostname
@@ -2428,9 +2524,10 @@ function Invoke-CommandRunner {
                                 Status = "Success"
                                 OutputFile = $outputFile
                                 OutputLength = $filteredOutput.Length
+                                Output = if ($useConsolidatedCSV) { $filteredOutput } else { "" }
                             }
 
-                            Write-Log -Message "[$hostname] Success - output saved" -Color "Green" -LogBox $LogBox
+                            Write-Log -Message "[$hostname] Success - saved" -Color "Green" -LogBox $LogBox
                         } else {
                             $allResults += [PSCustomObject]@{
                                 Hostname = $hostname
@@ -2439,6 +2536,7 @@ function Invoke-CommandRunner {
                                 Status = "Timeout"
                                 OutputFile = "N/A"
                                 OutputLength = 0
+                                Output = ""
                             }
                             Write-Log -Message "[$hostname] Timeout - no output received" -Color "Yellow" -LogBox $LogBox
                         }
@@ -2450,6 +2548,7 @@ function Invoke-CommandRunner {
                             Status = "Submit Failed"
                             OutputFile = "N/A"
                             OutputLength = 0
+                            Output = ""
                         }
                         Write-Log -Message "[$hostname] Failed to submit command" -Color "Red" -LogBox $LogBox
                     }
@@ -2462,6 +2561,7 @@ function Invoke-CommandRunner {
                         Status = "Error: $sanitizedError"
                         OutputFile = "N/A"
                         OutputLength = 0
+                        Output = ""
                     }
                     Write-Log -Message "[$hostname] Error: $sanitizedError" -Color "Red" -LogBox $LogBox
                 }
@@ -2471,15 +2571,31 @@ function Invoke-CommandRunner {
             }
         }
 
-        # Export summary CSV
-        $csvPath = Join-Path -Path $outputFolder -ChildPath "CommandRunner_Summary_$timestamp.csv"
-        $allResults | Export-Csv -Path $csvPath -NoTypeInformation
+        # Export consolidated CSV (if requested)
+        if ($useConsolidatedCSV -and $allResults.Count -gt 0) {
+            $csvPath = Join-Path -Path $outputFolder -ChildPath "CommandRunner_Summary_$timestamp.csv"
+            $allResults | Export-Csv -Path $csvPath -NoTypeInformation
+            Write-Log -Message "Summary CSV: $csvPath" -Color "Green" -LogBox $LogBox
+        }
+
+        # Export concatenated text file (if requested)
+        if ($useConcatenatedText -and -not [string]::IsNullOrWhiteSpace($concatenatedContent)) {
+            $concatPath = Join-Path -Path $outputFolder -ChildPath "CommandRunner_All_Output_$timestamp.txt"
+            $concatenatedContent | Out-File -FilePath $concatPath -Encoding UTF8
+            Write-Log -Message "Concatenated text: $concatPath" -Color "Green" -LogBox $LogBox
+        }
 
         Write-Log -Message "Command execution complete!" -Color "Green" -LogBox $LogBox
         Write-Log -Message "Output folder: $outputFolder" -Color "Green" -LogBox $LogBox
-        Write-Log -Message "Summary CSV: $csvPath" -Color "Green" -LogBox $LogBox
 
-        [System.Windows.Forms.MessageBox]::Show("Command execution complete!`n`nOutput folder: $outputFolder`nSummary: $csvPath", "Execution Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $successCount = ($allResults | Where-Object { $_.Status -eq "Success" }).Count
+        $messageText = "Command execution complete!`n`nTotal operations: $totalOps`nSuccessful: $successCount`n`nOutput folder:`n$outputFolder"
+
+        [System.Windows.Forms.MessageBox]::Show($messageText, "Execution Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+        # Open output folder
+        Start-Process explorer.exe $outputFolder
+
     } catch {
         $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
         Write-Log -Message "Error during command execution: $sanitizedError" -Color "Red" -LogBox $LogBox
