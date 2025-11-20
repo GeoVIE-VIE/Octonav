@@ -1069,6 +1069,13 @@ $btnCollectDHCP.Add_Click({
                 # Find matching scope in cache
                 $matchingScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $displayName }
                 if ($matchingScope) {
+                    # Validate that essential properties are not null/empty
+                    if ([string]::IsNullOrWhiteSpace($matchingScope.Server) -or
+                        [string]::IsNullOrWhiteSpace($matchingScope.ScopeId)) {
+                        Write-Log -Message "WARNING: Skipping scope with missing Server or ScopeId: $displayName" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        continue
+                    }
+
                     $selectedScopes += [PSCustomObject]@{
                         ScopeId = $matchingScope.ScopeId
                         Server = $matchingScope.Server
@@ -1191,6 +1198,15 @@ $btnCollectDHCP.Add_Click({
             try {
                 $debugLog += "Background: Starting collection"
                 $debugLog += "Background: SelectedScopes count = $($selectedScopes.Count)"
+
+                # Filter out null or invalid scopes to prevent errors
+                $selectedScopes = @($selectedScopes | Where-Object {
+                    $_ -ne $null -and
+                    -not [string]::IsNullOrWhiteSpace($_.Server) -and
+                    -not [string]::IsNullOrWhiteSpace($_.ScopeId)
+                })
+                $debugLog += "Background: SelectedScopes after filtering = $($selectedScopes.Count)"
+
                 $debugLog += "Background: Filters = $($filters -join ', ')"
                 $debugLog += "Background: Filters count = $($filters.Count)"
 

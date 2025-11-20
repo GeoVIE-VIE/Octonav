@@ -208,7 +208,13 @@ function Get-DHCPScopeStatistics {
             # Group scopes by server
             $scopesByServer = @{}
             foreach ($scope in $SelectedScopes) {
-                $server = $scope.Server
+                # Skip scopes with null/empty server names
+                if ($null -eq $scope -or [string]::IsNullOrWhiteSpace($scope.Server)) {
+                    $script:DHCPDebugLog += "[DHCP] WARNING: Skipping scope with null/empty server property"
+                    continue
+                }
+
+                $server = $scope.Server.Trim()
                 if (-not $scopesByServer.ContainsKey($server)) {
                     $scopesByServer[$server] = @()
                 }
