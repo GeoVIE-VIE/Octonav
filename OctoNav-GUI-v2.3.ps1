@@ -1284,33 +1284,20 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: specificServers after combine: $($specificServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: specificServers count: $($specificServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-        # If no servers explicitly selected but we have pre-selected scopes with server info, extract servers from scopes
+        # When using pre-selected scopes, don't pass separate server list - let Get-DHCPScopeStatistics extract servers internally
+        # But show user what servers will be queried for debugging
         if ($specificServers.Count -eq 0 -and $selectedScopes.Count -gt 0) {
-            Write-Log -Message "DEBUG: Attempting to extract servers from $($selectedScopes.Count) selected scope(s)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-
-            # Debug: Show first few scopes
-            for ($i = 0; $i -lt [Math]::Min(3, $selectedScopes.Count); $i++) {
-                $scope = $selectedScopes[$i]
-                Write-Log -Message "DEBUG: Scope[$i] - ScopeId: '$($scope.ScopeId)', Server: '$($scope.Server)', Name: '$($scope.Name)'" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            }
-
+            # Extract unique servers just for logging purposes
             $scopeServers = @($selectedScopes |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_.Server) } |
                 Select-Object -ExpandProperty Server -Unique)
 
-            Write-Log -Message "DEBUG: Extracted $($scopeServers.Count) unique server(s) from scopes" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-
             if ($scopeServers.Count -gt 0) {
-                # Debug each extracted server
-                foreach ($srv in $scopeServers) {
-                    Write-Log -Message "DEBUG: Extracted server: '$srv' (Length: $($srv.Length), Type: $($srv.GetType().Name))" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                }
-
-                $specificServers = $scopeServers
-                Write-Log -Message "Extracted $($scopeServers.Count) server(s) from selected scopes: $($scopeServers -join ', ')" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            } else {
-                Write-Log -Message "DEBUG: No valid servers found in selected scopes (all Server properties were null/empty)" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                Write-Log -Message "Will query $($scopeServers.Count) server(s) from selected scopes: $($scopeServers -join ', ')" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
+
+            # NOTE: We do NOT set $specificServers here - let Get-DHCPScopeStatistics extract servers from SelectedScopes internally
+            # This avoids array passing issues and lets the function properly group scopes by server
         }
 
         # Log server sources
@@ -1342,6 +1329,28 @@ $btnCollectDHCP.Add_Click({
 
             try {
                 $debugLog += "Background: Starting collection"
+
+                # Flatten all array parameters that may be nested due to comma operator in ArgumentList
+                # The comma operator (,$var) prevents unrolling but creates nested arrays
+
+                # Flatten selectedScopes
+                if ($selectedScopes -is [array] -and $selectedScopes.Count -eq 1 -and $selectedScopes[0] -is [array]) {
+                    $debugLog += "Background: Detected nested selectedScopes array - flattening"
+                    $selectedScopes = $selectedScopes[0]
+                }
+
+                # Flatten filters
+                if ($filters -is [array] -and $filters.Count -eq 1 -and $filters[0] -is [array]) {
+                    $debugLog += "Background: Detected nested filters array - flattening"
+                    $filters = $filters[0]
+                }
+
+                # Flatten servers
+                if ($servers -is [array] -and $servers.Count -eq 1 -and $servers[0] -is [array]) {
+                    $debugLog += "Background: Detected nested servers array - flattening"
+                    $servers = $servers[0]
+                }
+
                 $debugLog += "Background: SelectedScopes count = $($selectedScopes.Count)"
 
                 # Filter out null or invalid scopes to prevent errors
@@ -1354,13 +1363,6 @@ $btnCollectDHCP.Add_Click({
 
                 $debugLog += "Background: Filters = $($filters -join ', ')"
                 $debugLog += "Background: Filters count = $($filters.Count)"
-
-                # Flatten servers array if it was nested during argument passing
-                # The comma operator in ArgumentList can create nested arrays
-                if ($servers -is [array] -and $servers.Count -eq 1 -and $servers[0] -is [array]) {
-                    $debugLog += "Background: Detected nested server array - flattening"
-                    $servers = $servers[0]
-                }
 
                 # Filter out null/empty servers to prevent errors
                 $servers = @($servers | Where-Object {
