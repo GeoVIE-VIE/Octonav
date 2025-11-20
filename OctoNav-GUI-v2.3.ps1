@@ -1032,7 +1032,7 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 100)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 135)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
@@ -1089,11 +1089,43 @@ $lblConcurrencyNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Dr
 $lblConcurrencyNote.ForeColor = [System.Drawing.Color]::Gray
 $dhcpOptionsGroupBox.Controls.Add($lblConcurrencyNote)
 
+# Option 60 checkbox
+$chkIncludeOption60 = New-Object System.Windows.Forms.CheckBox
+$chkIncludeOption60.Text = "Include Option 60 (Vendor Class)"
+$chkIncludeOption60.Size = New-Object System.Drawing.Size(240, 20)
+$chkIncludeOption60.Location = New-Object System.Drawing.Point(15, 80)
+$chkIncludeOption60.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption60)
+
+$lblOption60Warning = New-Object System.Windows.Forms.Label
+$lblOption60Warning.Text = "(Option ID, Name, Value)"
+$lblOption60Warning.Size = New-Object System.Drawing.Size(150, 20)
+$lblOption60Warning.Location = New-Object System.Drawing.Point(260, 80)
+$lblOption60Warning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblOption60Warning.ForeColor = [System.Drawing.Color]::DarkBlue
+$dhcpOptionsGroupBox.Controls.Add($lblOption60Warning)
+
+# Option 43 checkbox
+$chkIncludeOption43 = New-Object System.Windows.Forms.CheckBox
+$chkIncludeOption43.Text = "Include Option 43 (Vendor-Specific)"
+$chkIncludeOption43.Size = New-Object System.Drawing.Size(260, 20)
+$chkIncludeOption43.Location = New-Object System.Drawing.Point(15, 105)
+$chkIncludeOption43.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption43)
+
+$lblOption43Warning = New-Object System.Windows.Forms.Label
+$lblOption43Warning.Text = "(Option ID, Name, Value)"
+$lblOption43Warning.Size = New-Object System.Drawing.Size(150, 20)
+$lblOption43Warning.Location = New-Object System.Drawing.Point(280, 105)
+$lblOption43Warning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$lblOption43Warning.ForeColor = [System.Drawing.Color]::DarkBlue
+$dhcpOptionsGroupBox.Controls.Add($lblOption43Warning)
+
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
 $dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(920, 65)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 455)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 510)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -1304,6 +1336,8 @@ $btnCollectDHCP.Add_Click({
         }
 
         $includeDNS = $chkIncludeDNS.Checked
+        $includeOption60 = $chkIncludeOption60.Checked
+        $includeOption43 = $chkIncludeOption43.Checked
 
         # Call DHCP collection function in background to keep UI responsive
         Write-Log -Message "Starting DHCP statistics collection in background..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
@@ -1312,10 +1346,12 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: Scope filters: $($scopeFilters.Count) items" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: Specific servers: $($specificServers.Count) items - $($specificServers -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: Include DNS: $includeDNS" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include Option 60: $includeOption60" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include Option 43: $includeOption43" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
-            param($selectedScopes, $filters, $servers, $dns, $stopRef, $scriptRoot)
+            param($selectedScopes, $filters, $servers, $dns, $opt60, $opt43, $stopRef, $scriptRoot)
 
             $debugLog = @()
 
@@ -1395,8 +1431,10 @@ $btnCollectDHCP.Add_Click({
                     $debugLog += "Background:   - First server: $($servers[0])"
                 }
                 $debugLog += "Background:   - IncludeDNS: $dns"
+                $debugLog += "Background:   - IncludeOption60: $opt60"
+                $debugLog += "Background:   - IncludeOption43: $opt43"
 
-                $result = Get-DHCPScopeStatistics -SelectedScopes $selectedScopes -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -StopToken $stopRef
+                $result = Get-DHCPScopeStatistics -SelectedScopes $selectedScopes -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -IncludeOption60 $opt60 -IncludeOption43 $opt43 -StopToken $stopRef
 
                 $debugLog += "Background: Collection completed"
                 $debugLog += "Background: Result Success = $($result.Success)"
@@ -1428,7 +1466,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $includeDNS, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
+        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $includeDNS, $includeOption60, $includeOption43, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
@@ -1541,14 +1579,29 @@ $btnCollectDHCP.Add_Click({
                         Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                     }
 
-                    # Format data with specific columns in order (check if DNSServers column exists)
-                    $hasDNSColumn = $dataToExport.Count -gt 0 -and ($dataToExport[0].PSObject.Properties.Name -contains 'DNSServers') -and $includeDNS
-                    if ($hasDNSColumn) {
-                        $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
-                        Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    } else {
-                        $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+                    # Format data with specific columns in order (build column list dynamically)
+                    $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
+
+                    if ($dataToExport.Count -gt 0) {
+                        $firstItem = $dataToExport[0]
+
+                        if (($firstItem.PSObject.Properties.Name -contains 'DNSServers') -and $includeDNS) {
+                            $exportColumns += 'DNSServers'
+                            Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        }
+
+                        if (($firstItem.PSObject.Properties.Name -contains 'Option60') -and $includeOption60) {
+                            $exportColumns += 'Option60'
+                            Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        }
+
+                        if (($firstItem.PSObject.Properties.Name -contains 'Option43') -and $includeOption43) {
+                            $exportColumns += 'Option43'
+                            Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        }
                     }
+
+                    $exportData = $dataToExport | Select-Object $exportColumns
 
                     $exportedPath = Export-ToCSV -Data $exportData -FilePath $exportPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
                     Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
@@ -1875,14 +1928,29 @@ $btnExportDHCP.Add_Click({
             Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         }
 
-        # Format data with specific columns in order (check if DNSServers column exists)
-        $hasDNSColumn = $dataToExport.Count -gt 0 -and ($dataToExport[0].PSObject.Properties.Name -contains 'DNSServers')
-        if ($hasDNSColumn) {
-            $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse, DNSServers
-            Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        } else {
-            $exportData = $dataToExport | Select-Object ScopeId, DHCPServer, Description, AddressesFree, AddressesInUse, PercentageInUse
+        # Format data with specific columns in order (build column list dynamically)
+        $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
+
+        if ($dataToExport.Count -gt 0) {
+            $firstItem = $dataToExport[0]
+
+            if ($firstItem.PSObject.Properties.Name -contains 'DNSServers') {
+                $exportColumns += 'DNSServers'
+                Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+
+            if ($firstItem.PSObject.Properties.Name -contains 'Option60') {
+                $exportColumns += 'Option60'
+                Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
+
+            if ($firstItem.PSObject.Properties.Name -contains 'Option43') {
+                $exportColumns += 'Option43'
+                Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+            }
         }
+
+        $exportData = $dataToExport | Select-Object $exportColumns
 
         $exportedPath = Export-ToCSV -Data $exportData -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
 

@@ -141,6 +141,12 @@ function Get-DHCPScopeStatistics {
     .PARAMETER IncludeDNS
         Boolean flag to include DNS server information (Option ID 6) for each scope.
 
+    .PARAMETER IncludeOption60
+        Boolean flag to include Vendor Class information (Option ID 60) for each scope.
+
+    .PARAMETER IncludeOption43
+        Boolean flag to include Vendor-Specific information (Option ID 43) for each scope.
+
     .PARAMETER LogBox
         Optional RichTextBox control for logging output.
 
@@ -173,6 +179,12 @@ function Get-DHCPScopeStatistics {
 
         [Parameter(Mandatory = $false)]
         [bool]$IncludeDNS = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$IncludeOption60 = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$IncludeOption43 = $false,
 
         [Parameter(Mandatory = $false)]
         [System.Windows.Forms.RichTextBox]$LogBox,
@@ -525,6 +537,46 @@ function Get-DHCPScopeStatistics {
                     $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s"
                 }
 
+                # Optional: Build Option 60 map if requested
+                $Option60Map = @{}
+                if ($IncludeOption60) {
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 60 for $(@($Scopes).Count) scope(s)..."
+                    $opt60Start = Get-Date
+                    foreach ($Scope in $Scopes) {
+                        try {
+                            $Option60 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 60 -ErrorAction SilentlyContinue
+                            if ($Option60) {
+                                $opt60Info = "ID:$($Option60.OptionId), Name:$($Option60.Name), Value:$($Option60.Value -join ',')"
+                                $Option60Map[$Scope.ScopeId] = $opt60Info
+                            }
+                        } catch {
+                            # Ignore Option 60 lookup failures
+                        }
+                    }
+                    $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
+                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s"
+                }
+
+                # Optional: Build Option 43 map if requested
+                $Option43Map = @{}
+                if ($IncludeOption43) {
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 43 for $(@($Scopes).Count) scope(s)..."
+                    $opt43Start = Get-Date
+                    foreach ($Scope in $Scopes) {
+                        try {
+                            $Option43 = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $Scope.ScopeId -OptionId 43 -ErrorAction SilentlyContinue
+                            if ($Option43) {
+                                $opt43Info = "ID:$($Option43.OptionId), Name:$($Option43.Name), Value:$($Option43.Value -join ',')"
+                                $Option43Map[$Scope.ScopeId] = $opt43Info
+                            }
+                        } catch {
+                            # Ignore Option 43 lookup failures
+                        }
+                    }
+                    $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
+                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s"
+                }
+
                 # Match filtered scopes with their statistics
                 $scriptDebug += "[SB-$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..."
                 $ServerStats = @()
@@ -540,6 +592,8 @@ function Get-DHCPScopeStatistics {
                         }
 
                         $dnsServers = $DNSServerMap[$Scope.ScopeId]
+                        $option60Info = $Option60Map[$Scope.ScopeId]
+                        $option43Info = $Option43Map[$Scope.ScopeId]
 
                         # Calculate percentage if not provided or if null
                         $percentageValue = if ($null -ne $Stats.Percentage) {
@@ -572,6 +626,8 @@ function Get-DHCPScopeStatistics {
                             AddressesInUse = $Stats.InUse
                             PercentageInUse = $percentageValue
                             DNSServers = $dnsServers
+                            Option60 = $option60Info
+                            Option43 = $option43Info
                         }
                     } else {
                         $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId)"
