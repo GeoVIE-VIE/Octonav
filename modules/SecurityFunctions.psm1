@@ -23,6 +23,11 @@ catch {
 # CONFIGURATION
 # ============================================
 
+# TEAM DEPLOYMENT SETTINGS
+# Set to $false to disable startup password for easy team sharing
+# DHCP cache encryption will still be enforced (shareable with password)
+$script:RequireStartupPassword = $false
+
 $script:SecurityConfigFile = Join-Path $PSScriptRoot "..\config\security.dat"
 $script:AuditLogFile = Join-Path $PSScriptRoot "..\logs\security_audit.log"
 $script:MaxFailedAttempts = 3
@@ -734,6 +739,21 @@ Please try again later.
 }
 
 # ============================================
+# STARTUP PASSWORD REQUIREMENT CHECK
+# ============================================
+
+function Test-StartupPasswordRequired {
+    <#
+    .SYNOPSIS
+        Checks if startup password authentication is required
+    .DESCRIPTION
+        Returns the value of $script:RequireStartupPassword configuration.
+        Set to $false for team deployments where easy sharing is needed.
+    #>
+    return $script:RequireStartupPassword
+}
+
+# ============================================
 # EXPORTS
 # ============================================
 
@@ -743,6 +763,7 @@ Export-ModuleMember -Function @(
     'Protect-WithDPAPI',
     'Unprotect-WithDPAPI',
     'Test-StartupPasswordExists',
+    'Test-StartupPasswordRequired',
     'Set-StartupPassword',
     'Test-StartupPassword',
     'Show-StartupPasswordDialog',
