@@ -1686,46 +1686,63 @@ $script:isAutoSelecting = $false
 $script:lstDHCPScopes.Add_ItemCheck({
     param($sender, $e)
 
-    # Only auto-select if the feature is enabled and we're not already in an auto-select operation
-    if ($script:chkAutoMatchScopes.Checked -and -not $script:isAutoSelecting) {
-        # Only act when checking (not unchecking)
-        if ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked) {
-            # Get the scope that was just checked
-            $checkedDisplayName = $script:lstDHCPScopes.Items[$e.Index].ToString()
+    try {
+        # Only auto-select if the feature is enabled and we're not already in an auto-select operation
+        if ($script:chkAutoMatchScopes.Checked -and -not $script:isAutoSelecting) {
+            # Only act when checking (not unchecking)
+            if ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked) {
+                # Validate that cache exists
+                if (-not $script:allDHCPScopes -or $script:allDHCPScopes.Count -eq 0) {
+                    return
+                }
 
-            # Find the matching scope in cache to get its ScopeId
-            $checkedScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $checkedDisplayName } | Select-Object -First 1
+                # Get the scope that was just checked
+                $checkedDisplayName = $script:lstDHCPScopes.Items[$e.Index].ToString()
 
-            if ($checkedScope -and -not [string]::IsNullOrWhiteSpace($checkedScope.ScopeId)) {
-                $targetScopeId = $checkedScope.ScopeId
+                # Find the matching scope in cache to get its ScopeId
+                $checkedScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $checkedDisplayName } | Select-Object -First 1
 
-                # Set flag to prevent infinite recursion
-                $script:isAutoSelecting = $true
+                if ($checkedScope -and -not [string]::IsNullOrWhiteSpace($checkedScope.ScopeId)) {
+                    $targetScopeId = $checkedScope.ScopeId
+                    $checkedIndex = $e.Index  # Capture the index value for use in closure
 
-                # Use a timer to defer the selection until after this event completes
-                $autoSelectTimer = New-Object System.Windows.Forms.Timer
-                $autoSelectTimer.Interval = 10
-                $autoSelectTimer.Add_Tick({
-                    # Find all scopes with the same ScopeId and check them
-                    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-                        if ($i -ne $e.Index -and -not $script:lstDHCPScopes.GetItemChecked($i)) {
-                            $itemDisplayName = $script:lstDHCPScopes.Items[$i].ToString()
-                            $itemScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
+                    # Set flag to prevent infinite recursion
+                    $script:isAutoSelecting = $true
 
-                            if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
-                                $script:lstDHCPScopes.SetItemChecked($i, $true)
+                    # Use a timer to defer the selection until after this event completes
+                    $autoSelectTimer = New-Object System.Windows.Forms.Timer
+                    $autoSelectTimer.Interval = 10
+                    $autoSelectTimer.Add_Tick({
+                        try {
+                            # Find all scopes with the same ScopeId and check them
+                            for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+                                if ($i -ne $checkedIndex -and -not $script:lstDHCPScopes.GetItemChecked($i)) {
+                                    $itemDisplayName = $script:lstDHCPScopes.Items[$i].ToString()
+                                    $itemScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
+
+                                    if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
+                                        $script:lstDHCPScopes.SetItemChecked($i, $true)
+                                    }
+                                }
                             }
+                        } catch {
+                            # Silently handle errors in timer to avoid crashes
+                            Write-Log -Message "Auto-select error: $($_.Exception.Message)" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        } finally {
+                            # Stop the timer and reset flag
+                            $autoSelectTimer.Stop()
+                            $autoSelectTimer.Dispose()
+                            $script:isAutoSelecting = $false
                         }
-                    }
-
-                    # Stop the timer and reset flag
-                    $autoSelectTimer.Stop()
-                    $autoSelectTimer.Dispose()
-                    $script:isAutoSelecting = $false
-                })
-                $autoSelectTimer.Start()
+                    })
+                    $autoSelectTimer.Start()
+                }
             }
         }
+    } catch {
+        # Prevent unhandled exceptions from crashing the application
+        Write-Log -Message "Error in auto-select handler: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        $script:isAutoSelecting = $false
     }
 })
 
