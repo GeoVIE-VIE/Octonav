@@ -1032,45 +1032,43 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 135)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 90)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
+# Row 1: DNS and Option 60
 $chkIncludeDNS = New-Object System.Windows.Forms.CheckBox
-$chkIncludeDNS.Text = "Include DNS Server Information"
-$chkIncludeDNS.Size = New-Object System.Drawing.Size(250, 20)
-$chkIncludeDNS.Location = New-Object System.Drawing.Point(15, 30)
+$chkIncludeDNS.Text = "Include DNS (Option 6)"
+$chkIncludeDNS.Size = New-Object System.Drawing.Size(180, 20)
+$chkIncludeDNS.Location = New-Object System.Drawing.Point(15, 25)
 $dhcpOptionsGroupBox.Controls.Add($chkIncludeDNS)
 
-$lblDNSWarning = New-Object System.Windows.Forms.Label
-$lblDNSWarning.Text = "(Slower - adds DNS lookup for each scope)"
-$lblDNSWarning.Size = New-Object System.Drawing.Size(300, 20)
-$lblDNSWarning.Location = New-Object System.Drawing.Point(270, 30)
-$lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
-$dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
+$chkIncludeOption60 = New-Object System.Windows.Forms.CheckBox
+$chkIncludeOption60.Text = "Include Option 60 (Vendor Class)"
+$chkIncludeOption60.Size = New-Object System.Drawing.Size(230, 20)
+$chkIncludeOption60.Location = New-Object System.Drawing.Point(210, 25)
+$chkIncludeOption60.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption60)
 
-# Group by Scope ID checkbox (for export aggregation)
+$chkIncludeOption43 = New-Object System.Windows.Forms.CheckBox
+$chkIncludeOption43.Text = "Include Option 43 (Vendor-Specific)"
+$chkIncludeOption43.Size = New-Object System.Drawing.Size(260, 20)
+$chkIncludeOption43.Location = New-Object System.Drawing.Point(455, 25)
+$chkIncludeOption43.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption43)
+
+# Row 2: Group by Scope and Concurrency
 $script:chkGroupByScope = New-Object System.Windows.Forms.CheckBox
-$script:chkGroupByScope.Text = "Group Results by Scope ID on Export"
-$script:chkGroupByScope.Size = New-Object System.Drawing.Size(280, 20)
+$script:chkGroupByScope.Text = "Group by Scope ID on Export"
+$script:chkGroupByScope.Size = New-Object System.Drawing.Size(210, 20)
 $script:chkGroupByScope.Location = New-Object System.Drawing.Point(15, 55)
 $script:chkGroupByScope.Checked = $false
 $dhcpOptionsGroupBox.Controls.Add($script:chkGroupByScope)
 
-$lblGroupWarning = New-Object System.Windows.Forms.Label
-$lblGroupWarning.Text = "(Combines redundant scopes into single row per Scope ID)"
-$lblGroupWarning.Size = New-Object System.Drawing.Size(350, 20)
-$lblGroupWarning.Location = New-Object System.Drawing.Point(300, 55)
-$lblGroupWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblGroupWarning.ForeColor = [System.Drawing.Color]::DarkGreen
-$dhcpOptionsGroupBox.Controls.Add($lblGroupWarning)
-
-# Concurrency limit control
 $lblConcurrency = New-Object System.Windows.Forms.Label
 $lblConcurrency.Text = "Parallel Operations:"
 $lblConcurrency.Size = New-Object System.Drawing.Size(120, 20)
-$lblConcurrency.Location = New-Object System.Drawing.Point(600, 30)
+$lblConcurrency.Location = New-Object System.Drawing.Point(455, 55)
 $dhcpOptionsGroupBox.Controls.Add($lblConcurrency)
 
 $script:numConcurrency = New-Object System.Windows.Forms.NumericUpDown
@@ -1078,54 +1076,22 @@ $script:numConcurrency.Minimum = 20
 $script:numConcurrency.Maximum = 50
 $script:numConcurrency.Value = 20
 $script:numConcurrency.Size = New-Object System.Drawing.Size(60, 20)
-$script:numConcurrency.Location = New-Object System.Drawing.Point(720, 28)
+$script:numConcurrency.Location = New-Object System.Drawing.Point(575, 53)
 $dhcpOptionsGroupBox.Controls.Add($script:numConcurrency)
 
 $lblConcurrencyNote = New-Object System.Windows.Forms.Label
-$lblConcurrencyNote.Text = "(20-50 servers at once)"
-$lblConcurrencyNote.Size = New-Object System.Drawing.Size(150, 20)
-$lblConcurrencyNote.Location = New-Object System.Drawing.Point(785, 30)
+$lblConcurrencyNote.Text = "(20-50 servers)"
+$lblConcurrencyNote.Size = New-Object System.Drawing.Size(100, 20)
+$lblConcurrencyNote.Location = New-Object System.Drawing.Point(640, 55)
 $lblConcurrencyNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblConcurrencyNote.ForeColor = [System.Drawing.Color]::Gray
 $dhcpOptionsGroupBox.Controls.Add($lblConcurrencyNote)
-
-# Option 60 checkbox
-$chkIncludeOption60 = New-Object System.Windows.Forms.CheckBox
-$chkIncludeOption60.Text = "Include Option 60 (Vendor Class)"
-$chkIncludeOption60.Size = New-Object System.Drawing.Size(240, 20)
-$chkIncludeOption60.Location = New-Object System.Drawing.Point(15, 80)
-$chkIncludeOption60.Checked = $false
-$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption60)
-
-$lblOption60Warning = New-Object System.Windows.Forms.Label
-$lblOption60Warning.Text = "(Option ID, Name, Value)"
-$lblOption60Warning.Size = New-Object System.Drawing.Size(150, 20)
-$lblOption60Warning.Location = New-Object System.Drawing.Point(260, 80)
-$lblOption60Warning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblOption60Warning.ForeColor = [System.Drawing.Color]::DarkBlue
-$dhcpOptionsGroupBox.Controls.Add($lblOption60Warning)
-
-# Option 43 checkbox
-$chkIncludeOption43 = New-Object System.Windows.Forms.CheckBox
-$chkIncludeOption43.Text = "Include Option 43 (Vendor-Specific)"
-$chkIncludeOption43.Size = New-Object System.Drawing.Size(260, 20)
-$chkIncludeOption43.Location = New-Object System.Drawing.Point(15, 105)
-$chkIncludeOption43.Checked = $false
-$dhcpOptionsGroupBox.Controls.Add($chkIncludeOption43)
-
-$lblOption43Warning = New-Object System.Windows.Forms.Label
-$lblOption43Warning.Text = "(Option ID, Name, Value)"
-$lblOption43Warning.Size = New-Object System.Drawing.Size(150, 20)
-$lblOption43Warning.Location = New-Object System.Drawing.Point(280, 105)
-$lblOption43Warning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
-$lblOption43Warning.ForeColor = [System.Drawing.Color]::DarkBlue
-$dhcpOptionsGroupBox.Controls.Add($lblOption43Warning)
 
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
 $dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(920, 65)
-$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 510)
+$dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 465)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
