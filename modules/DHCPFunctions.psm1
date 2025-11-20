@@ -406,7 +406,9 @@ function Get-DHCPScopeStatistics {
                 [string]$ServerName,
                 [string[]]$ScopeFilters,
                 [bool]$IncludeDNS,
-                [string[]]$SelectedScopeIds = @()
+                [string[]]$SelectedScopeIds = @(),
+                [bool]$IncludeOption60 = $false,
+                [bool]$IncludeOption43 = $false
             )
 
             $ErrorActionPreference = 'Stop'
@@ -868,7 +870,7 @@ function Get-DHCPScopeStatistics {
                 ,@()
             }
 
-            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
             $Jobs += @{
                 Job = $Job
                 ServerName = $Server
@@ -939,7 +941,7 @@ function Get-DHCPScopeStatistics {
                         ,@()
                     }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server
@@ -974,7 +976,7 @@ function Get-DHCPScopeStatistics {
                         ,@()
                     }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server
