@@ -2167,6 +2167,102 @@ function Invoke-PathTrace {
     }
 }
 
+function Get-DNATaskOutputDetails {
+    <#
+    .SYNOPSIS
+        Parses DNA Center CLI command output from various response formats
+    .DESCRIPTION
+        Handles multiple response formats from DNA Center API file downloads
+        Extracted from DNACAPEiv6_COMPLETE(1).txt for robust output parsing
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $RawOutput,
+        [string]$Command
+    )
+
+    $cleanOutput = ""
+
+    # Handle string responses (simplest case)
+    if ($RawOutput -is [string]) {
+        $cleanOutput = $RawOutput
+    }
+    # Handle array responses
+    elseif ($RawOutput -is [array]) {
+        foreach ($item in $RawOutput) {
+            if ($null -eq $item) { continue }
+
+            # Try to find property matching command name (e.g., "show version")
+            $itemProps = $item.PSObject.Properties
+            $commandKey = $itemProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+            if ($commandKey) {
+                $rawValue = $commandKey.Value
+                if ($rawValue -is [string]) {
+                    $cleanOutput += $rawValue
+                } else {
+                    $cleanOutput += ($rawValue | ConvertTo-Json -Depth 10)
+                }
+            }
+            elseif ($item.commandOutput) {
+                $cleanOutput += $item.commandOutput
+            }
+            elseif ($item.output) {
+                $cleanOutput += $item.output
+            }
+            elseif ($item.PSObject.Properties['commandResponses']) {
+                # Try commandResponses.SUCCESS format
+                if ($item.commandResponses.SUCCESS) {
+                    $cleanOutput += ($item.commandResponses.SUCCESS -join "`n")
+                }
+            }
+            else {
+                $cleanOutput += ($item | ConvertTo-Json -Depth 10)
+            }
+        }
+    }
+    # Handle object responses
+    else {
+        $outputProps = $RawOutput.PSObject.Properties
+
+        # Try to find property matching command name
+        $commandKey = $outputProps | Where-Object { $_.Name -match "show" } | Select-Object -First 1
+
+        if ($commandKey) {
+            $rawValue = $commandKey.Value
+            if ($rawValue -is [string]) {
+                $cleanOutput = $rawValue
+            } else {
+                $cleanOutput = ($rawValue | ConvertTo-Json -Depth 10)
+            }
+        }
+        elseif ($RawOutput.commandOutput) {
+            $cleanOutput = $RawOutput.commandOutput
+        }
+        elseif ($RawOutput.output) {
+            $cleanOutput = $RawOutput.output
+        }
+        elseif ($RawOutput.PSObject.Properties['commandResponses']) {
+            # Try commandResponses.SUCCESS format
+            if ($RawOutput.commandResponses.SUCCESS) {
+                $cleanOutput = ($RawOutput.commandResponses.SUCCESS -join "`n")
+            }
+        }
+        else {
+            $cleanOutput = ($RawOutput | ConvertTo-Json -Depth 10)
+        }
+    }
+
+    # Clean up escape sequences and formatting
+    if (-not [string]::IsNullOrEmpty($cleanOutput)) {
+        $cleanOutput = $cleanOutput -replace '\\r\\n', "`n" -replace '\\r', "`n" -replace '\\n', "`n"
+        $cleanOutput = $cleanOutput.Trim('"')
+        $cleanOutput = $cleanOutput -replace '""', '"' -replace '\\`', '`' -replace '\\\\', '\'
+    }
+
+    return $cleanOutput
+}
+
 function Invoke-CommandRunner {
     <#
     .SYNOPSIS
@@ -2383,6 +2479,14 @@ function Invoke-CommandRunner {
     Write-Log -Message "Executing $($commandLines.Count) command(s) on $($devices.Count) device(s)..." -Color "Cyan" -LogBox $LogBox
     Write-Log -Message "Output format: $formatDesc" -Color "Cyan" -LogBox $LogBox
 
+    # Log selected devices
+    Write-Log -Message "Selected devices:" -Color "Cyan" -LogBox $LogBox
+    foreach ($dev in $devices) {
+        $devHostname = if ($dev.hostname) { $dev.hostname } else { "Unknown" }
+        $devIP = if ($dev.managementIpAddress) { $dev.managementIpAddress } else { "N/A" }
+        Write-Log -Message "  - $devHostname ($devIP)" -Color "Gray" -LogBox $LogBox
+    }
+
     foreach ($cmd in $commandLines) {
         Write-Log -Message "Command: $cmd" -Color "Yellow" -LogBox $LogBox
     }
@@ -2471,20 +2575,18 @@ function Invoke-CommandRunner {
                                 -Headers $global:dnaCenterHeaders `
                                 -TimeoutSec 30
 
-                            $outputText = ""
-                            if ($fileResponse) {
-                                if ($fileResponse -is [string]) {
-                                    $outputText = $fileResponse
-                                } else {
-                                    try {
-                                        $fileData = $fileResponse | ConvertFrom-Json
-                                        if ($fileData -is [array] -and $fileData.Count -gt 0 -and $fileData[0].PSObject.Properties['commandResponses']) {
-                                            $outputText = ($fileData[0].commandResponses.SUCCESS -join "`n")
-                                        }
-                                    } catch {
-                                        $outputText = $fileResponse | Out-String
-                                    }
-                                }
+                            # Use robust parsing function to handle various response formats
+                            $outputText = Get-DNATaskOutputDetails -RawOutput $fileResponse -Command $cmd
+
+                            if ([string]::IsNullOrWhiteSpace($outputText)) {
+                                Write-Log -Message "[$hostname] Warning: Empty output received (output text is blank)" -Color "Yellow" -LogBox $LogBox
+                                # Save debug info
+                                $debugInfo = "File ID: $fileId`nResponse Type: $($fileResponse.GetType().FullName)`nResponse: $(if ($fileResponse) { $fileResponse | ConvertTo-Json -Depth 3 } else { 'null' })"
+                                Write-Log -Message "[$hostname] Debug: $debugInfo" -Color "Gray" -LogBox $LogBox
+                                $outputText = ""
+                            } else {
+                                $lineCount = ($outputText -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+                                Write-Log -Message "[$hostname] Retrieved output: $lineCount lines" -Color "Green" -LogBox $LogBox
                             }
 
                             # Apply filters if specified
@@ -2506,6 +2608,7 @@ function Invoke-CommandRunner {
                                 $safeCommand = Get-SafeFileName -InputName $cmd
                                 $outputFile = Join-Path -Path $outputFolder -ChildPath "${safeHostname}_${safeCommand}.txt"
                                 $filteredOutput | Out-File -FilePath $outputFile -Encoding UTF8
+                                Write-Log -Message "[$hostname] Saved to: $outputFile" -Color "Green" -LogBox $LogBox
                             }
 
                             # Add to concatenated content (if requested)
@@ -2527,7 +2630,7 @@ function Invoke-CommandRunner {
                                 Output = if ($useConsolidatedCSV) { $filteredOutput } else { "" }
                             }
 
-                            Write-Log -Message "[$hostname] Success - saved" -Color "Green" -LogBox $LogBox
+                            Write-Log -Message "[$hostname] ✓ Complete" -Color "Green" -LogBox $LogBox
                         } else {
                             $allResults += [PSCustomObject]@{
                                 Hostname = $hostname
@@ -2538,7 +2641,7 @@ function Invoke-CommandRunner {
                                 OutputLength = 0
                                 Output = ""
                             }
-                            Write-Log -Message "[$hostname] Timeout - no output received" -Color "Yellow" -LogBox $LogBox
+                            Write-Log -Message "[$hostname] ✗ TIMEOUT - No file ID received after $maxWait seconds" -Color "Red" -LogBox $LogBox
                         }
                     } else {
                         $allResults += [PSCustomObject]@{
@@ -2550,7 +2653,7 @@ function Invoke-CommandRunner {
                             OutputLength = 0
                             Output = ""
                         }
-                        Write-Log -Message "[$hostname] Failed to submit command" -Color "Red" -LogBox $LogBox
+                        Write-Log -Message "[$hostname] ✗ FAILED - Command submission failed (no task ID returned)" -Color "Red" -LogBox $LogBox
                     }
                 } catch {
                     $sanitizedError = Get-SanitizedErrorMessage -ErrorRecord $_
@@ -2563,7 +2666,7 @@ function Invoke-CommandRunner {
                         OutputLength = 0
                         Output = ""
                     }
-                    Write-Log -Message "[$hostname] Error: $sanitizedError" -Color "Red" -LogBox $LogBox
+                    Write-Log -Message "[$hostname] ✗ ERROR: $sanitizedError" -Color "Red" -LogBox $LogBox
                 }
 
                 # Small delay between commands
@@ -2585,13 +2688,50 @@ function Invoke-CommandRunner {
             Write-Log -Message "Concatenated text: $concatPath" -Color "Green" -LogBox $LogBox
         }
 
+        Write-Log -Message "═══════════════════════════════════════" -Color "Cyan" -LogBox $LogBox
         Write-Log -Message "Command execution complete!" -Color "Green" -LogBox $LogBox
+        Write-Log -Message "═══════════════════════════════════════" -Color "Cyan" -LogBox $LogBox
+
+        # Calculate statistics
+        $successCount = ($allResults | Where-Object { $_.Status -eq "Success" }).Count
+        $timeoutCount = ($allResults | Where-Object { $_.Status -eq "Timeout" }).Count
+        $failedCount = ($allResults | Where-Object { $_.Status -like "Submit Failed" }).Count
+        $errorCount = ($allResults | Where-Object { $_.Status -like "Error:*" }).Count
+
+        Write-Log -Message "Results Summary:" -Color "Cyan" -LogBox $LogBox
+        Write-Log -Message "  Total operations: $totalOps" -Color "White" -LogBox $LogBox
+        Write-Log -Message "  Successful: $successCount" -Color "Green" -LogBox $LogBox
+        if ($timeoutCount -gt 0) {
+            Write-Log -Message "  Timeouts: $timeoutCount" -Color "Yellow" -LogBox $LogBox
+        }
+        if ($failedCount -gt 0) {
+            Write-Log -Message "  Submit failures: $failedCount" -Color "Red" -LogBox $LogBox
+        }
+        if ($errorCount -gt 0) {
+            Write-Log -Message "  Errors: $errorCount" -Color "Red" -LogBox $LogBox
+        }
+
+        # Show failed devices
+        $failedDevices = $allResults | Where-Object { $_.Status -ne "Success" } | Select-Object -Property Hostname, Command, Status -Unique
+        if ($failedDevices.Count -gt 0) {
+            Write-Log -Message "" -LogBox $LogBox
+            Write-Log -Message "Failed Operations:" -Color "Yellow" -LogBox $LogBox
+            foreach ($failed in $failedDevices) {
+                Write-Log -Message "  ✗ $($failed.Hostname) - $($failed.Command): $($failed.Status)" -Color "Red" -LogBox $LogBox
+            }
+        }
+
+        Write-Log -Message "" -LogBox $LogBox
         Write-Log -Message "Output folder: $outputFolder" -Color "Green" -LogBox $LogBox
 
-        $successCount = ($allResults | Where-Object { $_.Status -eq "Success" }).Count
-        $messageText = "Command execution complete!`n`nTotal operations: $totalOps`nSuccessful: $successCount`n`nOutput folder:`n$outputFolder"
+        $messageText = "Command execution complete!`n`nTotal operations: $totalOps`nSuccessful: $successCount"
+        if ($timeoutCount + $failedCount + $errorCount -gt 0) {
+            $messageText += "`nFailed: $($timeoutCount + $failedCount + $errorCount)"
+        }
+        $messageText += "`n`nOutput folder:`n$outputFolder"
 
-        [System.Windows.Forms.MessageBox]::Show($messageText, "Execution Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $iconType = if ($successCount -eq $totalOps) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Warning }
+        [System.Windows.Forms.MessageBox]::Show($messageText, "Execution Complete", [System.Windows.Forms.MessageBoxButtons]::OK, $iconType)
 
         # Open output folder
         Start-Process explorer.exe $outputFolder
