@@ -205,8 +205,10 @@ function Get-DHCPScopeStatistics {
             Write-Log -Message "Querying $($SelectedScopes.Count) pre-selected scope(s)..." -Color 'Info' -LogBox $LogBox -Theme $null
             Invoke-StatusBar -Callback $StatusBarCallback -Status "Processing $($SelectedScopes.Count) selected scopes..." -Progress 10 -ProgressText 'Grouping scopes by server...'
 
-            # Group scopes by server
+            # Extract unique server names and group scopes by server
+            $serverList = @()
             $scopesByServer = @{}
+
             foreach ($scope in $SelectedScopes) {
                 # Skip scopes with null/empty server names
                 if ($null -eq $scope -or [string]::IsNullOrWhiteSpace($scope.Server)) {
@@ -221,16 +223,23 @@ function Get-DHCPScopeStatistics {
                     continue
                 }
 
+                # Add to unique server list (using -notcontains for reliable array check)
+                if ($serverList -notcontains $server) {
+                    $serverList += $server
+                    $script:DHCPDebugLog += "[DHCP] Added unique server: '$server'"
+                }
+
+                # Also maintain hashtable grouping for later scope ID extraction
                 if (-not $scopesByServer.ContainsKey($server)) {
                     $scopesByServer[$server] = @()
                 }
                 $scopesByServer[$server] += $scope
             }
 
-            $script:DHCPDebugLog += "[DHCP] Grouped into $($scopesByServer.Keys.Count) server(s)"
+            $script:DHCPDebugLog += "[DHCP] Extracted $($serverList.Count) unique server(s)"
 
-            # Use these servers instead of discovering - convert keys to array of strings
-            $SpecificServers = @($scopesByServer.Keys | ForEach-Object { [string]$_ })
+            # Use the extracted server list instead of hashtable keys
+            $SpecificServers = $serverList
             # Clear filters since we have specific scopes
             $ScopeFilters = @()
 
