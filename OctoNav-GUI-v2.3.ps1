@@ -1011,6 +1011,14 @@ $btnSelectNoneScopes.Size = New-Object System.Drawing.Size(100, 30)
 $btnSelectNoneScopes.Location = New-Object System.Drawing.Point(720, 105)
 $dhcpScopeGroupBox.Controls.Add($btnSelectNoneScopes)
 
+# Auto-match Scope ID checkbox
+$script:chkAutoMatchScopes = New-Object System.Windows.Forms.CheckBox
+$script:chkAutoMatchScopes.Text = "Auto-select matching Scope IDs"
+$script:chkAutoMatchScopes.Size = New-Object System.Drawing.Size(200, 20)
+$script:chkAutoMatchScopes.Location = New-Object System.Drawing.Point(720, 140)
+$script:chkAutoMatchScopes.Checked = $true
+$dhcpScopeGroupBox.Controls.Add($script:chkAutoMatchScopes)
+
 # Note label
 $lblScopeNote = New-Object System.Windows.Forms.Label
 $lblScopeNote.Text = "Note: Scope cache is separate from collection. Refresh cache to load all scopes, then select specific ones to query."
@@ -1041,16 +1049,16 @@ $lblDNSWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing
 $lblDNSWarning.ForeColor = [System.Drawing.Color]::DarkOrange
 $dhcpOptionsGroupBox.Controls.Add($lblDNSWarning)
 
-# Group by Scope ID checkbox
+# Group by Scope ID checkbox (for export aggregation)
 $script:chkGroupByScope = New-Object System.Windows.Forms.CheckBox
-$script:chkGroupByScope.Text = "Group Redundant Scopes by Scope ID"
+$script:chkGroupByScope.Text = "Group Results by Scope ID on Export"
 $script:chkGroupByScope.Size = New-Object System.Drawing.Size(280, 20)
 $script:chkGroupByScope.Location = New-Object System.Drawing.Point(15, 55)
 $script:chkGroupByScope.Checked = $false
 $dhcpOptionsGroupBox.Controls.Add($script:chkGroupByScope)
 
 $lblGroupWarning = New-Object System.Windows.Forms.Label
-$lblGroupWarning.Text = "(Aggregates statistics for scopes with same Scope ID)"
+$lblGroupWarning.Text = "(Combines redundant scopes into single row per Scope ID)"
 $lblGroupWarning.Size = New-Object System.Drawing.Size(350, 20)
 $lblGroupWarning.Location = New-Object System.Drawing.Point(300, 55)
 $lblGroupWarning.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
@@ -1669,6 +1677,54 @@ $btnSelectAllScopes.Add_Click({
 $btnSelectNoneScopes.Add_Click({
     for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
         $script:lstDHCPScopes.SetItemChecked($i, $false)
+    }
+})
+
+# Event Handler: Auto-match Scope IDs when checking a scope
+$script:isAutoSelecting = $false
+$script:lstDHCPScopes.Add_ItemCheck({
+    param($sender, $e)
+
+    # Only auto-select if the feature is enabled and we're not already in an auto-select operation
+    if ($script:chkAutoMatchScopes.Checked -and -not $script:isAutoSelecting) {
+        # Only act when checking (not unchecking)
+        if ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked) {
+            # Get the scope that was just checked
+            $checkedDisplayName = $script:lstDHCPScopes.Items[$e.Index].ToString()
+
+            # Find the matching scope in cache to get its ScopeId
+            $checkedScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $checkedDisplayName } | Select-Object -First 1
+
+            if ($checkedScope -and -not [string]::IsNullOrWhiteSpace($checkedScope.ScopeId)) {
+                $targetScopeId = $checkedScope.ScopeId
+
+                # Set flag to prevent infinite recursion
+                $script:isAutoSelecting = $true
+
+                # Use a timer to defer the selection until after this event completes
+                $autoSelectTimer = New-Object System.Windows.Forms.Timer
+                $autoSelectTimer.Interval = 10
+                $autoSelectTimer.Add_Tick({
+                    # Find all scopes with the same ScopeId and check them
+                    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+                        if ($i -ne $e.Index -and -not $script:lstDHCPScopes.GetItemChecked($i)) {
+                            $itemDisplayName = $script:lstDHCPScopes.Items[$i].ToString()
+                            $itemScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
+
+                            if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
+                                $script:lstDHCPScopes.SetItemChecked($i, $true)
+                            }
+                        }
+                    }
+
+                    # Stop the timer and reset flag
+                    $autoSelectTimer.Stop()
+                    $autoSelectTimer.Dispose()
+                    $script:isAutoSelecting = $false
+                })
+                $autoSelectTimer.Start()
+            }
+        }
     }
 })
 
