@@ -100,6 +100,7 @@ try {
     Import-Module "$scriptPath\modules\ValidationFunctions.psm1" -Force -Global -ErrorAction Stop
     Import-Module "$scriptPath\modules\HelperFunctions.psm1" -Force -Global -ErrorAction Stop
     Import-Module "$scriptPath\modules\ExportManager.psm1" -Force -Global -ErrorAction Stop
+    Import-Module "$scriptPath\modules\SecurityFunctions.psm1" -Force -Global -ErrorAction Stop
 
     # UI modules
     Import-Module "$scriptPath\modules\UIEnhancements.psm1" -Force -Global -ErrorAction Stop
@@ -2760,6 +2761,61 @@ try {
     }
 } catch {
     # Silently continue if cache loading fails
+}
+
+# ============================================
+# STARTUP PASSWORD AUTHENTICATION
+# ============================================
+
+try {
+    # Check if startup password exists
+    $passwordExists = Test-StartupPasswordExists
+
+    if ($passwordExists) {
+        # Prompt for password
+        Write-SecurityAudit -Level Info -Event "OctoNav startup" -Details "Password authentication required"
+
+        $authenticated = Show-StartupPasswordDialog -IsFirstRun:$false
+
+        if (-not $authenticated) {
+            Write-SecurityAudit -Level Warning -Event "Authentication failed or cancelled" -Details "Application exit"
+            exit 0
+        }
+
+        Write-SecurityAudit -Level Success -Event "Authentication successful" -Details "OctoNav starting"
+    }
+    else {
+        # First run - set up startup password
+        Write-SecurityAudit -Level Info -Event "First run detected" -Details "Setting up startup password"
+
+        $passwordSet = Show-StartupPasswordDialog -IsFirstRun:$true
+
+        if (-not $passwordSet) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Startup password is required for security.`n`nOctoNav will now exit.",
+                "Password Required",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            Write-SecurityAudit -Level Warning -Event "First run - password not set" -Details "Application exit"
+            exit 0
+        }
+
+        Write-SecurityAudit -Level Success -Event "First run - password configured" -Details "OctoNav starting"
+    }
+
+    # Start session monitoring for auto-lock
+    Start-SessionMonitor -Form $mainForm
+}
+catch {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Security initialization failed:`n`n$($_.Exception.Message)`n`nOctoNav will now exit.",
+        "Security Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    Write-SecurityAudit -Level Critical -Event "Security initialization failed" -Details $_.Exception.Message
+    exit 1
 }
 
 # Show the form
