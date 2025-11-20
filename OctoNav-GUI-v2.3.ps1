@@ -805,7 +805,7 @@ $tab2.Controls.Add($lblDHCPInfo)
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Selection"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(940, 150)
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(560, 150)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $tab2.Controls.Add($dhcpServerGroupBox)
 
@@ -879,7 +879,7 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 # Scope Selection Group
 $dhcpScopeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpScopeGroupBox.Text = "Scope Selection (Optional)"
-$dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(940, 160)
+$dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(560, 160)
 $dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 200)
 $tab2.Controls.Add($dhcpScopeGroupBox)
 
@@ -951,7 +951,7 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 # Collection Options Group
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
-$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(940, 75)
+$dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(560, 75)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
@@ -995,7 +995,7 @@ $dhcpOptionsGroupBox.Controls.Add($lblConcurrencyNote)
 # Actions Group
 $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
-$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(940, 65)
+$dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(560, 65)
 $dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 455)
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
@@ -1029,10 +1029,19 @@ $lblExportHint.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing
 $lblExportHint.ForeColor = [System.Drawing.Color]::Gray
 $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 
-# DHCP Log
+# Collection Log Label (right side)
+$lblCollectionLog = New-Object System.Windows.Forms.Label
+$lblCollectionLog.Text = "Collection Log"
+$lblCollectionLog.Location = New-Object System.Drawing.Point(580, 15)
+$lblCollectionLog.Size = New-Object System.Drawing.Size(200, 20)
+$lblCollectionLog.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblCollectionLog.ForeColor = [System.Drawing.Color]::DarkBlue
+$tab2.Controls.Add($lblCollectionLog)
+
+# DHCP Log (right side panel)
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
-$dhcpLogBox.Size = New-Object System.Drawing.Size(940, 180)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(10, 530)
+$dhcpLogBox.Size = New-Object System.Drawing.Size(380, 480)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(580, 40)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
@@ -1040,6 +1049,7 @@ $dhcpLogBox.WordWrap = $false
 $dhcpLogBox.HideSelection = $false
 $dhcpLogBox.DetectUrls = $false
 $dhcpLogBox.Multiline = $true
+$dhcpLogBox.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
 $tab2.Controls.Add($dhcpLogBox)
 
 # Event Handlers for Tab 2
