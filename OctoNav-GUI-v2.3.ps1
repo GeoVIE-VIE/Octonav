@@ -402,7 +402,7 @@ $mainForm.Text = "OctoNav v2.3 - Network Management Tool"
 $mainForm.Size = New-Object System.Drawing.Size($script:Settings.WindowSize.Width, $script:Settings.WindowSize.Height)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = "Sizable"
-$mainForm.MinimumSize = New-Object System.Drawing.Size(1000, 600)
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1260, 600)
 
 if ($script:Settings.WindowMaximized) {
     $mainForm.WindowState = "Maximized"
