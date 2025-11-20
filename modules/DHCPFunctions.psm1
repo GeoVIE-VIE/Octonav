@@ -425,18 +425,12 @@ function Get-DHCPScopeStatistics {
             }
 
             try {
-                $scriptDebug += "[SB-$ServerName] Scriptblock started"
-                $scriptDebug += "[SB-$ServerName] SelectedScopeIds: $($SelectedScopeIds.Count) items - $($SelectedScopeIds -join ', ')"
-                $scriptDebug += "[SB-$ServerName] ScopeFilters: $($ScopeFilters -join ', ')"
-                $scriptDebug += "[SB-$ServerName] IncludeDNS: $IncludeDNS"
+                $scriptDebug += "[SB-$ServerName] Processing server $ServerName"
 
                 Import-Module DhcpServer -ErrorAction Stop
-                $scriptDebug += "[SB-$ServerName] DhcpServer module imported"
 
                 # If specific scope IDs provided, use them directly
                 if ($SelectedScopeIds -and $SelectedScopeIds.Count -gt 0) {
-                    $scriptDebug += "[SB-$ServerName] Using $($SelectedScopeIds.Count) pre-selected scope ID(s)"
-
                     # Get scope metadata for the selected IDs
                     $Scopes = @()
                     foreach ($scopeId in $SelectedScopeIds) {
@@ -445,59 +439,37 @@ function Get-DHCPScopeStatistics {
                             if ($scope) {
                                 $Scopes += $scope
                             } else {
-                                $scriptDebug += "[SB-$ServerName] WARNING: ScopeId $scopeId not found on server"
+                                $scriptDebug += "[SB-$ServerName] WARNING: ScopeId $scopeId not found"
                             }
                         } catch {
-                            $scriptDebug += "[SB-$ServerName] ERROR querying scope $scopeId : $($_.Exception.Message)"
+                            $scriptDebug += "[SB-$ServerName] ERROR: $($_.Exception.Message)"
                         }
                     }
-                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) from selected IDs"
+                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s)"
                 } else {
                     # Original logic: Get all scopes then filter
-                    $scriptDebug += "[SB-$ServerName] Querying all scopes from $ServerName..."
-                    $scopeStart = Get-Date
                     $Scopes = Get-DhcpServerv4Scope -ComputerName $ServerName -ErrorAction Stop -WarningAction SilentlyContinue
-                    $scopeDuration = ((Get-Date) - $scopeStart).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s) in $([math]::Round($scopeDuration, 2))s"
+                    $scriptDebug += "[SB-$ServerName] Retrieved $(@($Scopes).Count) scope(s)"
                 }
 
                 if (-not $Scopes -or $Scopes.Count -eq 0) {
-                    $scriptDebug += "[SB-$ServerName] No scopes found on server"
+                    $scriptDebug += "[SB-$ServerName] No scopes found"
                     $ResultObject.Message = 'No scopes found on server. Check permissions or DHCP service status.'
                     $ResultObject.ScriptDebug = $scriptDebug
                     return $ResultObject
                 }
 
-                # Log all scope names and descriptions for debugging
-                $scriptDebug += "[SB-$ServerName] Scope details:"
-                foreach ($s in $Scopes) {
-                    $descText = if ($s.Description) { $s.Description } else { "(empty)" }
-                    $scriptDebug += "[SB-$ServerName]   - ScopeId: $($s.ScopeId), Name: $($s.Name), Description: $descText"
-                }
-
                 # Scope name filtering (only if not using pre-selected scopes)
                 if ((-not $SelectedScopeIds -or $SelectedScopeIds.Count -eq 0) -and ($ScopeFilters -and $ScopeFilters.Count -gt 0)) {
-                    $scriptDebug += "[SB-$ServerName] Applying filters to scope names: $($ScopeFilters -join ', ')"
                     $FilteredScopes = @()
                     foreach ($Filter in $ScopeFilters) {
                         if ([string]::IsNullOrWhiteSpace($Filter)) { continue }
                         $FilterUpper = $Filter.ToUpper()
-                        $scriptDebug += "[SB-$ServerName] Looking for names containing: '$FilterUpper'"
 
                         # Match against Name (case-insensitive partial match)
                         $MatchingScopes = $Scopes | Where-Object {
                             $name = if ($_.Name) { $_.Name.ToUpper() } else { "" }
                             $name -like "*$FilterUpper*"
-                        }
-
-                        $matchCount = @($MatchingScopes).Count
-                        if ($matchCount -gt 0) {
-                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched $matchCount scope(s)"
-                            foreach ($ms in $MatchingScopes) {
-                                $scriptDebug += "[SB-$ServerName]    - MATCH: ScopeId=$($ms.ScopeId), Name='$($ms.Name)'"
-                            }
-                        } else {
-                            $scriptDebug += "[SB-$ServerName] Filter '$Filter' matched 0 scopes"
                         }
                         $FilteredScopes += $MatchingScopes
                     }
@@ -509,21 +481,21 @@ function Get-DHCPScopeStatistics {
                         $ResultObject.ScriptDebug = $scriptDebug
                         return $ResultObject
                     }
-                    $scriptDebug += "[SB-$ServerName] After filtering: $(@($Scopes).Count) scope(s) remaining"
+                    $scriptDebug += "[SB-$ServerName] Filtered to $(@($Scopes).Count) scope(s)"
                 }
 
                 # Always use bulk query for statistics (fastest - 1 network call)
-                $scriptDebug += "[SB-$ServerName] Bulk querying statistics for all scopes on server..."
+                $scriptDebug += "[SB-$ServerName] Querying statistics..."
                 $statsStart = Get-Date
 
                 $AllStatsRaw = Get-DhcpServerv4ScopeStatistics -ComputerName $ServerName -ErrorAction Stop
                 $statsDuration = ((Get-Date) - $statsStart).TotalSeconds
-                $scriptDebug += "[SB-$ServerName] Bulk query retrieved statistics for $(@($AllStatsRaw).Count) scope(s) in $([math]::Round($statsDuration, 2))s"
+                $scriptDebug += "[SB-$ServerName] Statistics retrieved in $([math]::Round($statsDuration, 2))s"
 
                 # Optional: Build DNS server map if requested (parallel processing)
                 $DNSServerMap = @{}
                 if ($IncludeDNS) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving DNS options for $(@($Scopes).Count) scope(s) in parallel..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving DNS options..."
                     $dnsStart = Get-Date
 
                     # Use runspace pool for parallel scope processing
@@ -576,13 +548,13 @@ function Get-DHCPScopeStatistics {
                     $RunspacePool.Dispose()
 
                     $dnsDuration = ((Get-Date) - $dnsStart).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] DNS lookup completed in $([math]::Round($dnsDuration, 2))s (parallel)"
+                    $scriptDebug += "[SB-$ServerName] DNS options retrieved in $([math]::Round($dnsDuration, 2))s"
                 }
 
                 # Optional: Build Option 60 map if requested
                 $Option60Map = @{}
                 if ($IncludeOption60) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving Option 60 for $(@($Scopes).Count) scope(s) in parallel..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 60..."
                     $opt60Start = Get-Date
 
                     # Use runspace pool for parallel scope processing
@@ -634,13 +606,13 @@ function Get-DHCPScopeStatistics {
                     $RunspacePool.Dispose()
 
                     $opt60Duration = ((Get-Date) - $opt60Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 60 lookup completed in $([math]::Round($opt60Duration, 2))s - collected $($Option60Map.Count) values"
+                    $scriptDebug += "[SB-$ServerName] Option 60 retrieved in $([math]::Round($opt60Duration, 2))s - $($Option60Map.Count) values"
                 }
 
                 # Optional: Build Option 43 map if requested
                 $Option43Map = @{}
                 if ($IncludeOption43) {
-                    $scriptDebug += "[SB-$ServerName] Retrieving Option 43 for $(@($Scopes).Count) scope(s) in parallel..."
+                    $scriptDebug += "[SB-$ServerName] Retrieving Option 43..."
                     $opt43Start = Get-Date
 
                     # Use runspace pool for parallel scope processing
@@ -692,11 +664,10 @@ function Get-DHCPScopeStatistics {
                     $RunspacePool.Dispose()
 
                     $opt43Duration = ((Get-Date) - $opt43Start).TotalSeconds
-                    $scriptDebug += "[SB-$ServerName] Option 43 lookup completed in $([math]::Round($opt43Duration, 2))s - collected $($Option43Map.Count) values"
+                    $scriptDebug += "[SB-$ServerName] Option 43 retrieved in $([math]::Round($opt43Duration, 2))s - $($Option43Map.Count) values"
                 }
 
                 # Match filtered scopes with their statistics
-                $scriptDebug += "[SB-$ServerName] Matching $(@($Scopes).Count) scope(s) with statistics..."
                 $ServerStats = @()
                 foreach ($Scope in $Scopes) {
                     $Stats = $AllStatsRaw | Where-Object { $_.ScopeId -eq $Scope.ScopeId }
@@ -754,9 +725,8 @@ function Get-DHCPScopeStatistics {
 
                 # Filter out any nulls
                 $ServerStats = @($ServerStats | Where-Object { $_ -ne $null })
-                $scriptDebug += "[SB-$ServerName] Successfully matched $($ServerStats.Count) scope(s) with statistics"
+                $scriptDebug += "[SB-$ServerName] Collection complete - $($ServerStats.Count) scopes"
 
-                $scriptDebug += "[SB-$ServerName] Collection complete - returning $($ServerStats.Count) scopes"
                 $ResultObject.Success = $true
                 $ResultObject.Message = "Successfully retrieved $($ServerStats.Count) scope(s)."
                 $ResultObject.Scopes  = $ServerStats
