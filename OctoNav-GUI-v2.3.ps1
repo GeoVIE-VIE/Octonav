@@ -1032,7 +1032,7 @@ $dhcpActionsGroupBox.Controls.Add($lblExportHint)
 # Collection Log Label (right side)
 $lblCollectionLog = New-Object System.Windows.Forms.Label
 $lblCollectionLog.Text = "Collection Log"
-$lblCollectionLog.Location = New-Object System.Drawing.Point(580, 15)
+$lblCollectionLog.Location = New-Object System.Drawing.Point(600, 15)
 $lblCollectionLog.Size = New-Object System.Drawing.Size(200, 20)
 $lblCollectionLog.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $lblCollectionLog.ForeColor = [System.Drawing.Color]::DarkBlue
@@ -1040,8 +1040,8 @@ $tab2.Controls.Add($lblCollectionLog)
 
 # DHCP Log (right side panel)
 $dhcpLogBox = New-Object System.Windows.Forms.RichTextBox
-$dhcpLogBox.Size = New-Object System.Drawing.Size(380, 480)
-$dhcpLogBox.Location = New-Object System.Drawing.Point(580, 40)
+$dhcpLogBox.Size = New-Object System.Drawing.Size(320, 480)
+$dhcpLogBox.Location = New-Object System.Drawing.Point(600, 40)
 $dhcpLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dhcpLogBox.ReadOnly = $true
 $dhcpLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
@@ -1151,7 +1151,7 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: checkedServers array contents: $($checkedServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: checkedServers count: $($checkedServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-        $specificServers = @($checkedServers) + @($manualServers) | Select-Object -Unique
+        $specificServers = @($checkedServers) + @($manualServers) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 
         Write-Log -Message "DEBUG: specificServers after combine: $($specificServers -join ' | ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: specificServers count: $($specificServers.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme

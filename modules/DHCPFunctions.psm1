@@ -235,6 +235,9 @@ function Get-DHCPScopeStatistics {
 
             $validServers = @()
             foreach ($server in $SpecificServers) {
+                # Skip null entries
+                if ($null -eq $server) { continue }
+
                 $trimmedServer = $server.Trim()
                 if ([string]::IsNullOrWhiteSpace($trimmedServer)) { continue }
 
