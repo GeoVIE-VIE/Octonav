@@ -8,6 +8,18 @@
 #>
 
 # ============================================
+# LOAD REQUIRED ASSEMBLIES
+# ============================================
+
+# Load System.Security for DPAPI (ProtectedData class)
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+}
+catch {
+    throw "Failed to load System.Security assembly required for DPAPI encryption: $($_.Exception.Message)"
+}
+
+# ============================================
 # CONFIGURATION
 # ============================================
 
