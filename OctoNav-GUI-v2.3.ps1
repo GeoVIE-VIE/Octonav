@@ -1301,9 +1301,9 @@ $btnCollectDHCP.Add_Click({
             Write-Log -Message "No specific servers selected - will query all domain servers" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         }
 
-        $includeDNS = $chkIncludeDNS.Checked
-        $includeOption60 = $chkIncludeOption60.Checked
-        $includeOption43 = $chkIncludeOption43.Checked
+        $script:includeDNS = $chkIncludeDNS.Checked
+        $script:includeOption60 = $chkIncludeOption60.Checked
+        $script:includeOption43 = $chkIncludeOption43.Checked
 
         # Call DHCP collection function in background to keep UI responsive
         Write-Log -Message "Starting DHCP statistics collection in background..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
@@ -1311,9 +1311,9 @@ $btnCollectDHCP.Add_Click({
         # Log what we're passing to the background operation
         Write-Log -Message "DEBUG: Scope filters: $($scopeFilters.Count) items" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: Specific servers: $($specificServers.Count) items - $($specificServers -join ', ')" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        Write-Log -Message "DEBUG: Include DNS: $includeDNS" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        Write-Log -Message "DEBUG: Include Option 60: $includeOption60" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        Write-Log -Message "DEBUG: Include Option 43: $includeOption43" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include DNS: $($script:includeDNS)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include Option 60: $($script:includeOption60)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Include Option 43: $($script:includeOption43)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
@@ -1432,7 +1432,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $includeDNS, $includeOption60, $includeOption43, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
+        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $script:includeDNS, $script:includeOption60, $script:includeOption43, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
@@ -1551,17 +1551,17 @@ $btnCollectDHCP.Add_Click({
                     if ($dataToExport.Count -gt 0) {
                         $firstItem = $dataToExport[0]
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'DNSServers') -and $includeDNS) {
+                        if (($firstItem.PSObject.Properties.Name -contains 'DNSServers') -and $script:includeDNS) {
                             $exportColumns += 'DNSServers'
                             Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'Option60') -and $includeOption60) {
+                        if (($firstItem.PSObject.Properties.Name -contains 'Option60') -and $script:includeOption60) {
                             $exportColumns += 'Option60'
                             Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
 
-                        if (($firstItem.PSObject.Properties.Name -contains 'Option43') -and $includeOption43) {
+                        if (($firstItem.PSObject.Properties.Name -contains 'Option43') -and $script:includeOption43) {
                             $exportColumns += 'Option43'
                             Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
