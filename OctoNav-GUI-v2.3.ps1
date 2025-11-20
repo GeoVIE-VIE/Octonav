@@ -1703,21 +1703,33 @@ $script:lstDHCPScopes.Add_ItemCheck({
                 $checkedScope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $checkedDisplayName } | Select-Object -First 1
 
                 if ($checkedScope -and -not [string]::IsNullOrWhiteSpace($checkedScope.ScopeId)) {
+                    # Build a map of visible items for faster lookup (only search filtered list)
+                    $visibleScopeMap = @{}
+                    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+                        $item = $script:lstDHCPScopes.Items[$i]
+                        if ($item) {
+                            $displayName = $item.ToString()
+                            $scope = $script:allDHCPScopes | Where-Object { $_.DisplayName -eq $displayName } | Select-Object -First 1
+                            if ($scope) {
+                                $visibleScopeMap[$i] = $scope
+                            }
+                        }
+                    }
+
                     # Capture all needed variables for the closure
                     $targetScopeId = $checkedScope.ScopeId
                     $checkedIndex = $e.Index
-                    $allScopesSnapshot = $script:allDHCPScopes
                     $listBox = $script:lstDHCPScopes
 
                     # Log for debugging
-                    Write-Log -Message "Auto-select: Looking for scopes with ScopeId=$targetScopeId" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "Auto-select: Looking for scopes with ScopeId=$targetScopeId (searching $($visibleScopeMap.Count) visible items)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
-                    # Set flag to prevent infinite recursion
+                    # Set flag to prevent infinite recursion from the auto-select triggering itself
                     $script:isAutoSelecting = $true
 
                     # Use a timer to defer the selection until after this event completes
                     $autoSelectTimer = New-Object System.Windows.Forms.Timer
-                    $autoSelectTimer.Interval = 10
+                    $autoSelectTimer.Interval = 5  # Reduced from 10ms to 5ms for faster response
                     $autoSelectTimer.Add_Tick({
                         try {
                             # Validate controls still exist
@@ -1725,24 +1737,18 @@ $script:lstDHCPScopes.Add_ItemCheck({
                                 return
                             }
 
-                            if (-not $allScopesSnapshot -or $allScopesSnapshot.Count -eq 0) {
+                            if (-not $visibleScopeMap -or $visibleScopeMap.Count -eq 0) {
                                 return
                             }
 
                             $matchCount = 0
-                            # Find all scopes with the same ScopeId and check them
-                            for ($i = 0; $i -lt $listBox.Items.Count; $i++) {
-                                if ($i -ne $checkedIndex -and -not $listBox.GetItemChecked($i)) {
-                                    $item = $listBox.Items[$i]
-                                    if (-not $item) {
-                                        continue
-                                    }
+                            # Find all scopes with the same ScopeId and check them - only search visible items
+                            foreach ($index in $visibleScopeMap.Keys) {
+                                if ($index -ne $checkedIndex -and -not $listBox.GetItemChecked($index)) {
+                                    $scope = $visibleScopeMap[$index]
 
-                                    $itemDisplayName = $item.ToString()
-                                    $itemScope = $allScopesSnapshot | Where-Object { $_.DisplayName -eq $itemDisplayName } | Select-Object -First 1
-
-                                    if ($itemScope -and $itemScope.ScopeId -eq $targetScopeId) {
-                                        $listBox.SetItemChecked($i, $true)
+                                    if ($scope -and $scope.ScopeId -eq $targetScopeId) {
+                                        $listBox.SetItemChecked($index, $true)
                                         $matchCount++
                                     }
                                 }
@@ -1751,6 +1757,8 @@ $script:lstDHCPScopes.Add_ItemCheck({
                             # Log results
                             if ($matchCount -gt 0) {
                                 Write-Log -Message "Auto-select: Selected $matchCount additional scope(s) with matching ScopeId" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                            } else {
+                                Write-Log -Message "Auto-select: No additional scopes found with ScopeId=$targetScopeId" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                             }
                         } catch {
                             # Log error for debugging
