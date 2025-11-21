@@ -23,6 +23,11 @@ catch {
 # CONFIGURATION
 # ============================================
 
+# TEAM DEPLOYMENT SETTINGS
+# Set to $false to disable startup password for easy team sharing
+# DHCP cache encryption will still be enforced (shareable with password)
+$script:RequireStartupPassword = $false
+
 $script:SecurityConfigFile = Join-Path $PSScriptRoot "..\config\security.dat"
 $script:AuditLogFile = Join-Path $PSScriptRoot "..\logs\security_audit.log"
 $script:MaxFailedAttempts = 3
@@ -129,7 +134,11 @@ function Test-PasswordComplexity {
 function Protect-WithDPAPI {
     <#
     .SYNOPSIS
-        Encrypts data using Windows DPAPI (current user scope)
+        Encrypts data using Windows DPAPI (machine scope for team sharing)
+    .DESCRIPTION
+        Uses LocalMachine scope instead of CurrentUser to allow all users
+        on the same machine to share the same encrypted configuration.
+        This enables team deployment where everyone uses the same password.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -141,7 +150,7 @@ function Protect-WithDPAPI {
         $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
             $bytes,
             $null,
-            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
         return [Convert]::ToBase64String($encrypted)
     }
@@ -153,7 +162,10 @@ function Protect-WithDPAPI {
 function Unprotect-WithDPAPI {
     <#
     .SYNOPSIS
-        Decrypts data using Windows DPAPI
+        Decrypts data using Windows DPAPI (machine scope for team sharing)
+    .DESCRIPTION
+        Uses LocalMachine scope to match Protect-WithDPAPI.
+        Allows any user on the same machine to decrypt the configuration.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -165,7 +177,7 @@ function Unprotect-WithDPAPI {
         $decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect(
             $encrypted,
             $null,
-            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
         return [System.Text.Encoding]::UTF8.GetString($decrypted)
     }
@@ -727,6 +739,21 @@ Please try again later.
 }
 
 # ============================================
+# STARTUP PASSWORD REQUIREMENT CHECK
+# ============================================
+
+function Test-StartupPasswordRequired {
+    <#
+    .SYNOPSIS
+        Checks if startup password authentication is required
+    .DESCRIPTION
+        Returns the value of $script:RequireStartupPassword configuration.
+        Set to $false for team deployments where easy sharing is needed.
+    #>
+    return $script:RequireStartupPassword
+}
+
+# ============================================
 # EXPORTS
 # ============================================
 
@@ -736,6 +763,7 @@ Export-ModuleMember -Function @(
     'Protect-WithDPAPI',
     'Unprotect-WithDPAPI',
     'Test-StartupPasswordExists',
+    'Test-StartupPasswordRequired',
     'Set-StartupPassword',
     'Test-StartupPassword',
     'Show-StartupPasswordDialog',

@@ -2768,44 +2768,53 @@ try {
 # ============================================
 
 try {
-    # Check if startup password exists
-    $passwordExists = Test-StartupPasswordExists
+    # Check if startup password is required (team deployment setting)
+    $passwordRequired = Test-StartupPasswordRequired
 
-    if ($passwordExists) {
-        # Prompt for password
-        Write-SecurityAudit -Level Info -Event "OctoNav startup" -Details "Password authentication required"
+    if ($passwordRequired) {
+        # Startup password enabled - authenticate user
+        $passwordExists = Test-StartupPasswordExists
 
-        $authenticated = Show-StartupPasswordDialog -IsFirstRun:$false
+        if ($passwordExists) {
+            # Prompt for password
+            Write-SecurityAudit -Level Info -Event "OctoNav startup" -Details "Password authentication required"
 
-        if (-not $authenticated) {
-            Write-SecurityAudit -Level Warning -Event "Authentication failed or cancelled" -Details "Application exit"
-            exit 0
+            $authenticated = Show-StartupPasswordDialog -IsFirstRun:$false
+
+            if (-not $authenticated) {
+                Write-SecurityAudit -Level Warning -Event "Authentication failed or cancelled" -Details "Application exit"
+                exit 0
+            }
+
+            Write-SecurityAudit -Level Success -Event "Authentication successful" -Details "OctoNav starting"
+        }
+        else {
+            # First run - set up startup password
+            Write-SecurityAudit -Level Info -Event "First run detected" -Details "Setting up startup password"
+
+            $passwordSet = Show-StartupPasswordDialog -IsFirstRun:$true
+
+            if (-not $passwordSet) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Startup password is required for security.`n`nOctoNav will now exit.",
+                    "Password Required",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+                Write-SecurityAudit -Level Warning -Event "First run - password not set" -Details "Application exit"
+                exit 0
+            }
+
+            Write-SecurityAudit -Level Success -Event "First run - password configured" -Details "OctoNav starting"
         }
 
-        Write-SecurityAudit -Level Success -Event "Authentication successful" -Details "OctoNav starting"
+        # Start session monitoring for auto-lock (only if password required)
+        Start-SessionMonitor -Form $mainForm
     }
     else {
-        # First run - set up startup password
-        Write-SecurityAudit -Level Info -Event "First run detected" -Details "Setting up startup password"
-
-        $passwordSet = Show-StartupPasswordDialog -IsFirstRun:$true
-
-        if (-not $passwordSet) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Startup password is required for security.`n`nOctoNav will now exit.",
-                "Password Required",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            Write-SecurityAudit -Level Warning -Event "First run - password not set" -Details "Application exit"
-            exit 0
-        }
-
-        Write-SecurityAudit -Level Success -Event "First run - password configured" -Details "OctoNav starting"
+        # Team deployment mode - no startup password required
+        Write-SecurityAudit -Level Info -Event "OctoNav startup" -Details "Team mode - no startup password"
     }
-
-    # Start session monitoring for auto-lock
-    Start-SessionMonitor -Form $mainForm
 }
 catch {
     [System.Windows.Forms.MessageBox]::Show(
