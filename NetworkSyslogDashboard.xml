@@ -69,7 +69,7 @@
           1==1, "unknown"
         )
       | where if("$vendor$"="*", 1=1, vendor_detected="$vendor$")
-      | rex field=_raw "%(?&lt;facility_code&gt;[A-Z][A-Z0-9_]*)-(?&lt;sev_code&gt;[0-7])-(?&lt;mnemonic&gt;[A-Z0-9_]+)"
+      | rex field=_raw "(?&lt;facility_code&gt;[A-Z][A-Z0-9_]*)-(?&lt;sev_code&gt;[0-7])-(?&lt;mnemonic&gt;[A-Z0-9_]+)"
       | eval sev_num=coalesce(tonumber(sev_code), if(isnum(pri), pri%8, null()))
       | eval facility_num=if(isnum(pri), floor(pri/8), null())
       | where if("$severity$"="*", 1=1, sev_num=$severity$)
