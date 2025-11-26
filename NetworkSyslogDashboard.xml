@@ -62,11 +62,10 @@
       | rex field=_raw "^&lt;(?&lt;pri&gt;\d+)&gt;"
       | eval pri=tonumber(pri)
       | eval vendor_detected=case(
-          match(_raw, "%[A-Z_]+-[0-7]-[A-Z_]+:") AND match(host, "(?i)^SW-|^RTR-|cisco|ios"), "cisco",
-          match(_raw, "%[A-Z_]+-[0-7]-[A-Z_]+:") AND match(host, "(?i)FCX|ICX|VDX|brocade"), "brocade",
+          match(host, "(?i)^(SW-|RTR-|cisco|ios)"), "cisco",
+          match(host, "(?i)(FCX|ICX|VDX|brocade)"), "brocade",
           match(_raw, "%(LINK|SPANTREE|SYS|SEC_LOGIN|OSPF|EIGRP|BGP|HSRP|CDP|LINEPROTO)-"), "cisco",
           match(_raw, "%(ACL|SECURITY|LACP|LLDP)-"), "brocade",
-          isnotnull(vendor), vendor,
           1==1, "unknown"
         )
       | where if("$vendor$"="*", 1=1, vendor_detected="$vendor$")
