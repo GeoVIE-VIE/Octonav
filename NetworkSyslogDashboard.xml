@@ -1,0 +1,1034 @@
+<form version="1.1" theme="dark">
+  <label>Network Syslog Intelligence Center</label>
+  <description>Comprehensive monitoring for Cisco and Brocade network infrastructure | Real-time syslog analysis and alerting</description>
+
+  <!-- GLOBAL FILTERS -->
+  <fieldset submitButton="true" autoRun="true">
+    <input type="time" token="time_range" searchWhenChanged="true">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="vendor" searchWhenChanged="true">
+      <label>Vendor</label>
+      <choice value="*">All Vendors</choice>
+      <choice value="cisco">Cisco</choice>
+      <choice value="brocade">Brocade</choice>
+      <default>*</default>
+    </input>
+    <input type="dropdown" token="severity" searchWhenChanged="true">
+      <label>Severity</label>
+      <choice value="*">All Severities</choice>
+      <choice value="0">Emergency (0)</choice>
+      <choice value="1">Alert (1)</choice>
+      <choice value="2">Critical (2)</choice>
+      <choice value="3">Error (3)</choice>
+      <choice value="4">Warning (4)</choice>
+      <choice value="5">Notice (5)</choice>
+      <choice value="6">Informational (6)</choice>
+      <choice value="7">Debug (7)</choice>
+      <default>*</default>
+    </input>
+    <input type="text" token="device_filter" searchWhenChanged="true">
+      <label>Device Filter</label>
+      <default>*</default>
+      <prefix>host=</prefix>
+    </input>
+    <input type="dropdown" token="facility" searchWhenChanged="true">
+      <label>Facility</label>
+      <choice value="*">All Facilities</choice>
+      <choice value="0">Kernel (0)</choice>
+      <choice value="1">User (1)</choice>
+      <choice value="4">Auth (4)</choice>
+      <choice value="10">Security (10)</choice>
+      <choice value="16">Local0 (16)</choice>
+      <choice value="17">Local1 (17)</choice>
+      <choice value="18">Local2 (18)</choice>
+      <choice value="19">Local3 (19)</choice>
+      <choice value="20">Local4 (20)</choice>
+      <choice value="21">Local5 (21)</choice>
+      <choice value="22">Local6 (22)</choice>
+      <choice value="23">Local7 (23)</choice>
+      <default>*</default>
+    </input>
+  </fieldset>
+
+  <!-- BASE SEARCH FOR PERFORMANCE -->
+  <search id="base_syslog">
+    <query>
+      index=network_syslog $device_filter$
+      | rex field=_raw "^&lt;(?&lt;pri&gt;\d+)&gt;"
+      | eval pri=tonumber(pri)
+      | eval vendor_detected=case(
+          match(_raw, "%[A-Z_]+-[0-7]-[A-Z_]+:") AND match(host, "(?i)^SW-|^RTR-|cisco|ios"), "cisco",
+          match(_raw, "%[A-Z_]+-[0-7]-[A-Z_]+:") AND match(host, "(?i)FCX|ICX|VDX|brocade"), "brocade",
+          match(_raw, "%(LINK|SPANTREE|SYS|SEC_LOGIN|OSPF|EIGRP|BGP|HSRP|CDP|LINEPROTO)-"), "cisco",
+          match(_raw, "%(ACL|SECURITY|LACP|LLDP)-"), "brocade",
+          isnotnull(vendor), vendor,
+          1==1, "unknown"
+        )
+      | where if("$vendor$"="*", 1=1, vendor_detected="$vendor$")
+      | rex field=_raw "%(?&lt;facility_code&gt;[A-Z][A-Z0-9_]*)-(?&lt;sev_code&gt;[0-7])-(?&lt;mnemonic&gt;[A-Z0-9_]+)"
+      | eval sev_num=coalesce(tonumber(sev_code), if(isnum(pri), pri%8, null()))
+      | eval facility_num=if(isnum(pri), floor(pri/8), null())
+      | where if("$severity$"="*", 1=1, sev_num=$severity$)
+      | where if("$facility$"="*", 1=1, facility_num=$facility$)
+    </query>
+    <earliest>$time_range.earliest$</earliest>
+    <latest>$time_range.latest$</latest>
+  </search>
+
+  <!-- GLOBAL STYLES -->
+  <row>
+    <panel>
+      <html>
+        <style>
+          /* Dashboard Theme Overrides */
+          .dashboard-body {
+            background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%) !important;
+          }
+
+          /* Panel Styling */
+          .dashboard-panel {
+            background: rgba(26, 26, 46, 0.8) !important;
+            border: 1px solid rgba(99, 102, 241, 0.3) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3),
+                        0 0 60px rgba(99, 102, 241, 0.1) !important;
+            backdrop-filter: blur(10px) !important;
+            margin: 8px !important;
+            overflow: hidden !important;
+          }
+
+          .dashboard-panel:hover {
+            border-color: rgba(99, 102, 241, 0.6) !important;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4),
+                        0 0 80px rgba(99, 102, 241, 0.2) !important;
+            transform: translateY(-2px);
+            transition: all 0.3s ease !important;
+          }
+
+          /* Panel Headers */
+          .panel-title {
+            font-family: 'Inter', 'Segoe UI', sans-serif !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            color: #e2e8f0 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 1.5px !important;
+            padding: 16px 20px !important;
+            background: linear-gradient(90deg, rgba(99, 102, 241, 0.2), transparent) !important;
+            border-bottom: 1px solid rgba(99, 102, 241, 0.2) !important;
+          }
+
+          /* Single Value Panels */
+          .single-value {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+          }
+
+          .single-value .single-result {
+            font-size: 48px !important;
+            font-weight: 700 !important;
+          }
+
+          /* Chart Styling */
+          .highcharts-background {
+            fill: transparent !important;
+          }
+
+          .dashboard-body .highcharts-container text,
+          .dashboard-body .highcharts-axis-labels text,
+          .dashboard-body .highcharts-title,
+          .dashboard-body .highcharts-subtitle,
+          .dashboard-body .highcharts-legend-item text,
+          .dashboard-body .highcharts-data-label text {
+            fill: #e2e8f0 !important;
+            color: #e2e8f0 !important;
+          }
+
+          /* Table Styling */
+          .table-chrome {
+            background: transparent !important;
+          }
+
+          .shared-tableview .table th,
+          .table-chrome th {
+            background: rgba(15, 23, 42, 0.95) !important;
+            color: #a5b4fc !important;
+            font-weight: 600 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 1px !important;
+            font-size: 11px !important;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.35) !important;
+          }
+
+          .shared-tableview .table,
+          .shared-tableview .table tbody tr,
+          .shared-tableview .table tbody td,
+          .table-chrome td {
+            background: transparent !important;
+            color: #e2e8f0 !important;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.9) !important;
+          }
+
+          .shared-tableview .table tbody tr:nth-child(odd) td {
+            background: rgba(15, 23, 42, 0.9) !important;
+          }
+
+          .shared-tableview .table tbody tr:nth-child(even) td {
+            background: rgba(17, 24, 39, 0.9) !important;
+          }
+
+          .shared-tableview .table tbody tr:hover td,
+          .shared-tableview .table tbody tr.rowSelected td,
+          .table-chrome tr:hover td {
+            background: rgba(99, 102, 241, 0.25) !important;
+          }
+
+          .shared-tableview,
+          .shared-tableview .table,
+          .shared-tableview .table td,
+          .shared-tableview .table th,
+          .shared-tableview .table tbody td,
+          .shared-tableview .table tbody th,
+          .shared-tableview .table thead th,
+          .shared-tableview .pagination,
+          .shared-tableview .table-row-highlight,
+          .shared-tableview .table-cell,
+          .dashboard-body .table-chrome,
+          .dashboard-body .table-chrome td,
+          .dashboard-body .table-chrome th {
+            color: #e2e8f0 !important;
+          }
+
+          .shared-tableview .table tbody tr td.row-number {
+            color: #e2e8f0 !important;
+          }
+
+          .shared-tableview .sort-header,
+          .shared-tableview .sort-header i {
+            color: #e2e8f0 !important;
+          }
+
+          .shared-tableview .pager,
+          .shared-tableview .pager a,
+          .shared-tableview .pager span {
+            color: #e2e8f0 !important;
+          }
+
+          .dashboard-body .table td,
+          .dashboard-body .table th {
+            color: #e2e8f0 !important;
+          }
+
+          /* Input Styling */
+          .input {
+            margin: 0 10px !important;
+          }
+
+          .input label {
+            color: #a5b4fc !important;
+            font-weight: 500 !important;
+            text-transform: uppercase !important;
+            font-size: 11px !important;
+            letter-spacing: 1px !important;
+          }
+
+          /* Dashboard Header */
+          .dashboard-header {
+            background: linear-gradient(90deg, rgba(99, 102, 241, 0.3), rgba(139, 92, 246, 0.3)) !important;
+            border-bottom: 2px solid rgba(99, 102, 241, 0.5) !important;
+            padding: 20px !important;
+          }
+
+          .dashboard-header h1 {
+            font-size: 28px !important;
+            font-weight: 700 !important;
+            background: linear-gradient(90deg, #818cf8, #c084fc) !important;
+            -webkit-background-clip: text !important;
+            -webkit-text-fill-color: transparent !important;
+          }
+
+          /* Severity Colors */
+          .severity-critical { color: #ef4444 !important; font-weight: 700 !important; }
+          .severity-high     { color: #f97316 !important; font-weight: 600 !important; }
+          .severity-medium   { color: #eab308 !important; }
+          .severity-low      { color: #22c55e !important; }
+          .severity-info     { color: #3b82f6 !important; }
+
+          /* Vendor Colors */
+          .vendor-cisco   { color: #00bceb !important; }
+          .vendor-brocade { color: #ff6b35 !important; }
+
+          /* Scrollbar */
+          ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+          }
+          ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+          }
+          ::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.5);
+            border-radius: 4px;
+          }
+          ::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.7);
+          }
+        </style>
+      </html>
+    </panel>
+  </row>
+
+  <!-- KPI METRICS ROW -->
+  <row>
+    <panel>
+      <title>Total Events</title>
+      <single>
+        <search base="base_syslog">
+          <query>| stats count as total_events</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#1e40af","#3b82f6"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trendDisplayMode">percent</option>
+        <option name="underLabel">TOTAL SYSLOG EVENTS</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Critical/Emergency</title>
+      <single>
+        <search base="base_syslog">
+          <query>| where sev_num &lt;= 1 | stats count as critical_count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#22c55e","#eab308","#ef4444"]</option>
+        <option name="rangeValues">[5,20]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="underLabel">IMMEDIATE ATTENTION</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Errors</title>
+      <single>
+        <search base="base_syslog">
+          <query>| where sev_num == 3 | stats count as error_count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#22c55e","#f97316","#ef4444"]</option>
+        <option name="rangeValues">[10,50]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="underLabel">ERROR LEVEL</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Warnings</title>
+      <single>
+        <search base="base_syslog">
+          <query>| where sev_num == 4 | stats count as warning_count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#22c55e","#eab308"]</option>
+        <option name="rangeValues">[50]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="underLabel">WARNING LEVEL</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Active Devices</title>
+      <single>
+        <search base="base_syslog">
+          <query>| stats dc(host) as device_count</query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#6366f1","#8b5cf6"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="underLabel">REPORTING DEVICES</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Events/Minute</title>
+      <single>
+        <search base="base_syslog">
+          <query>
+            | stats count as total earliest(_time) as earliest_time latest(_time) as latest_time
+            | eval time_span_min = (latest_time - earliest_time) / 60
+            | eval events_per_min = if(time_span_min &gt; 0, round(total / time_span_min, 2), total)
+            | fields events_per_min
+          </query>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="drilldown">none</option>
+        <option name="rangeColors">["#14b8a6","#06b6d4"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="underLabel">AVG RATE</option>
+        <option name="useColors">1</option>
+        <option name="numberPrecision">0.00</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- TREND AND DISTRIBUTION -->
+  <row>
+    <panel>
+      <title>Event Timeline by Severity</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | eval severity_label = case(
+                sev_num==0, "0-Emergency",
+                sev_num==1, "1-Alert",
+                sev_num==2, "2-Critical",
+                sev_num==3, "3-Error",
+                sev_num==4, "4-Warning",
+                sev_num==5, "5-Notice",
+                sev_num==6, "6-Info",
+                sev_num==7, "7-Debug",
+                1==1, "Unknown"
+              )
+            | timechart span=10m count by severity_label
+          </query>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY.text">Event Count</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.backgroundColor">transparent</option>
+        <option name="charting.seriesColors">[#ef4444,#f97316,#dc2626,#f87171,#eab308,#22c55e,#3b82f6,#6b7280]</option>
+        <option name="height">350</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Vendor Distribution</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | stats count by vendor_detected
+            | sort -count
+            | rename vendor_detected as Vendor
+          </query>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.chart.showPercent">1</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.seriesColors">[#00bceb,#ff6b35,#6366f1]</option>
+        <option name="height">350</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- CISCO SECTION HEADER -->
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(90deg, rgba(0,188,235,0.3), transparent); padding: 12px 20px; border-left: 4px solid #00bceb; border-radius: 0 8px 8px 0; margin: -10px -10px 10px -10px;">
+          <h2 style="margin: 0; color: #00bceb; font-size: 18px; font-weight: 600;">
+            Cisco Network Intelligence
+          </h2>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- CISCO PANELS -->
+  <row>
+    <panel>
+      <title>Cisco Mnemonic Breakdown</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="cisco"
+            | where isnotnull(mnemonic)
+            | stats count by mnemonic
+            | sort -count
+            | head 15
+          </query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.showDataLabels">all</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.seriesColors">[#00bceb]</option>
+        <option name="height">400</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Cisco Facility Codes</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="cisco"
+            | where isnotnull(facility_code)
+            | stats count by facility_code
+            | sort -count
+            | head 12
+          </query>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.chart.showPercent">1</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.seriesColors">[#00bceb,#0891b2,#06b6d4,#22d3ee,#67e8f9,#a5f3fc,#0284c7,#0369a1,#075985,#0c4a6e,#164e63,#155e75]</option>
+        <option name="height">400</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Cisco Interface Events</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="cisco"
+            | rex field=_raw "(?i)(?&lt;interface&gt;(?:GigabitEthernet|TenGigabitEthernet|FastEthernet|Ethernet|Port-channel|Vlan|Loopback|Tunnel|Serial|Gi|Te|Fa|Et|Po|Vl|Lo|Tu|Se)\s*\d+(?:/\d+)*(?:\.\d+)?)"
+            | where isnotnull(interface)
+            | stats count as Events latest(_time) as Last_Seen by host interface
+            | eval Last_Seen=strftime(Last_Seen, "%Y-%m-%d %H:%M:%S")
+            | sort -Events
+            | head 20
+            | rename host as "Device" interface as "Interface" Events as "Event Count" Last_Seen as "Last Activity"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">false</option>
+        <format type="color" field="Event Count">
+          <colorPalette type="minMidMax" minColor="#22c55e" midColor="#eab308" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="0" midValue="50"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- BROCADE SECTION HEADER -->
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(90deg, rgba(255,107,53,0.3), transparent); padding: 12px 20px; border-left: 4px solid #ff6b35; border-radius: 0 8px 8px 0; margin: -10px -10px 10px -10px;">
+          <h2 style="margin: 0; color: #ff6b35; font-size: 18px; font-weight: 600;">
+            Brocade Network Intelligence
+          </h2>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- BROCADE PANELS -->
+  <row>
+    <panel>
+      <title>Brocade Event Categories</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="brocade"
+            | where isnotnull(facility_code)
+            | stats count by facility_code
+            | sort -count
+            | rename facility_code as Category
+          </query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.showDataLabels">all</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.seriesColors">[#ff6b35]</option>
+        <option name="height">400</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Brocade Mnemonic Types</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="brocade"
+            | where isnotnull(mnemonic)
+            | stats count by mnemonic
+            | sort -count
+            | head 12
+          </query>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.chart.showPercent">1</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.seriesColors">[#ff6b35,#fb923c,#fdba74,#fed7aa,#ea580c,#c2410c,#9a3412,#7c2d12,#f97316,#fb7185,#fda4af,#fecdd3]</option>
+        <option name="height">400</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Brocade Interface Events</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | where vendor_detected="brocade"
+            | rex field=_raw "(?i)(?:interface|port)\s+(?&lt;brocade_interface&gt;ethernet\s+\d+/\d+/\d+|\d+/\d+/\d+|\d+/\d+)"
+            | where isnotnull(brocade_interface)
+            | stats count as Occurrences latest(_time) as Last_Seen by host brocade_interface mnemonic
+            | eval Last_Seen=strftime(Last_Seen, "%Y-%m-%d %H:%M:%S")
+            | sort -Occurrences
+            | head 15
+            | rename host as "Device" brocade_interface as "Interface" mnemonic as "Event Type" Last_Seen as "Last Detected"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="Occurrences">
+          <colorPalette type="minMidMax" minColor="#22c55e" midColor="#eab308" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="0" midValue="20"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- SECURITY & AUTH EVENTS HEADER -->
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(90deg, rgba(239,68,68,0.3), transparent); padding: 12px 20px; border-left: 4px solid #ef4444; border-radius: 0 8px 8px 0; margin: -10px -10px 10px -10px;">
+          <h2 style="margin: 0; color: #ef4444; font-size: 18px; font-weight: 600;">
+            Security and Authentication Events
+          </h2>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- SECURITY & AUTH PANELS -->
+  <row>
+    <panel>
+      <title>Authentication Timeline</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | rex field=_raw "(?i)(?&lt;auth_action&gt;LOGIN_SUCCESS|LOGIN_FAILED|login|logout|authentication|authorized|unauthorized|denied|accepted|rejected|failed|success)"
+            | where isnotnull(auth_action)
+            | eval auth_result=case(
+                match(auth_action, "(?i)LOGIN_SUCCESS|success|accepted|authorized|login"), "Success",
+                match(auth_action, "(?i)LOGIN_FAILED|failed|denied|rejected|unauthorized"), "Failed",
+                match(auth_action, "(?i)logout"), "Logout",
+                1==1, "Other"
+              )
+            | timechart span=30m count by auth_result
+          </query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY.text">Event Count</option>
+        <option name="charting.seriesColors">[#22c55e,#ef4444,#3b82f6,#6b7280]</option>
+        <option name="height">300</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Failed Login Attempts</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | search (failed OR denied OR rejected OR unauthorized OR "LOGIN_FAILED" OR "authentication failure")
+            | rex field=_raw "(?i)(?:Source|from|src|ip)[:\s\[\]]+(?&lt;source_ip&gt;\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
+            | rex field=_raw "(?i)user[:\s\[\]]+(?&lt;username&gt;[a-zA-Z0-9_\-\.]+)"
+            | eval source_ip=coalesce(source_ip, "Unknown")
+            | eval username=coalesce(username, "Unknown")
+            | stats count as Attempts values(username) as Usernames latest(_time) as Last_Attempt by host source_ip
+            | eval Last_Attempt=strftime(Last_Attempt, "%Y-%m-%d %H:%M:%S")
+            | eval Threat_Level=case(
+                Attempts&gt;=20, "HIGH",
+                Attempts&gt;=10, "MEDIUM",
+                Attempts&gt;=5, "LOW",
+                1==1, "INFO"
+              )
+            | sort -Attempts
+            | head 15
+            | rename host as "Target Device" source_ip as "Source IP" Attempts as "Failed Attempts" Usernames as "Attempted Users" Last_Attempt as "Last Seen" Threat_Level as "Risk"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="Failed Attempts">
+          <colorPalette type="minMidMax" minColor="#22c55e" midColor="#eab308" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="1" midValue="10"></scale>
+        </format>
+        <format type="color" field="Risk">
+          <colorPalette type="map">{"HIGH":#ef4444,"MEDIUM":#f97316,"LOW":#eab308,"INFO":#3b82f6}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Configuration Changes</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | search (CONFIG* OR "configuration" OR "Configured from" OR "commit" OR "save" OR "write mem")
+            | rex field=_raw "(?i)(?:by|user)[:\s]+(?&lt;config_user&gt;[a-zA-Z0-9_\-\.]+)"
+            | rex field=_raw "(?i)(?:from|on|via)\s+(?:vty\d+\s+)?[\(\[]?(?&lt;config_source&gt;\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\)\]]?"
+            | eval config_user=coalesce(config_user, "Unknown")
+            | eval config_source=coalesce(config_source, "Console/Local")
+            | table _time host config_user config_source _raw
+            | sort -_time
+            | head 25
+            | eval _time=strftime(_time, "%Y-%m-%d %H:%M:%S")
+            | rename _time as "Timestamp" host as "Device" config_user as "User" config_source as "Source" _raw as "Event Details"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- DEVICE ANALYTICS & HEALTH HEADER -->
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(90deg, rgba(139,92,246,0.3), transparent); padding: 12px 20px; border-left: 4px solid #8b5cf6; border-radius: 0 8px 8px 0; margin: -10px -10px 10px -10px;">
+          <h2 style="margin: 0; color: #8b5cf6; font-size: 18px; font-weight: 600;">
+            Device Analytics and Health
+          </h2>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- DEVICE ANALYTICS -->
+  <row>
+    <panel>
+      <title>Top 15 Event Generators</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | stats count by host
+            | sort -count
+            | head 15
+          </query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.showDataLabels">all</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.seriesColors">[#8b5cf6]</option>
+        <option name="height">400</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Device Health Matrix</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | stats count as Total_Events
+                    sum(eval(if(sev_num&lt;=2,1,0))) as Critical
+                    sum(eval(if(sev_num==3,1,0))) as Errors
+                    sum(eval(if(sev_num==4,1,0))) as Warnings
+                    max(_time) as Last_Activity
+                    by host
+            | eval Health_Score = if(Total_Events=0, 100,
+                round(100 - ((Critical*10 + Errors*3 + Warnings) / Total_Events * 10), 0))
+            | eval Health_Score = if(Health_Score &lt; 0, 0, Health_Score)
+            | eval Health_Status = case(
+                Health_Score &gt;= 90, "Healthy",
+                Health_Score &gt;= 70, "Warning",
+                Health_Score &gt;= 40, "Degraded",
+                1==1, "Critical"
+              )
+            | eval Last_Activity = strftime(Last_Activity, "%Y-%m-%d %H:%M:%S")
+            | table host Health_Status Health_Score Total_Events Critical Errors Warnings Last_Activity
+            | sort -Total_Events
+            | rename host as "Device" Health_Status as "Status" Health_Score as "Score" Total_Events as "Events" Last_Activity as "Last Seen"
+          </query>
+        </search>
+        <option name="count">15</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="Score">
+          <colorPalette type="minMidMax" minColor="#ef4444" midColor="#eab308" maxColor="#22c55e"></colorPalette>
+          <scale type="minMidMax" minValue="0" midValue="70" maxValue="100"></scale>
+        </format>
+        <format type="color" field="Critical">
+          <colorPalette type="minMidMax" minColor="#111827" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="0"></scale>
+        </format>
+        <format type="color" field="Errors">
+          <colorPalette type="minMidMax" minColor="#111827" maxColor="#f97316"></colorPalette>
+          <scale type="minMidMax" minValue="0"></scale>
+        </format>
+        <format type="color" field="Status">
+          <colorPalette type="map">{"Healthy":#22c55e,"Warning":#eab308,"Degraded":#f97316,"Critical":#ef4444}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- LINK STATE & STP -->
+  <row>
+    <panel>
+      <title>Interface Link State Changes</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | rex field=_raw "(?i)(?&lt;link_state&gt;changed state to up|changed state to down|link.?up|link.?down|is up|is down)"
+            | where isnotnull(link_state)
+            | eval state=if(match(link_state, "(?i)up"), "Up", "Down")
+            | timechart span=15m count by state
+          </query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.chart.nullValueMode">zero</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.text">State Changes</option>
+        <option name="charting.seriesColors">[#ef4444,#22c55e]</option>
+        <option name="height">300</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Recent Link Down Events</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | search ("changed state to down" OR "link-down" OR "is down")
+            | rex field=_raw "(?i)(?&lt;interface&gt;(?:GigabitEthernet|TenGigabitEthernet|FastEthernet|Ethernet|Port-channel|Vlan|Gi|Te|Fa|Et|Po|Vl)\s*\d+(?:/\d+)*)"
+            | where isnotnull(interface)
+            | stats count as Occurrences latest(_time) as Last_Down by host interface
+            | eval Last_Down=strftime(Last_Down, "%Y-%m-%d %H:%M:%S")
+            | eval Flapping=if(Occurrences&gt;3, "Yes", "No")
+            | sort -Occurrences
+            | head 20
+            | rename host as "Device" interface as "Interface" Occurrences as "Down Count" Last_Down as "Last Down" Flapping as "Flapping?"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="Down Count">
+          <colorPalette type="minMidMax" minColor="#22c55e" midColor="#eab308" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="1" midValue="5"></scale>
+        </format>
+        <format type="color" field="Flapping?">
+          <colorPalette type="map">{"Yes":#ef4444,"No":#22c55e}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- PROTOCOL / STP -->
+  <row>
+    <panel>
+      <title>Protocol/Service Distribution</title>
+      <chart>
+        <search base="base_syslog">
+          <query>
+            | eval protocol=facility_code
+            | where match(protocol, "(?i)STP|OSPF|EIGRP|BGP|HSRP|VRRP|LACP|LLDP|CDP|VTP|SNMP|NTP|DHCP|DNS|SSH|TELNET|RADIUS|TACACS|AAA|SPANTREE|LINEPROTO|SEC_LOGIN|LINK|ACL")
+            | stats count by protocol
+            | sort -count
+            | head 12
+          </query>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.chart.showPercent">1</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.seriesColors">[#6366f1,#8b5cf6,#a855f7,#d946ef,#ec4899,#f43f5e,#f97316,#eab308,#84cc16,#22c55e,#14b8a6,#06b6d4]</option>
+        <option name="height">350</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Spanning Tree Events</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | search (SPANTREE OR STP OR "spanning" OR "topology" OR "root" OR "blocking" OR "forwarding")
+            | rex field=_raw "(?i)VLAN\s*(?&lt;vlan_id&gt;\d+)"
+            | rex field=_raw "(?i)Port\s+(?&lt;stp_port&gt;[A-Za-z0-9/]+)"
+            | rex field=_raw "(?i)(?&lt;stp_state&gt;forwarding|blocking|listening|learning|disabled)"
+            | eval stp_event=mnemonic
+            | eval vlan_id=coalesce(vlan_id, "N/A")
+            | eval stp_port=coalesce(stp_port, "N/A")
+            | eval stp_state=coalesce(stp_state, "N/A")
+            | stats count as Events latest(_time) as Last_Event by host stp_event vlan_id stp_port stp_state
+            | eval Last_Event=strftime(Last_Event, "%Y-%m-%d %H:%M:%S")
+            | sort -Events
+            | head 15
+            | rename host as "Device" stp_event as "Event Type" vlan_id as "VLAN" stp_port as "Port" stp_state as "State" Events as "Count" Last_Event as "Last Seen"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="Count">
+          <colorPalette type="minMidMax" minColor="#22c55e" midColor="#eab308" maxColor="#ef4444"></colorPalette>
+          <scale type="minMidMax" minValue="1" midValue="10"></scale>
+        </format>
+        <format type="color" field="State">
+          <colorPalette type="map">{"forwarding":#22c55e,"blocking":#ef4444,"listening":#eab308,"learning":#3b82f6,"disabled":#6b7280,"N/A":#4b5563}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- OSPF EVENTS -->
+  <row>
+    <panel>
+      <title>OSPF Adjacency Events</title>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | search OSPF OR "ADJCHG"
+            | rex field=_raw "Nbr\s+(?&lt;neighbor_ip&gt;\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
+            | rex field=_raw "on\s+(?&lt;ospf_interface&gt;[A-Za-z0-9/]+)"
+            | rex field=_raw "from\s+(?&lt;from_state&gt;[A-Z]+)\s+to\s+(?&lt;to_state&gt;[A-Z]+)"
+            | where isnotnull(neighbor_ip)
+            | table _time host neighbor_ip ospf_interface from_state to_state
+            | sort -_time
+            | head 20
+            | eval _time=strftime(_time, "%Y-%m-%d %H:%M:%S")
+            | rename _time as "Timestamp" host as "Device" neighbor_ip as "Neighbor" ospf_interface as "Interface" from_state as "From" to_state as "To"
+          </query>
+        </search>
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="color" field="To">
+          <colorPalette type="map">{"FULL":#22c55e,"DOWN":#ef4444,"LOADING":#eab308,"INIT":#3b82f6,"2WAY":#8b5cf6}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- RAW EVENT EXPLORER HEADER -->
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(90deg, rgba(34,197,94,0.3), transparent); padding: 12px 20px; border-left: 4px solid #22c55e; border-radius: 0 8px 8px 0; margin: -10px -10px 10px -10px;">
+          <h2 style="margin: 0; color: #22c55e; font-size: 18px; font-weight: 600;">
+            Raw Event Explorer
+          </h2>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <!-- RAW EVENT EXPLORER -->
+  <row>
+    <panel>
+      <title>Live Syslog Stream</title>
+      <input type="text" token="search_filter" searchWhenChanged="true">
+        <label>Quick Search</label>
+        <default>*</default>
+      </input>
+      <table>
+        <search base="base_syslog">
+          <query>
+            | where "$search_filter$"="*" OR like(_raw, "%$search_filter$%")
+            | eval Severity_Icon = case(
+                sev_num==0, "EMERG",
+                sev_num==1, "ALERT",
+                sev_num==2, "CRIT",
+                sev_num==3, "ERROR",
+                sev_num==4, "WARN",
+                sev_num==5, "NOTICE",
+                sev_num==6, "INFO",
+                sev_num==7, "DEBUG",
+                1==1, "UNK"
+              )
+            | table _time Severity_Icon host facility_code facility_num mnemonic _raw
+            | sort -_time
+            | head 100
+            | eval _time=strftime(_time, "%Y-%m-%d %H:%M:%S")
+            | rename _time as "Timestamp" Severity_Icon as "Severity" host as "Source Device" facility_code as "Facility" facility_num as "Facility Code" mnemonic as "Mnemonic" _raw as "Message"
+          </query>
+        </search>
+        <option name="count">20</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="wrap">true</option>
+        <option name="rowNumbers">true</option>
+        <format type="color" field="Severity">
+          <colorPalette type="map">{"EMERG":#ef4444,"ALERT":#dc2626,"CRIT":#f97316,"ERROR":#fb923c,"WARN":#eab308,"NOTICE":#22c55e,"INFO":#3b82f6,"DEBUG":#6b7280,"UNK":#4b5563}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- FOOTER -->
+  <row>
+    <panel>
+      <html>
+        <div style="text-align: center; padding: 30px; background: linear-gradient(90deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1)); border-radius: 12px; margin-top: 20px;">
+          <p style="color: #a5b4fc; font-size: 12px; margin: 0;">
+            Network Syslog Intelligence Center | Cisco and Brocade Monitoring
+          </p>
+          <p style="color: #6366f1; font-size: 11px; margin: 8px 0 0 0;">
+            Dashboard refreshes every 5 minutes | Data retention based on index policy
+          </p>
+        </div>
+      </html>
+    </panel>
+  </row>
+</form>
