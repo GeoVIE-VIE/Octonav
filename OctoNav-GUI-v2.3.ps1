@@ -3055,7 +3055,7 @@ $legendPanel.Controls.Add($chkShowOnlyDiffs)
 # Results Container Panel (for side-by-side view)
 $resultsContainer = New-Object System.Windows.Forms.Panel
 $resultsContainer.Location = New-Object System.Drawing.Point(0, 235)
-$resultsContainer.Size = New-Object System.Drawing.Size(940, 380)
+$resultsContainer.Size = New-Object System.Drawing.Size(940, 280)
 $resultsContainer.Anchor = "Top,Bottom,Left,Right"
 $compareMainPanel.Controls.Add($resultsContainer)
 
@@ -3084,7 +3084,7 @@ $resultsContainer.Controls.Add($lblRightHeader)
 # Left RichTextBox (Original file content)
 $script:rtbLeftFile = New-Object System.Windows.Forms.RichTextBox
 $script:rtbLeftFile.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbLeftFile.Size = New-Object System.Drawing.Size(465, 350)
+$script:rtbLeftFile.Size = New-Object System.Drawing.Size(465, 250)
 $script:rtbLeftFile.Font = New-Object System.Drawing.Font("Consolas", 9)
 $script:rtbLeftFile.ReadOnly = $true
 $script:rtbLeftFile.WordWrap = $false
@@ -3097,7 +3097,7 @@ $resultsContainer.Controls.Add($script:rtbLeftFile)
 # Right RichTextBox (Modified file content)
 $script:rtbRightFile = New-Object System.Windows.Forms.RichTextBox
 $script:rtbRightFile.Location = New-Object System.Drawing.Point(475, 25)
-$script:rtbRightFile.Size = New-Object System.Drawing.Size(465, 350)
+$script:rtbRightFile.Size = New-Object System.Drawing.Size(465, 250)
 $script:rtbRightFile.Font = New-Object System.Drawing.Font("Consolas", 9)
 $script:rtbRightFile.ReadOnly = $true
 $script:rtbRightFile.WordWrap = $false
@@ -3110,7 +3110,7 @@ $resultsContainer.Controls.Add($script:rtbRightFile)
 # Unified view RichTextBox (hidden by default)
 $script:rtbUnifiedView = New-Object System.Windows.Forms.RichTextBox
 $script:rtbUnifiedView.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbUnifiedView.Size = New-Object System.Drawing.Size(940, 350)
+$script:rtbUnifiedView.Size = New-Object System.Drawing.Size(940, 250)
 $script:rtbUnifiedView.Font = New-Object System.Drawing.Font("Consolas", 9)
 $script:rtbUnifiedView.ReadOnly = $true
 $script:rtbUnifiedView.WordWrap = $false
@@ -3120,6 +3120,198 @@ $script:rtbUnifiedView.BorderStyle = "FixedSingle"
 $script:rtbUnifiedView.Anchor = "Top,Bottom,Left,Right"
 $script:rtbUnifiedView.Visible = $false
 $resultsContainer.Controls.Add($script:rtbUnifiedView)
+
+# ============================================
+# EMBEDDED RESOURCES PANEL
+# ============================================
+
+$resourcesGroupBox = New-Object System.Windows.Forms.GroupBox
+$resourcesGroupBox.Text = "Embedded Resources (.RDOX Files)"
+$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 520)
+$resourcesGroupBox.Size = New-Object System.Drawing.Size(940, 95)
+$resourcesGroupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$resourcesGroupBox.Anchor = "Bottom,Left,Right"
+$compareMainPanel.Controls.Add($resourcesGroupBox)
+
+# Resources ListBox
+$script:lstResources = New-Object System.Windows.Forms.ListBox
+$script:lstResources.Location = New-Object System.Drawing.Point(15, 22)
+$script:lstResources.Size = New-Object System.Drawing.Size(600, 60)
+$script:lstResources.Font = New-Object System.Drawing.Font("Consolas", 9)
+$script:lstResources.SelectionMode = "MultiExtended"
+$script:lstResources.BorderStyle = "FixedSingle"
+$resourcesGroupBox.Controls.Add($script:lstResources)
+
+# Populate resources list
+if ($script:EmbeddedResources -and $script:EmbeddedResources.Count -gt 0) {
+    foreach ($resourceName in ($script:EmbeddedResources.Keys | Sort-Object)) {
+        $script:lstResources.Items.Add($resourceName) | Out-Null
+    }
+} else {
+    $script:lstResources.Items.Add("(No embedded resources - run Package-Resources.ps1)") | Out-Null
+    $script:lstResources.Enabled = $false
+}
+
+# Export to Working Directory button
+$btnExportToWorkDir = New-Object System.Windows.Forms.Button
+$btnExportToWorkDir.Text = "Export to Working Directory"
+$btnExportToWorkDir.Location = New-Object System.Drawing.Point(630, 22)
+$btnExportToWorkDir.Size = New-Object System.Drawing.Size(145, 28)
+$btnExportToWorkDir.FlatStyle = "Flat"
+$btnExportToWorkDir.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$btnExportToWorkDir.ForeColor = [System.Drawing.Color]::White
+$btnExportToWorkDir.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnExportToWorkDir.Cursor = [System.Windows.Forms.Cursors]::Hand
+$resourcesGroupBox.Controls.Add($btnExportToWorkDir)
+
+# Export to Custom Directory button
+$btnExportToCustomDir = New-Object System.Windows.Forms.Button
+$btnExportToCustomDir.Text = "Export to Folder..."
+$btnExportToCustomDir.Location = New-Object System.Drawing.Point(785, 22)
+$btnExportToCustomDir.Size = New-Object System.Drawing.Size(140, 28)
+$btnExportToCustomDir.FlatStyle = "Flat"
+$btnExportToCustomDir.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
+$btnExportToCustomDir.ForeColor = [System.Drawing.Color]::White
+$btnExportToCustomDir.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnExportToCustomDir.Cursor = [System.Windows.Forms.Cursors]::Hand
+$resourcesGroupBox.Controls.Add($btnExportToCustomDir)
+
+# Info label
+$lblResourceInfo = New-Object System.Windows.Forms.Label
+$lblResourceInfo.Text = "Select files to export (Ctrl+Click for multiple) or leave empty to export all"
+$lblResourceInfo.Location = New-Object System.Drawing.Point(630, 55)
+$lblResourceInfo.Size = New-Object System.Drawing.Size(295, 32)
+$lblResourceInfo.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+$lblResourceInfo.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
+$resourcesGroupBox.Controls.Add($lblResourceInfo)
+
+# Export to Working Directory click handler
+$btnExportToWorkDir.Add_Click({
+    if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No embedded resources available.",
+            "No Resources",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return
+    }
+
+    $outputPath = Get-Location
+    $selectedItems = @($script:lstResources.SelectedItems)
+
+    # If nothing selected, export all
+    if ($selectedItems.Count -eq 0) {
+        $selectedItems = @($script:EmbeddedResources.Keys)
+    }
+
+    try {
+        $exportedFiles = @()
+        foreach ($resourceName in $selectedItems) {
+            if (-not $script:EmbeddedResources.ContainsKey($resourceName)) { continue }
+
+            $outputFile = Join-Path $outputPath $resourceName
+
+            if (Test-Path $outputFile) {
+                $overwrite = [System.Windows.Forms.MessageBox]::Show(
+                    "File '$resourceName' already exists in working directory.`n`nOverwrite?",
+                    "File Exists",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Question
+                )
+                if ($overwrite -eq [System.Windows.Forms.DialogResult]::No) { continue }
+            }
+
+            $bytes = [Convert]::FromBase64String($script:EmbeddedResources[$resourceName])
+            [System.IO.File]::WriteAllBytes($outputFile, $bytes)
+            $exportedFiles += $resourceName
+        }
+
+        if ($exportedFiles.Count -gt 0) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Exported $($exportedFiles.Count) file(s) to:`n$outputPath`n`nFiles:`n$($exportedFiles -join "`n")",
+                "Export Complete",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+        }
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Error exporting: $($_.Exception.Message)",
+            "Export Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+})
+
+# Export to Custom Directory click handler
+$btnExportToCustomDir.Add_Click({
+    if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No embedded resources available.",
+            "No Resources",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return
+    }
+
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Select folder to export resources to"
+    $folderBrowser.ShowNewFolderButton = $true
+
+    if ($folderBrowser.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+    $outputPath = $folderBrowser.SelectedPath
+    $selectedItems = @($script:lstResources.SelectedItems)
+
+    # If nothing selected, export all
+    if ($selectedItems.Count -eq 0) {
+        $selectedItems = @($script:EmbeddedResources.Keys)
+    }
+
+    try {
+        $exportedFiles = @()
+        foreach ($resourceName in $selectedItems) {
+            if (-not $script:EmbeddedResources.ContainsKey($resourceName)) { continue }
+
+            $outputFile = Join-Path $outputPath $resourceName
+
+            if (Test-Path $outputFile) {
+                $overwrite = [System.Windows.Forms.MessageBox]::Show(
+                    "File '$resourceName' already exists.`n`nOverwrite?",
+                    "File Exists",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Question
+                )
+                if ($overwrite -eq [System.Windows.Forms.DialogResult]::No) { continue }
+            }
+
+            $bytes = [Convert]::FromBase64String($script:EmbeddedResources[$resourceName])
+            [System.IO.File]::WriteAllBytes($outputFile, $bytes)
+            $exportedFiles += $resourceName
+        }
+
+        if ($exportedFiles.Count -gt 0) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Exported $($exportedFiles.Count) file(s) to:`n$outputPath`n`nFiles:`n$($exportedFiles -join "`n")",
+                "Export Complete",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+        }
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Error exporting: $($_.Exception.Message)",
+            "Export Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+})
 
 # Store comparison results for export
 $script:CompareResults = $null
