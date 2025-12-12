@@ -147,7 +147,7 @@ function Export-AllEmbeddedResources {
             `$exported += `$file
         }
         catch {
-            Write-Warning "Failed to export `$name: `$(`$_.Exception.Message)"
+            Write-Warning "Failed to export `${name}: `$(`$_.Exception.Message)"
         }
     }
     return `$exported
