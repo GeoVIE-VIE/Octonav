@@ -3131,7 +3131,7 @@ $script:CompareResults = $null
 function Compare-FilesContent {
     <#
     .SYNOPSIS
-        Performs line-by-line comparison of two files using LCS algorithm
+        Performs line-by-line comparison of two files using optimized sequential algorithm
     #>
     param(
         [string]$File1Path,
@@ -3161,77 +3161,97 @@ function Compare-FilesContent {
             Unchanged = 0
         }
 
-        # Build LCS matrix for optimal diff
         $m = $file1Lines.Count
         $n = $file2Lines.Count
-        $lcs = New-Object 'int[,]' ($m + 1), ($n + 1)
 
-        for ($i = 1; $i -le $m; $i++) {
-            for ($j = 1; $j -le $n; $j++) {
-                $iPrev = $i - 1
-                $jPrev = $j - 1
-                if ($file1Lines[$iPrev] -eq $file2Lines[$jPrev]) {
-                    $lcs[$i, $j] = $lcs[$iPrev, $jPrev] + 1
-                } else {
-                    $valUp = $lcs[$iPrev, $j]
-                    $valLeft = $lcs[$i, $jPrev]
-                    $lcs[$i, $j] = [Math]::Max($valUp, $valLeft)
+        # Build hash lookup for file2 lines (for fast matching)
+        $file2Hash = @{}
+        for ($j = 0; $j -lt $n; $j++) {
+            $line = $file2Lines[$j]
+            if (-not $file2Hash.ContainsKey($line)) {
+                $file2Hash[$line] = [System.Collections.ArrayList]@()
+            }
+            $file2Hash[$line].Add($j) | Out-Null
+        }
+
+        # Track which lines in file2 have been matched
+        $file2Matched = @{}
+
+        # First pass: find matching lines using greedy approach
+        $matches = @{}  # file1 index -> file2 index
+        $lastMatchJ = -1
+
+        for ($i = 0; $i -lt $m; $i++) {
+            $line = $file1Lines[$i]
+            if ($file2Hash.ContainsKey($line)) {
+                # Find the first unmatched occurrence after lastMatchJ
+                foreach ($j in $file2Hash[$line]) {
+                    if ($j -gt $lastMatchJ -and -not $file2Matched.ContainsKey($j)) {
+                        $matches[$i] = $j
+                        $file2Matched[$j] = $true
+                        $lastMatchJ = $j
+                        break
+                    }
                 }
             }
         }
 
-        # Backtrack to find differences
-        $i = $m
-        $j = $n
-        $diffStack = New-Object System.Collections.Stack
+        # Build output by merging both files
+        $i = 0
+        $j = 0
 
-        while ($i -gt 0 -or $j -gt 0) {
-            $iPrev = $i - 1
-            $jPrev = $j - 1
+        while ($i -lt $m -or $j -lt $n) {
+            if ($i -lt $m -and $matches.ContainsKey($i)) {
+                $matchedJ = $matches[$i]
 
-            if ($i -gt 0 -and $j -gt 0 -and $file1Lines[$iPrev] -eq $file2Lines[$jPrev]) {
-                $diffStack.Push(@{
+                # Output any added lines before this match
+                while ($j -lt $matchedJ) {
+                    $results.Differences += @{
+                        Type = "Added"
+                        Line1 = $null
+                        Line2 = $j + 1
+                        Content1 = ""
+                        Content2 = $file2Lines[$j]
+                    }
+                    $results.Added++
+                    $j++
+                }
+
+                # Output the matching line
+                $results.Differences += @{
                     Type = "Unchanged"
-                    Line1 = $i
-                    Line2 = $j
-                    Content1 = $file1Lines[$iPrev]
-                    Content2 = $file2Lines[$jPrev]
-                })
-                $i--
-                $j--
+                    Line1 = $i + 1
+                    Line2 = $j + 1
+                    Content1 = $file1Lines[$i]
+                    Content2 = $file2Lines[$j]
+                }
+                $results.Unchanged++
+                $i++
+                $j++
             }
-            elseif ($j -gt 0 -and ($i -eq 0 -or $lcs[$i, $jPrev] -ge $lcs[$iPrev, $j])) {
-                $diffStack.Push(@{
+            elseif ($i -lt $m) {
+                # Line in file1 has no match - it was removed
+                $results.Differences += @{
+                    Type = "Removed"
+                    Line1 = $i + 1
+                    Line2 = $null
+                    Content1 = $file1Lines[$i]
+                    Content2 = ""
+                }
+                $results.Removed++
+                $i++
+            }
+            else {
+                # Remaining lines in file2 are added
+                $results.Differences += @{
                     Type = "Added"
                     Line1 = $null
-                    Line2 = $j
+                    Line2 = $j + 1
                     Content1 = ""
-                    Content2 = $file2Lines[$jPrev]
-                })
-                $j--
-            }
-            elseif ($i -gt 0 -and ($j -eq 0 -or $lcs[$i, $jPrev] -lt $lcs[$iPrev, $j])) {
-                $diffStack.Push(@{
-                    Type = "Removed"
-                    Line1 = $i
-                    Line2 = $null
-                    Content1 = $file1Lines[$iPrev]
-                    Content2 = ""
-                })
-                $i--
-            }
-        }
-
-        # Process stack into ordered results
-        while ($diffStack.Count -gt 0) {
-            $diff = $diffStack.Pop()
-            $results.Differences += $diff
-
-            switch ($diff.Type) {
-                "Added" { $results.Added++ }
-                "Removed" { $results.Removed++ }
-                "Modified" { $results.Modified++ }
-                "Unchanged" { $results.Unchanged++ }
+                    Content2 = $file2Lines[$j]
+                }
+                $results.Added++
+                $j++
             }
         }
 
@@ -3433,7 +3453,7 @@ $btnCompareFiles.Add_Click({
 
         # Update status bar
         $totalChanges = $script:CompareResults.Added + $script:CompareResults.Removed + $script:CompareResults.Modified
-        Set-StatusMessage -StatusPanels $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found" -Type "Success"
+        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found"
 
     }
     catch {
@@ -3443,7 +3463,7 @@ $btnCompareFiles.Add_Click({
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
-        Set-StatusMessage -StatusPanels $script:StatusBarPanels -Message "Comparison failed" -Type "Error"
+        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison failed" -IsError
     }
     finally {
         $btnCompareFiles.Enabled = $true
@@ -3633,7 +3653,7 @@ $btnExportDiff.Add_Click({
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
 
-            Set-StatusMessage -StatusPanels $script:StatusBarPanels -Message "Results exported to $([System.IO.Path]::GetFileName($saveDialog.FileName))" -Type "Success"
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Results exported to $([System.IO.Path]::GetFileName($saveDialog.FileName))"
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show(
