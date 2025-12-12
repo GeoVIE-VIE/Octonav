@@ -3104,7 +3104,7 @@ $script:rtbRightFile.WordWrap = $false
 $script:rtbRightFile.ScrollBars = "Both"
 $script:rtbRightFile.BackColor = [System.Drawing.Color]::White
 $script:rtbRightFile.BorderStyle = "FixedSingle"
-$script:rtbRightFile.Anchor = "Top,Bottom,Right"
+$script:rtbRightFile.Anchor = "Top,Bottom,Left,Right"
 $resultsContainer.Controls.Add($script:rtbRightFile)
 
 # Unified view RichTextBox (hidden by default)
@@ -3265,7 +3265,7 @@ function Compare-FilesContent {
 function Show-ComparisonResults {
     <#
     .SYNOPSIS
-        Displays comparison results in the UI
+        Displays comparison results in the UI with optimized rendering
     #>
     param(
         [hashtable]$Results,
@@ -3279,6 +3279,15 @@ function Show-ComparisonResults {
     $lblModifiedCount.Text = "~ $($Results.Modified)"
     $lblUnchangedCount.Text = "= $($Results.Unchanged)"
 
+    # Define colors once for performance
+    $colorAddedBg = [System.Drawing.Color]::FromArgb(200, 255, 200)
+    $colorAddedFg = [System.Drawing.Color]::FromArgb(0, 100, 0)
+    $colorRemovedBg = [System.Drawing.Color]::FromArgb(255, 200, 200)
+    $colorRemovedFg = [System.Drawing.Color]::FromArgb(139, 0, 0)
+    $colorAddedLightBg = [System.Drawing.Color]::FromArgb(230, 255, 230)
+    $colorRemovedLightBg = [System.Drawing.Color]::FromArgb(255, 230, 230)
+    $colorGrayFg = [System.Drawing.Color]::FromArgb(150, 150, 150)
+
     if ($UnifiedView) {
         # Show unified view
         $script:rtbLeftFile.Visible = $false
@@ -3287,45 +3296,42 @@ function Show-ComparisonResults {
         $lblRightHeader.Visible = $false
         $script:rtbUnifiedView.Visible = $true
 
+        # Suspend drawing for performance
+        $script:rtbUnifiedView.SuspendLayout()
         $script:rtbUnifiedView.Clear()
 
+        # Build line data first, then apply
+        $lineData = @()
         foreach ($diff in $Results.Differences) {
             if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
 
-            $linePrefix = ""
-            $bgColor = [System.Drawing.Color]::White
-            $fgColor = [System.Drawing.Color]::Black
-
             switch ($diff.Type) {
                 "Added" {
-                    $linePrefix = "+ "
-                    $bgColor = [System.Drawing.Color]::FromArgb(200, 255, 200)
-                    $fgColor = [System.Drawing.Color]::FromArgb(0, 100, 0)
                     $lineNum = $diff.Line2.ToString().PadLeft(5)
-                    $content = "$linePrefix[$lineNum] $($diff.Content2)"
+                    $lineData += @{ Content = "+ [$lineNum] $($diff.Content2)"; BgColor = $colorAddedBg; FgColor = $colorAddedFg }
                 }
                 "Removed" {
-                    $linePrefix = "- "
-                    $bgColor = [System.Drawing.Color]::FromArgb(255, 200, 200)
-                    $fgColor = [System.Drawing.Color]::FromArgb(139, 0, 0)
                     $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $content = "$linePrefix[$lineNum] $($diff.Content1)"
+                    $lineData += @{ Content = "- [$lineNum] $($diff.Content1)"; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg }
                 }
                 "Unchanged" {
-                    $linePrefix = "  "
                     $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $content = "$linePrefix[$lineNum] $($diff.Content1)"
+                    $lineData += @{ Content = "  [$lineNum] $($diff.Content1)"; BgColor = [System.Drawing.Color]::White; FgColor = [System.Drawing.Color]::Black }
                 }
             }
+        }
 
+        # Apply all content with formatting
+        foreach ($line in $lineData) {
             $startPos = $script:rtbUnifiedView.TextLength
-            $script:rtbUnifiedView.AppendText("$content`r`n")
-            $script:rtbUnifiedView.Select($startPos, $content.Length + 2)
-            $script:rtbUnifiedView.SelectionBackColor = $bgColor
-            $script:rtbUnifiedView.SelectionColor = $fgColor
+            $script:rtbUnifiedView.AppendText("$($line.Content)`r`n")
+            $script:rtbUnifiedView.Select($startPos, $line.Content.Length + 2)
+            $script:rtbUnifiedView.SelectionBackColor = $line.BgColor
+            $script:rtbUnifiedView.SelectionColor = $line.FgColor
         }
 
         $script:rtbUnifiedView.Select(0, 0)
+        $script:rtbUnifiedView.ResumeLayout()
     }
     else {
         # Show side-by-side view
@@ -3335,64 +3341,75 @@ function Show-ComparisonResults {
         $lblLeftHeader.Visible = $true
         $lblRightHeader.Visible = $true
 
+        # Suspend drawing for performance
+        $script:rtbLeftFile.SuspendLayout()
+        $script:rtbRightFile.SuspendLayout()
         $script:rtbLeftFile.Clear()
         $script:rtbRightFile.Clear()
+
+        # Build line data for both panels
+        $leftLines = @()
+        $rightLines = @()
 
         foreach ($diff in $Results.Differences) {
             if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
 
             switch ($diff.Type) {
                 "Added" {
-                    # Empty line on left (with marker), content on right with ACTUAL line number
                     $leftContent = "     |".PadRight(80)
                     $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
                     $rightContent = "$rightLineNum  + $($diff.Content2)"
-
-                    $startLeft = $script:rtbLeftFile.TextLength
-                    $script:rtbLeftFile.AppendText("$leftContent`r`n")
-                    $script:rtbLeftFile.Select($startLeft, $leftContent.Length + 2)
-                    $script:rtbLeftFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)
-                    $script:rtbLeftFile.SelectionColor = [System.Drawing.Color]::FromArgb(150, 150, 150)
-
-                    $startRight = $script:rtbRightFile.TextLength
-                    $script:rtbRightFile.AppendText("$rightContent`r`n")
-                    $script:rtbRightFile.Select($startRight, $rightContent.Length + 2)
-                    $script:rtbRightFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(200, 255, 200)
-                    $script:rtbRightFile.SelectionColor = [System.Drawing.Color]::FromArgb(0, 100, 0)
+                    $leftLines += @{ Content = $leftContent; BgColor = $colorAddedLightBg; FgColor = $colorGrayFg; HasColor = $true }
+                    $rightLines += @{ Content = $rightContent; BgColor = $colorAddedBg; FgColor = $colorAddedFg; HasColor = $true }
                 }
                 "Removed" {
-                    # Content on left with ACTUAL line number, empty marker on right
                     $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
                     $leftContent = "$leftLineNum  - $($diff.Content1)"
                     $rightContent = "     |".PadRight(80)
-
-                    $startLeft = $script:rtbLeftFile.TextLength
-                    $script:rtbLeftFile.AppendText("$leftContent`r`n")
-                    $script:rtbLeftFile.Select($startLeft, $leftContent.Length + 2)
-                    $script:rtbLeftFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(255, 200, 200)
-                    $script:rtbLeftFile.SelectionColor = [System.Drawing.Color]::FromArgb(139, 0, 0)
-
-                    $startRight = $script:rtbRightFile.TextLength
-                    $script:rtbRightFile.AppendText("$rightContent`r`n")
-                    $script:rtbRightFile.Select($startRight, $rightContent.Length + 2)
-                    $script:rtbRightFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(255, 230, 230)
-                    $script:rtbRightFile.SelectionColor = [System.Drawing.Color]::FromArgb(150, 150, 150)
+                    $leftLines += @{ Content = $leftContent; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg; HasColor = $true }
+                    $rightLines += @{ Content = $rightContent; BgColor = $colorRemovedLightBg; FgColor = $colorGrayFg; HasColor = $true }
                 }
                 "Unchanged" {
-                    # Both sides show ACTUAL line numbers from source files
                     $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
                     $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
                     $leftContent = "$leftLineNum    $($diff.Content1)"
                     $rightContent = "$rightLineNum    $($diff.Content2)"
-
-                    $script:rtbLeftFile.AppendText("$leftContent`r`n")
-                    $script:rtbRightFile.AppendText("$rightContent`r`n")
+                    $leftLines += @{ Content = $leftContent; HasColor = $false }
+                    $rightLines += @{ Content = $rightContent; HasColor = $false }
                 }
+            }
+        }
+
+        # Apply all content to left panel
+        foreach ($line in $leftLines) {
+            if ($line.HasColor) {
+                $startPos = $script:rtbLeftFile.TextLength
+                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
+                $script:rtbLeftFile.Select($startPos, $line.Content.Length + 2)
+                $script:rtbLeftFile.SelectionBackColor = $line.BgColor
+                $script:rtbLeftFile.SelectionColor = $line.FgColor
+            } else {
+                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
+            }
+        }
+
+        # Apply all content to right panel
+        foreach ($line in $rightLines) {
+            if ($line.HasColor) {
+                $startPos = $script:rtbRightFile.TextLength
+                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
+                $script:rtbRightFile.Select($startPos, $line.Content.Length + 2)
+                $script:rtbRightFile.SelectionBackColor = $line.BgColor
+                $script:rtbRightFile.SelectionColor = $line.FgColor
+            } else {
+                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
             }
         }
 
         $script:rtbLeftFile.Select(0, 0)
         $script:rtbRightFile.Select(0, 0)
+        $script:rtbLeftFile.ResumeLayout()
+        $script:rtbRightFile.ResumeLayout()
     }
 }
 
