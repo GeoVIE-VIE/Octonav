@@ -3311,23 +3311,21 @@ function Show-ComparisonResults {
         $script:rtbLeftFile.Clear()
         $script:rtbRightFile.Clear()
 
-        $leftLineNum = 0
-        $rightLineNum = 0
-
         foreach ($diff in $Results.Differences) {
             if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
 
             switch ($diff.Type) {
                 "Added" {
-                    # Empty line on left, content on right
-                    $rightLineNum++
-                    $leftContent = "".PadRight(80)
-                    $rightContent = "$($rightLineNum.ToString().PadLeft(5))  $($diff.Content2)"
+                    # Empty line on left (with marker), content on right with ACTUAL line number
+                    $leftContent = "     |".PadRight(80)
+                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
+                    $rightContent = "$rightLineNum  + $($diff.Content2)"
 
                     $startLeft = $script:rtbLeftFile.TextLength
                     $script:rtbLeftFile.AppendText("$leftContent`r`n")
                     $script:rtbLeftFile.Select($startLeft, $leftContent.Length + 2)
-                    $script:rtbLeftFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+                    $script:rtbLeftFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)
+                    $script:rtbLeftFile.SelectionColor = [System.Drawing.Color]::FromArgb(150, 150, 150)
 
                     $startRight = $script:rtbRightFile.TextLength
                     $script:rtbRightFile.AppendText("$rightContent`r`n")
@@ -3336,10 +3334,10 @@ function Show-ComparisonResults {
                     $script:rtbRightFile.SelectionColor = [System.Drawing.Color]::FromArgb(0, 100, 0)
                 }
                 "Removed" {
-                    # Content on left, empty on right
-                    $leftLineNum++
-                    $leftContent = "$($leftLineNum.ToString().PadLeft(5))  $($diff.Content1)"
-                    $rightContent = "".PadRight(80)
+                    # Content on left with ACTUAL line number, empty marker on right
+                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
+                    $leftContent = "$leftLineNum  - $($diff.Content1)"
+                    $rightContent = "     |".PadRight(80)
 
                     $startLeft = $script:rtbLeftFile.TextLength
                     $script:rtbLeftFile.AppendText("$leftContent`r`n")
@@ -3350,13 +3348,15 @@ function Show-ComparisonResults {
                     $startRight = $script:rtbRightFile.TextLength
                     $script:rtbRightFile.AppendText("$rightContent`r`n")
                     $script:rtbRightFile.Select($startRight, $rightContent.Length + 2)
-                    $script:rtbRightFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+                    $script:rtbRightFile.SelectionBackColor = [System.Drawing.Color]::FromArgb(255, 230, 230)
+                    $script:rtbRightFile.SelectionColor = [System.Drawing.Color]::FromArgb(150, 150, 150)
                 }
                 "Unchanged" {
-                    $leftLineNum++
-                    $rightLineNum++
-                    $leftContent = "$($leftLineNum.ToString().PadLeft(5))  $($diff.Content1)"
-                    $rightContent = "$($rightLineNum.ToString().PadLeft(5))  $($diff.Content2)"
+                    # Both sides show ACTUAL line numbers from source files
+                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
+                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
+                    $leftContent = "$leftLineNum    $($diff.Content1)"
+                    $rightContent = "$rightLineNum    $($diff.Content2)"
 
                     $script:rtbLeftFile.AppendText("$leftContent`r`n")
                     $script:rtbRightFile.AppendText("$rightContent`r`n")
