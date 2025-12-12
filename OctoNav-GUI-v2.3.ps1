@@ -3866,7 +3866,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("    <script>")
                     [void]$htmlFile.AppendLine("        const diffData = " + $jsonData + ";")
                     [void]$htmlFile.AppendLine("        function renderView() {")
-                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=`"viewMode`"]:checked').value;")
+                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=\"viewMode\"]:checked').value;")
                     [void]$htmlFile.AppendLine("            const showOnlyDiffs = document.getElementById('showOnlyDiffs').checked;")
                     [void]$htmlFile.AppendLine("            const container = document.getElementById('diffContent');")
                     [void]$htmlFile.AppendLine("            container.innerHTML = '';")
@@ -3986,15 +3986,15 @@ $btnExportDiff.Add_Click({
                 }
             }
         }
-    }
-    catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Error exporting results:`n`n$($_.Exception.Message)",
-            "Export Error",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error exporting results:`n`n$($_.Exception.Message)",
+                "Export Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+        }
     }
 })
 
