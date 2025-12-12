@@ -3570,7 +3570,6 @@ $btnBrowseFile1.Add_Click({
 
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtFile1Path.Text = $openFileDialog.FileName
-        $lblLeftHeader.Text = "Original: " + [System.IO.Path]::GetFileName($openFileDialog.FileName)
     }
 })
 
@@ -3584,7 +3583,6 @@ $btnBrowseFile2.Add_Click({
 
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtFile2Path.Text = $openFileDialog.FileName
-        $lblRightHeader.Text = "Modified: " + [System.IO.Path]::GetFileName($openFileDialog.FileName)
     }
 })
 
@@ -3613,17 +3611,34 @@ $btnCompareFiles.Add_Click({
         $lblModifiedCount.Text = "~ $($script:CompareResults.Modified)"
         $lblUnchangedCount.Text = "= $($script:CompareResults.Unchanged)"
 
-        # Update summary label
+        # Check if files are identical
         $totalChanges = $script:CompareResults.Added + $script:CompareResults.Removed + $script:CompareResults.Modified
-        $lblComparisonSummary.Text = "Comparison Complete!`n`n" +
-            "Summary: +$($script:CompareResults.Added) Added | -$($script:CompareResults.Removed) Removed | ~$($script:CompareResults.Modified) Modified | =$($script:CompareResults.Unchanged) Unchanged`n`n" +
-            "Total Changes: $totalChanges`n`n" +
-            "Click 'Export Results' to save the comparison report with your preferred view options."
-
-        $btnExportDiff.Enabled = $true
-
-        # Update status bar
-        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found - Ready to export"
+        
+        if ($totalChanges -eq 0) {
+            # Files are identical
+            $lblComparisonSummary.Text = "Files are IDENTICAL!`n`n" +
+                "Both files contain the same content with no differences.`n`n" +
+                "Total Lines: $($script:CompareResults.Unchanged)"
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "The files are identical - no differences found!`n`n" +
+                "Both files contain the same content.",
+                "Files Identical",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            $btnExportDiff.Enabled = $false
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Files are identical - no differences found"
+        } else {
+            # Files have differences
+            $lblComparisonSummary.Text = "Comparison Complete!`n`n" +
+                "Summary: +$($script:CompareResults.Added) Added | -$($script:CompareResults.Removed) Removed | ~$($script:CompareResults.Modified) Modified | =$($script:CompareResults.Unchanged) Unchanged`n`n" +
+                "Total Changes: $totalChanges`n`n" +
+                "Click 'Export Results' to save the comparison report with interactive view options."
+            
+            $btnExportDiff.Enabled = $true
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found - Ready to export"
+        }
 
     }
     catch {
@@ -3757,13 +3772,13 @@ $btnExportDiff.Add_Click({
         $showOnlyDiffs = $false  # Default to showing all
     }
 
+    # For HTML, always export with interactive controls (ignore initial view options)
+    # User can toggle in browser
     $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
     $saveDialog.Title = "Export Comparison Results"
     $saveDialog.Filter = "HTML Report (*.html)|*.html|Text File (*.txt)|*.txt|CSV File (*.csv)|*.csv"
     $saveDialog.FilterIndex = 1
-    $viewModeText = if ($unifiedView) { "Unified" } else { "SideBySide" }
-    $diffText = if ($showOnlyDiffs) { "_DiffsOnly" } else { "" }
-    $saveDialog.FileName = "FileComparison_${viewModeText}${diffText}_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    $saveDialog.FileName = "FileComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
 
     if ($saveDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
@@ -3771,24 +3786,169 @@ $btnExportDiff.Add_Click({
 
             switch ($extension) {
                 ".html" {
-                    # Generate HTML with export options
-                    $htmlBody = ""
+                    # Generate interactive HTML with JavaScript controls
+                    # Build JavaScript data structure directly
+                    $jsDataLines = @()
+                    foreach ($diff in $script:CompareResults.Differences) {
+                        $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
+                        $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
+                        $leftContent = (ConvertTo-HtmlEncoded -Text $diff.Content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                        $rightContent = (ConvertTo-HtmlEncoded -Text $diff.Content2) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                        $jsDataLines += "{Type:'$($diff.Type)',LeftLineNum:'$leftLineNum',RightLineNum:'$rightLineNum',LeftContent:'$leftContent',RightContent:'$rightContent'}"
+                    }
+                    $jsonData = "[" + ($jsDataLines -join ",") + "]"
+                    
+                    # Build HTML file directly to avoid PowerShell parsing JavaScript
+                    $htmlFile = New-Object System.Text.StringBuilder
+                    [void]$htmlFile.AppendLine("<!DOCTYPE html>")
+                    [void]$htmlFile.AppendLine("<html>")
+                    [void]$htmlFile.AppendLine("<head>")
+                    [void]$htmlFile.AppendLine("    <meta charset=`"utf-8`">")
+                    [void]$htmlFile.AppendLine("    <title>File Comparison Report</title>")
+                    [void]$htmlFile.AppendLine("    <style>")
+                    [void]$htmlFile.AppendLine("        * { margin: 0; padding: 0; box-sizing: border-box; }")
+                    [void]$htmlFile.AppendLine("        body { font-family: 'Segoe UI', Consolas, monospace; margin: 20px; background: #f5f5f5; }")
+                    [void]$htmlFile.AppendLine("        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }")
+                    [void]$htmlFile.AppendLine("        .header h1 { margin: 0 0 10px 0; }")
+                    [void]$htmlFile.AppendLine("        .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }")
+                    [void]$htmlFile.AppendLine("        .controls label { margin-right: 15px; font-weight: bold; }")
+                    [void]$htmlFile.AppendLine("        .controls input[type=`"radio`"], .controls input[type=`"checkbox`"] { margin-right: 5px; }")
+                    [void]$htmlFile.AppendLine("        .controls button { margin-left: 10px; padding: 5px 15px; cursor: pointer; }")
+                    [void]$htmlFile.AppendLine("        .stats { display: flex; gap: 20px; margin: 20px 0; }")
+                    [void]$htmlFile.AppendLine("        .stat-box { padding: 15px 25px; border-radius: 8px; text-align: center; min-width: 100px; }")
+                    [void]$htmlFile.AppendLine("        .stat-added { background: #d4edda; border: 2px solid #28a745; }")
+                    [void]$htmlFile.AppendLine("        .stat-removed { background: #f8d7da; border: 2px solid #dc3545; }")
+                    [void]$htmlFile.AppendLine("        .stat-unchanged { background: #e9ecef; border: 2px solid #6c757d; }")
+                    [void]$htmlFile.AppendLine("        .stat-box .number { font-size: 24px; font-weight: bold; }")
+                    [void]$htmlFile.AppendLine("        .diff-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-top: 20px; }")
+                    [void]$htmlFile.AppendLine("        .diff-header { background: #343a40; color: white; padding: 10px 15px; font-weight: bold; }")
+                    [void]$htmlFile.AppendLine("        .diff-content { max-height: 70vh; overflow: auto; }")
+                    [void]$htmlFile.AppendLine("        .diff-line { padding: 2px 8px; white-space: pre-wrap; word-wrap: break-word; border-bottom: 1px solid #e0e0e0; }")
+                    [void]$htmlFile.AppendLine("        .line-num { display: inline-block; width: 60px; text-align: right; padding-right: 10px; color: #666; user-select: none; font-weight: normal; }")
+                    [void]$htmlFile.AppendLine("        .line-content { padding-left: 5px; }")
+                    [void]$htmlFile.AppendLine("        .added { background: #d4edda; color: #155724; }")
+                    [void]$htmlFile.AppendLine("        .removed { background: #f8d7da; color: #721c24; }")
+                    [void]$htmlFile.AppendLine("        .unchanged { background: #ffffff; color: #333; }")
+                    [void]$htmlFile.AppendLine("        .added-light { background: #e6f3e9; color: #666; }")
+                    [void]$htmlFile.AppendLine("        .removed-light { background: #fce8e8; color: #666; }")
+                    [void]$htmlFile.AppendLine("        .sidebyside-table { width: 100%; border-collapse: collapse; display: table; }")
+                    [void]$htmlFile.AppendLine("        .sidebyside-table td { padding: 2px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; width: 50%; }")
+                    [void]$htmlFile.AppendLine("        .sidebyside-table thead th { background: #4682B4; color: white; padding: 10px; text-align: left; }")
+                    [void]$htmlFile.AppendLine("        .sidebyside-table thead th:last-child { background: #2E8B57; }")
+                    [void]$htmlFile.AppendLine("    </style>")
+                    [void]$htmlFile.AppendLine("</head>")
+                    [void]$htmlFile.AppendLine("<body>")
+                    [void]$htmlFile.AppendLine("    <div class=`"header`">")
+                    [void]$htmlFile.AppendLine("        <h1>File Comparison Report</h1>")
+                    [void]$htmlFile.AppendLine("        <p><strong>Original:</strong> $($script:CompareResults.File1Path)</p>")
+                    [void]$htmlFile.AppendLine("        <p><strong>Modified:</strong> $($script:CompareResults.File2Path)</p>")
+                    [void]$htmlFile.AppendLine("        <p><strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>")
+                    [void]$htmlFile.AppendLine("    </div>")
+                    [void]$htmlFile.AppendLine("    <div class=`"stats`">")
+                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-added`"><div class=`"number`">+$($script:CompareResults.Added)</div><div>Added</div></div>")
+                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-removed`"><div class=`"number`">-$($script:CompareResults.Removed)</div><div>Removed</div></div>")
+                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-unchanged`"><div class=`"number`">$($script:CompareResults.Unchanged)</div><div>Unchanged</div></div>")
+                    [void]$htmlFile.AppendLine("    </div>")
+                    [void]$htmlFile.AppendLine("    <div class=`"controls`">")
+                    [void]$htmlFile.AppendLine("        <label>View Mode:</label>")
+                    [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewUnified`" name=`"viewMode`" value=`"unified`" checked>")
+                    [void]$htmlFile.AppendLine("        <label for=`"viewUnified`">Unified</label>")
+                    [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewSideBySide`" name=`"viewMode`" value=`"sidebyside`">")
+                    [void]$htmlFile.AppendLine("        <label for=`"viewSideBySide`">Side-by-Side</label>")
+                    [void]$htmlFile.AppendLine("        <input type=`"checkbox`" id=`"showOnlyDiffs`" style=`"margin-left: 30px;`">")
+                    [void]$htmlFile.AppendLine("        <label for=`"showOnlyDiffs`">Show Only Differences</label>")
+                    [void]$htmlFile.AppendLine("        <button onclick=`"resetView()`">Reset View</button>")
+                    [void]$htmlFile.AppendLine("    </div>")
+                    [void]$htmlFile.AppendLine("    <div class=`"diff-container`">")
+                    [void]$htmlFile.AppendLine("        <div class=`"diff-header`">Comparison Details</div>")
+                    [void]$htmlFile.AppendLine("        <div class=`"diff-content`" id=`"diffContent`"></div>")
+                    [void]$htmlFile.AppendLine("    </div>")
+                    [void]$htmlFile.AppendLine("    <script>")
+                    [void]$htmlFile.AppendLine("        const diffData = " + $jsonData + ";")
+                    [void]$htmlFile.AppendLine("        function renderView() {")
+                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=`"viewMode`"]:checked').value;")
+                    [void]$htmlFile.AppendLine("            const showOnlyDiffs = document.getElementById('showOnlyDiffs').checked;")
+                    [void]$htmlFile.AppendLine("            const container = document.getElementById('diffContent');")
+                    [void]$htmlFile.AppendLine("            container.innerHTML = '';")
+                    [void]$htmlFile.AppendLine("            if (viewMode === 'unified') { renderUnified(container, showOnlyDiffs); } else { renderSideBySide(container, showOnlyDiffs); }")
+                    [void]$htmlFile.AppendLine("        }")
+                    [void]$htmlFile.AppendLine("        function renderUnified(container, showOnlyDiffs) {")
+                    [void]$htmlFile.AppendLine("            const div = document.createElement('div');")
+                    [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
+                    [void]$htmlFile.AppendLine("                if (showOnlyDiffs && diff.Type === 'Unchanged') return;")
+                    [void]$htmlFile.AppendLine("                const lineNum = diff.LeftLineNum !== '     ' ? diff.LeftLineNum : diff.RightLineNum;")
+                    [void]$htmlFile.AppendLine("                const content = diff.Type === 'Added' ? diff.RightContent : diff.LeftContent;")
+                    [void]$htmlFile.AppendLine("                const prefix = diff.Type === 'Added' ? '+' : diff.Type === 'Removed' ? '-' : ' ';")
+                    [void]$htmlFile.AppendLine("                const className = diff.Type.toLowerCase();")
+                    [void]$htmlFile.AppendLine("                const lineDiv = document.createElement('div');")
+                    [void]$htmlFile.AppendLine("                lineDiv.className = 'diff-line unified ' + className;")
+                    [void]$htmlFile.AppendLine("                lineDiv.innerHTML = '<span class=`"line-num`">' + lineNum + '</span><span class=`"line-content`">' + prefix + ' ' + content + '</span>';")
+                    [void]$htmlFile.AppendLine("                div.appendChild(lineDiv);")
+                    [void]$htmlFile.AppendLine("            });")
+                    [void]$htmlFile.AppendLine("            container.appendChild(div);")
+                    [void]$htmlFile.AppendLine("        }")
+                    [void]$htmlFile.AppendLine("        function renderSideBySide(container, showOnlyDiffs) {")
+                    [void]$htmlFile.AppendLine("            const table = document.createElement('table');")
+                    [void]$htmlFile.AppendLine("            table.className = 'sidebyside-table';")
+                    [void]$htmlFile.AppendLine("            const thead = document.createElement('thead');")
+                    [void]$htmlFile.AppendLine("            const headerRow = document.createElement('tr');")
+                    [void]$htmlFile.AppendLine("            headerRow.innerHTML = '<th>Original File</th><th>Modified File</th>';")
+                    [void]$htmlFile.AppendLine("            thead.appendChild(headerRow);")
+                    [void]$htmlFile.AppendLine("            table.appendChild(thead);")
+                    [void]$htmlFile.AppendLine("            const tbody = document.createElement('tbody');")
+                    [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
+                    [void]$htmlFile.AppendLine("                if (showOnlyDiffs && diff.Type === 'Unchanged') return;")
+                    [void]$htmlFile.AppendLine("                const row = document.createElement('tr');")
+                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Added') {")
+                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line added-light`"><span class=`"line-num`">     </span><span class=`"line-content`">  </span></td><td class=`"diff-line added`"><span class=`"line-num`">' + diff.RightLineNum + '</span><span class=`"line-content`">+ ' + diff.RightContent + '</span></td>';")
+                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Removed') {")
+                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line removed`"><span class=`"line-num`">' + diff.LeftLineNum + '</span><span class=`"line-content`">- ' + diff.LeftContent + '</span></td><td class=`"diff-line removed-light`"><span class=`"line-num`">     </span><span class=`"line-content`">  </span></td>';")
+                    [void]$htmlFile.AppendLine("                } else {")
+                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line unchanged`"><span class=`"line-num`">' + diff.LeftLineNum + '</span><span class=`"line-content`">  ' + diff.LeftContent + '</span></td><td class=`"diff-line unchanged`"><span class=`"line-num`">' + diff.RightLineNum + '</span><span class=`"line-content`">  ' + diff.RightContent + '</span></td>';")
+                    [void]$htmlFile.AppendLine("                }")
+                    [void]$htmlFile.AppendLine("                tbody.appendChild(row);")
+                    [void]$htmlFile.AppendLine("            });")
+                    [void]$htmlFile.AppendLine("            table.appendChild(tbody);")
+                    [void]$htmlFile.AppendLine("            container.appendChild(table);")
+                    [void]$htmlFile.AppendLine("        }")
+                    [void]$htmlFile.AppendLine("        function resetView() { document.getElementById('viewUnified').checked = true; document.getElementById('showOnlyDiffs').checked = false; renderView(); }")
+                    [void]$htmlFile.AppendLine("        document.querySelectorAll('input[name=`"viewMode`"]').forEach(radio => { radio.addEventListener('change', renderView); });")
+                    [void]$htmlFile.AppendLine("        document.getElementById('showOnlyDiffs').addEventListener('change', renderView);")
+                    [void]$htmlFile.AppendLine("        renderView();")
+                    [void]$htmlFile.AppendLine("    </script>")
+                    [void]$htmlFile.AppendLine("</body>")
+                    [void]$htmlFile.AppendLine("</html>")
+                    
+                    # Replace the JSON placeholder in the HTML
+                    $htmlContent = $htmlFile.ToString() -replace '\$jsonData', $jsonData
+                    $htmlContent | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
+                }
+                ".txt" {
+                    $output = @()
+                    $output += "=" * 80
+                    $output += "FILE COMPARISON REPORT"
+                    $output += "=" * 80
+                    $output += "Original: $($script:CompareResults.File1Path)"
+                    $output += "Modified: $($script:CompareResults.File2Path)"
+                    $output += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                    $output += "View Mode: $(if ($unifiedView) { 'Unified' } else { 'Side-by-Side' })"
+                    $output += "Show Only Differences: $(if ($showOnlyDiffs) { 'Yes' } else { 'No' })"
+                    $output += ""
+                    $output += "SUMMARY: +$($script:CompareResults.Added) Added | -$($script:CompareResults.Removed) Removed | $($script:CompareResults.Unchanged) Unchanged"
+                    $output += "=" * 80
+                    $output += ""
+
                     if ($unifiedView) {
                         # Unified view
                         foreach ($diff in $script:CompareResults.Differences) {
                             if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
                             $lineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " } }
-                            $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
-                            $escapedContent = ConvertTo-HtmlEncoded -Text $content
                             $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
-                            $class = $diff.Type.ToLower()
-                            $htmlBody += "        <div class='diff-line $class'><span class='line-num'>$lineNum</span><span class='line-content'>$prefix $escapedContent</span></div>`n"
+                            $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
+                            $output += "$prefix [$lineNum] $content"
                         }
                     } else {
-                        # Side-by-side view - create a table
-                        $htmlBody += "        <table style='width:100%; border-collapse:collapse;'>`n"
-                        $htmlBody += "            <thead><tr><th style='width:50%; background:#4682B4; color:white; padding:10px;'>Original File</th><th style='width:50%; background:#2E8B57; color:white; padding:10px;'>Modified File</th></tr></thead>`n"
-                        $htmlBody += "            <tbody>`n"
+                        # Side-by-side view
                         foreach ($diff in $script:CompareResults.Differences) {
                             if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
                             $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
@@ -3796,45 +3956,45 @@ $btnExportDiff.Add_Click({
                             
                             switch ($diff.Type) {
                                 "Added" {
-                                    $rightContent = ConvertTo-HtmlEncoded -Text $diff.Content2
-                                    $htmlBody += "                <tr><td class='diff-line added-light'><span class='line-num'>     </span><span class='line-content'>  </span></td><td class='diff-line added'><span class='line-num'>$rightLineNum</span><span class='line-content'>+ $rightContent</span></td></tr>`n"
+                                    $output += "[$leftLineNum]     |  [$rightLineNum] + $($diff.Content2)"
                                 }
                                 "Removed" {
-                                    $leftContent = ConvertTo-HtmlEncoded -Text $diff.Content1
-                                    $htmlBody += "                <tr><td class='diff-line removed'><span class='line-num'>$leftLineNum</span><span class='line-content'>- $leftContent</span></td><td class='diff-line removed-light'><span class='line-num'>     </span><span class='line-content'>  </span></td></tr>`n"
+                                    $output += "[$leftLineNum] - $($diff.Content1)  |  [$rightLineNum]     |"
                                 }
                                 "Unchanged" {
-                                    $leftContent = ConvertTo-HtmlEncoded -Text $diff.Content1
-                                    $rightContent = ConvertTo-HtmlEncoded -Text $diff.Content2
-                                    $htmlBody += "                <tr><td class='diff-line unchanged'><span class='line-num'>$leftLineNum</span><span class='line-content'>  $leftContent</span></td><td class='diff-line unchanged'><span class='line-num'>$rightLineNum</span><span class='line-content'>  $rightContent</span></td></tr>`n"
+                                    $output += "[$leftLineNum]   $($diff.Content1)  |  [$rightLineNum]   $($diff.Content2)"
                                 }
                             }
                         }
-                        $htmlBody += "            </tbody>`n"
-                        $htmlBody += "        </table>`n"
                     }
-                    
-                    # Full HTML document
-                    $html = @"
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>File Comparison Report</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Consolas, monospace; margin: 20px; background: #f5f5f5; }
-        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .header h1 { margin: 0 0 10px 0; }
-        .stats { display: flex; gap: 20px; margin: 20px 0; }
-        .stat-box { padding: 15px 25px; border-radius: 8px; text-align: center; min-width: 100px; }
+
+                    $output | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
+                }
+                ".csv" {
+                    $csvData = @()
+                    foreach ($diff in $script:CompareResults.Differences) {
+                        if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
+                        $csvData += [PSCustomObject]@{
+                            OriginalLineNumber = if ($diff.Line1) { $diff.Line1 } else { "" }
+                            ModifiedLineNumber = if ($diff.Line2) { $diff.Line2 } else { "" }
+                            Status = $diff.Type
+                            OriginalContent = $diff.Content1
+                            ModifiedContent = $diff.Content2
+                        }
+                    }
+                    $csvData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
+                }
+            }
         .stat-added { background: #d4edda; border: 2px solid #28a745; }
         .stat-removed { background: #f8d7da; border: 2px solid #dc3545; }
         .stat-unchanged { background: #e9ecef; border: 2px solid #6c757d; }
         .stat-box .number { font-size: 24px; font-weight: bold; }
         .diff-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-top: 20px; }
         .diff-header { background: #343a40; color: white; padding: 10px 15px; font-weight: bold; }
-        .diff-line { padding: 2px 8px; white-space: pre-wrap; word-wrap: break-word; border-bottom: 1px solid #e0e0e0; display: block; }
+        .diff-content { max-height: 70vh; overflow: auto; }
+        .diff-line { padding: 2px 8px; white-space: pre-wrap; word-wrap: break-word; border-bottom: 1px solid #e0e0e0; }
+        .diff-line.unified { display: block; }
+        .diff-line.sidebyside { display: table-row; }
         .line-num { display: inline-block; width: 60px; text-align: right; padding-right: 10px; color: #666; user-select: none; font-weight: normal; }
         .line-content { padding-left: 5px; }
         .added { background: #d4edda; color: #155724; }
@@ -3842,8 +4002,13 @@ $btnExportDiff.Add_Click({
         .unchanged { background: #ffffff; color: #333; }
         .added-light { background: #e6f3e9; color: #666; }
         .removed-light { background: #fce8e8; color: #666; }
-        table { width: 100%; border-collapse: collapse; }
-        table td { padding: 2px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+        .sidebyside-table { width: 100%; border-collapse: collapse; display: table; }
+        .sidebyside-table.hidden { display: none; }
+        .unified-view { display: block; }
+        .unified-view.hidden { display: none; }
+        .sidebyside-table td { padding: 2px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; width: 50%; }
+        .sidebyside-table thead th { background: #4682B4; color: white; padding: 10px; text-align: left; }
+        .sidebyside-table thead th:last-child { background: #2E8B57; }
     </style>
 </head>
 <body>
@@ -3852,7 +4017,6 @@ $btnExportDiff.Add_Click({
         <p><strong>Original:</strong> $($script:CompareResults.File1Path)</p>
         <p><strong>Modified:</strong> $($script:CompareResults.File2Path)</p>
         <p><strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>
-        <p><strong>View Mode:</strong> $(if ($unifiedView) { 'Unified' } else { 'Side-by-Side' }) | <strong>Show Only Differences:</strong> $(if ($showOnlyDiffs) { 'Yes' } else { 'No' })</p>
     </div>
 
     <div class="stats">
@@ -3870,15 +4034,115 @@ $btnExportDiff.Add_Click({
         </div>
     </div>
 
+    <div class="controls">
+        <label>View Mode:</label>
+        <input type="radio" id="viewUnified" name="viewMode" value="unified" checked>
+        <label for="viewUnified">Unified</label>
+        <input type="radio" id="viewSideBySide" name="viewMode" value="sidebyside">
+        <label for="viewSideBySide">Side-by-Side</label>
+        
+        <input type="checkbox" id="showOnlyDiffs" style="margin-left: 30px;">
+        <label for="showOnlyDiffs">Show Only Differences</label>
+        
+        <button onclick="resetView()">Reset View</button>
+    </div>
+
     <div class="diff-container">
         <div class="diff-header">Comparison Details</div>
-        $htmlBody
+        <div class="diff-content" id="diffContent"></div>
     </div>
+
+    <script>
+        const diffData = $jsonData;
+        
+        function renderView() {
+            const viewMode = document.querySelector('input[name="viewMode"]:checked').value;
+            const showOnlyDiffs = document.getElementById('showOnlyDiffs').checked;
+            const container = document.getElementById('diffContent');
+            
+            container.innerHTML = '';
+            
+            if (viewMode === 'unified') {
+                renderUnified(container, showOnlyDiffs);
+            } else {
+                renderSideBySide(container, showOnlyDiffs);
+            }
+        }
+        
+        function renderUnified(container, showOnlyDiffs) {
+            const div = document.createElement('div');
+            div.className = 'unified-view';
+            
+            diffData.forEach(diff => {
+                if (showOnlyDiffs && diff.Type === 'Unchanged') return;
+                
+                const lineNum = diff.LeftLineNum !== '     ' ? diff.LeftLineNum : diff.RightLineNum;
+                const content = diff.Type === 'Added' ? diff.RightContent : diff.LeftContent;
+                const prefix = diff.Type === 'Added' ? '+' : diff.Type === 'Removed' ? '-' : ' ';
+                const className = diff.Type.toLowerCase();
+                
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'diff-line unified ' + className;
+                lineDiv.innerHTML = '<span class="line-num">' + lineNum + '</span><span class="line-content">' + prefix + ' ' + content + '</span>';
+                div.appendChild(lineDiv);
+            });
+            
+            container.appendChild(div);
+        }
+        
+        function renderSideBySide(container, showOnlyDiffs) {
+            const table = document.createElement('table');
+            table.className = 'sidebyside-table';
+            
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            headerRow.innerHTML = '<th>Original File</th><th>Modified File</th>';
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+            
+            const tbody = document.createElement('tbody');
+            
+            diffData.forEach(diff => {
+                if (showOnlyDiffs && diff.Type === 'Unchanged') return;
+                
+                const row = document.createElement('tr');
+                
+                if (diff.Type === 'Added') {
+                    row.innerHTML = '<td class="diff-line added-light"><span class="line-num">     </span><span class="line-content">  </span></td>' +
+                                   '<td class="diff-line added"><span class="line-num">' + diff.RightLineNum + '</span><span class="line-content">+ ' + diff.RightContent + '</span></td>';
+                } else if (diff.Type === 'Removed') {
+                    row.innerHTML = '<td class="diff-line removed"><span class="line-num">' + diff.LeftLineNum + '</span><span class="line-content">- ' + diff.LeftContent + '</span></td>' +
+                                   '<td class="diff-line removed-light"><span class="line-num">     </span><span class="line-content">  </span></td>';
+                } else {
+                    row.innerHTML = '<td class="diff-line unchanged"><span class="line-num">' + diff.LeftLineNum + '</span><span class="line-content">  ' + diff.LeftContent + '</span></td>' +
+                                   '<td class="diff-line unchanged"><span class="line-num">' + diff.RightLineNum + '</span><span class="line-content">  ' + diff.RightContent + '</span></td>';
+                }
+                
+                tbody.appendChild(row);
+            });
+            
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+        
+        function resetView() {
+            document.getElementById('viewUnified').checked = true;
+            document.getElementById('showOnlyDiffs').checked = false;
+            renderView();
+        }
+        
+        // Event listeners
+        document.querySelectorAll('input[name="viewMode"]').forEach(radio => {
+            radio.addEventListener('change', renderView);
+        });
+        document.getElementById('showOnlyDiffs').addEventListener('change', renderView);
+        
+        // Initial render
+        renderView();
+    </script>
 </body>
 </html>
 "@
-                    $html | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
-                }
                 ".txt" {
                     $output = @()
                     $output += "=" * 80
