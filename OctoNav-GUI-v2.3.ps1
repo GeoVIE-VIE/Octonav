@@ -3984,15 +3984,15 @@ $btnExportDiff.Add_Click({
                     $csvData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
                 }
             }
-            catch {
-                [System.Windows.Forms.MessageBox]::Show(
-                    "Error exporting results:`n`n$($_.Exception.Message)",
-                    "Export Error",
-                    [System.Windows.Forms.MessageBoxButtons]::OK,
-                    [System.Windows.Forms.MessageBoxIcon]::Error
-                )
-                Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
-            }
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error exporting results:`n`n$($_.Exception.Message)",
+                "Export Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
         }
     }
 })
