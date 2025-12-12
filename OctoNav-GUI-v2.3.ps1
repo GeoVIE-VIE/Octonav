@@ -589,6 +589,81 @@ $menuToolsRefresh.Add_Click({
 })
 $menuTools.DropDownItems.Add($menuToolsRefresh)
 
+# Separator
+$menuTools.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+# Export Resources Menu Item
+$menuToolsExportResources = New-Object System.Windows.Forms.ToolStripMenuItem
+$menuToolsExportResources.Text = "Export &Resources..."
+$menuToolsExportResources.Add_Click({
+    # Check if embedded resources exist
+    if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No embedded resources found in this build.`n`nTo embed resources:`n1. Place files in the 'resources' folder`n2. Run Package-Resources.ps1",
+            "No Resources",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return
+    }
+
+    # Show folder browser dialog
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Select folder to export resources to"
+    $folderBrowser.ShowNewFolderButton = $true
+
+    if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $outputPath = $folderBrowser.SelectedPath
+
+        try {
+            $exportedFiles = @()
+            foreach ($resourceName in $script:EmbeddedResources.Keys) {
+                $outputFile = Join-Path $outputPath $resourceName
+
+                # Check if file exists
+                if (Test-Path $outputFile) {
+                    $overwrite = [System.Windows.Forms.MessageBox]::Show(
+                        "File '$resourceName' already exists.`n`nOverwrite?",
+                        "File Exists",
+                        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+                        [System.Windows.Forms.MessageBoxIcon]::Question
+                    )
+
+                    if ($overwrite -eq [System.Windows.Forms.DialogResult]::Cancel) {
+                        return
+                    }
+                    if ($overwrite -eq [System.Windows.Forms.DialogResult]::No) {
+                        continue
+                    }
+                }
+
+                # Export the file
+                $bytes = [Convert]::FromBase64String($script:EmbeddedResources[$resourceName])
+                [System.IO.File]::WriteAllBytes($outputFile, $bytes)
+                $exportedFiles += $resourceName
+            }
+
+            if ($exportedFiles.Count -gt 0) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Successfully exported $($exportedFiles.Count) file(s) to:`n$outputPath`n`nFiles:`n$($exportedFiles -join "`n")",
+                    "Export Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            }
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error exporting resources:`n`n$($_.Exception.Message)",
+                "Export Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        }
+    }
+})
+$menuTools.DropDownItems.Add($menuToolsExportResources)
+
 # View Menu
 $menuView = New-Object System.Windows.Forms.ToolStripMenuItem
 $menuView.Text = "&View"
@@ -647,6 +722,91 @@ $menuStrip.Items.Add($menuHelp)
 
 $mainForm.Controls.Add($menuStrip)
 $mainForm.MainMenuStrip = $menuStrip
+
+# ============================================
+# EMBEDDED RESOURCES (Auto-generated)
+# ============================================
+# Generated: Placeholder - No resources embedded yet
+# Files: 0
+# To update: Place files in 'resources' folder and run Package-Resources.ps1
+
+$script:EmbeddedResources = @{
+    # Resources will be added here by Package-Resources.ps1
+    # Example: 'template.rdox' = 'base64encodedcontent...'
+}
+
+function Get-EmbeddedResourceList {
+    <#
+    .SYNOPSIS
+        Returns list of embedded resource files
+    #>
+    return $script:EmbeddedResources.Keys | Sort-Object
+}
+
+function Export-EmbeddedResource {
+    <#
+    .SYNOPSIS
+        Exports an embedded resource to the specified path
+    .PARAMETER Name
+        Name of the resource file to export
+    .PARAMETER OutputPath
+        Directory to export to (defaults to current directory)
+    .PARAMETER Force
+        Overwrite existing files
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Name,
+        [string]$OutputPath = (Get-Location).Path,
+        [switch]$Force
+    )
+
+    if (-not $script:EmbeddedResources.ContainsKey($Name)) {
+        throw "Resource '$Name' not found. Available: $($script:EmbeddedResources.Keys -join ', ')"
+    }
+
+    $outputFile = Join-Path $OutputPath $Name
+
+    if ((Test-Path $outputFile) -and -not $Force) {
+        throw "File already exists: $outputFile. Use -Force to overwrite."
+    }
+
+    $bytes = [Convert]::FromBase64String($script:EmbeddedResources[$Name])
+    [System.IO.File]::WriteAllBytes($outputFile, $bytes)
+
+    return $outputFile
+}
+
+function Export-AllEmbeddedResources {
+    <#
+    .SYNOPSIS
+        Exports all embedded resources to the specified path
+    .PARAMETER OutputPath
+        Directory to export to (defaults to current directory)
+    .PARAMETER Force
+        Overwrite existing files
+    #>
+    param(
+        [string]$OutputPath = (Get-Location).Path,
+        [switch]$Force
+    )
+
+    $exported = @()
+    foreach ($name in $script:EmbeddedResources.Keys) {
+        try {
+            $file = Export-EmbeddedResource -Name $name -OutputPath $OutputPath -Force:$Force
+            $exported += $file
+        }
+        catch {
+            Write-Warning "Failed to export $name`: $($_.Exception.Message)"
+        }
+    }
+    return $exported
+}
+
+# ============================================
+# END EMBEDDED RESOURCES
+# ============================================
 
 # ============================================
 # CREATE TAB CONTROL
