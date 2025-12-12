@@ -54,19 +54,8 @@ foreach ($file in $resourceFiles) {
 }
 Write-Host ""
 
-# Build the embedded resources hashtable
-$embeddedCode = @"
-
-# ============================================
-# EMBEDDED RESOURCES (Auto-generated)
-# ============================================
-# Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-# Files: $($resourceFiles.Count)
-# To update: Place files in 'resources' folder and run Package-Resources.ps1
-
-`$script:EmbeddedResources = @{
-"@
-
+# Build the embedded resources hashtable entries
+$resourceEntries = @()
 foreach ($file in $resourceFiles) {
     Write-Host "[ENCODING] $($file.Name)..." -ForegroundColor Cyan -NoNewline
 
@@ -74,90 +63,105 @@ foreach ($file in $resourceFiles) {
     $fileBytes = [System.IO.File]::ReadAllBytes($file.FullName)
     $base64 = [Convert]::ToBase64String($fileBytes)
 
-    # Add to hashtable (split long strings for readability)
-    $embeddedCode += "`n    '$($file.Name)' = '$base64'"
+    # Add to entries list
+    $resourceEntries += "    '$($file.Name)' = '$base64'"
 
     Write-Host " Done ($([math]::Round($base64.Length / 1KB, 1)) KB encoded)" -ForegroundColor Green
 }
 
-$embeddedCode += @"
+# Build the complete embedded code block
+$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$resourceHashtable = $resourceEntries -join "`n"
 
-}
+$embeddedCodeLines = @(
+    ''
+    '# ============================================'
+    '# EMBEDDED RESOURCES (Auto-generated)'
+    '# ============================================'
+    "# Generated: $timestamp"
+    "# Files: $($resourceFiles.Count)"
+    '# To update: Place files in ''resources'' folder and run Package-Resources.ps1'
+    ''
+    '$script:EmbeddedResources = @{'
+    $resourceHashtable
+    '}'
+    ''
+    'function Get-EmbeddedResourceList {'
+    '    <#'
+    '    .SYNOPSIS'
+    '        Returns list of embedded resource files'
+    '    #>'
+    '    return $script:EmbeddedResources.Keys | Sort-Object'
+    '}'
+    ''
+    'function Export-EmbeddedResource {'
+    '    <#'
+    '    .SYNOPSIS'
+    '        Exports an embedded resource to the specified path'
+    '    .PARAMETER Name'
+    '        Name of the resource file to export'
+    '    .PARAMETER OutputPath'
+    '        Directory to export to (defaults to current directory)'
+    '    .PARAMETER Force'
+    '        Overwrite existing files'
+    '    #>'
+    '    param('
+    '        [Parameter(Mandatory=$true)]'
+    '        [string]$Name,'
+    '        [string]$OutputPath = (Get-Location).Path,'
+    '        [switch]$Force'
+    '    )'
+    ''
+    '    if (-not $script:EmbeddedResources.ContainsKey($Name)) {'
+    '        throw "Resource ''$Name'' not found. Available: $($script:EmbeddedResources.Keys -join '', '')"'
+    '    }'
+    ''
+    '    $outputFile = Join-Path $OutputPath $Name'
+    ''
+    '    if ((Test-Path $outputFile) -and -not $Force) {'
+    '        throw "File already exists: $outputFile. Use -Force to overwrite."'
+    '    }'
+    ''
+    '    $bytes = [Convert]::FromBase64String($script:EmbeddedResources[$Name])'
+    '    [System.IO.File]::WriteAllBytes($outputFile, $bytes)'
+    ''
+    '    return $outputFile'
+    '}'
+    ''
+    'function Export-AllEmbeddedResources {'
+    '    <#'
+    '    .SYNOPSIS'
+    '        Exports all embedded resources to the specified path'
+    '    .PARAMETER OutputPath'
+    '        Directory to export to (defaults to current directory)'
+    '    .PARAMETER Force'
+    '        Overwrite existing files'
+    '    #>'
+    '    param('
+    '        [string]$OutputPath = (Get-Location).Path,'
+    '        [switch]$Force'
+    '    )'
+    ''
+    '    $exported = @()'
+    '    foreach ($resName in $script:EmbeddedResources.Keys) {'
+    '        try {'
+    '            $file = Export-EmbeddedResource -Name $resName -OutputPath $OutputPath -Force:$Force'
+    '            $exported += $file'
+    '        }'
+    '        catch {'
+    '            Write-Warning "Failed to export $($resName): $($_.Exception.Message)"'
+    '        }'
+    '    }'
+    '    return $exported'
+    '}'
+    ''
+    '# ============================================'
+    '# END EMBEDDED RESOURCES'
+    '# ============================================'
+    ''
+)
 
-function Get-EmbeddedResourceList {
-    <#
-    .SYNOPSIS
-        Returns list of embedded resource files
-    #>
-    return `$script:EmbeddedResources.Keys | Sort-Object
-}
-
-function Export-EmbeddedResource {
-    <#
-    .SYNOPSIS
-        Exports an embedded resource to the specified path
-    .PARAMETER Name
-        Name of the resource file to export
-    .PARAMETER OutputPath
-        Directory to export to (defaults to current directory)
-    .PARAMETER Force
-        Overwrite existing files
-    #>
-    param(
-        [Parameter(Mandatory=`$true)]
-        [string]`$Name,
-        [string]`$OutputPath = (Get-Location).Path,
-        [switch]`$Force
-    )
-
-    if (-not `$script:EmbeddedResources.ContainsKey(`$Name)) {
-        throw "Resource '`$Name' not found. Available: `$(`$script:EmbeddedResources.Keys -join ', ')"
-    }
-
-    `$outputFile = Join-Path `$OutputPath `$Name
-
-    if ((Test-Path `$outputFile) -and -not `$Force) {
-        throw "File already exists: `$outputFile. Use -Force to overwrite."
-    }
-
-    `$bytes = [Convert]::FromBase64String(`$script:EmbeddedResources[`$Name])
-    [System.IO.File]::WriteAllBytes(`$outputFile, `$bytes)
-
-    return `$outputFile
-}
-
-function Export-AllEmbeddedResources {
-    <#
-    .SYNOPSIS
-        Exports all embedded resources to the specified path
-    .PARAMETER OutputPath
-        Directory to export to (defaults to current directory)
-    .PARAMETER Force
-        Overwrite existing files
-    #>
-    param(
-        [string]`$OutputPath = (Get-Location).Path,
-        [switch]`$Force
-    )
-
-    `$exported = @()
-    foreach (`$name in `$script:EmbeddedResources.Keys) {
-        try {
-            `$file = Export-EmbeddedResource -Name `$name -OutputPath `$OutputPath -Force:`$Force
-            `$exported += `$file
-        }
-        catch {
-            Write-Warning "Failed to export `${name}: `$(`$_.Exception.Message)"
-        }
-    }
-    return `$exported
-}
-
-# ============================================
-# END EMBEDDED RESOURCES
-# ============================================
-
-"@
+$embeddedCode = $embeddedCodeLines -join "`r`n"
 
 # Read the target script
 Write-Host ""
@@ -168,34 +172,67 @@ if (-not (Test-Path $TargetScript)) {
     exit 1
 }
 
-$scriptContent = Get-Content $TargetScript -Raw
+$scriptLines = Get-Content $TargetScript
 
-# Check if embedded resources section already exists
-$startMarker = "# ============================================`n# EMBEDDED RESOURCES (Auto-generated)"
-$endMarker = "# ============================================`n# END EMBEDDED RESOURCES`n# ============================================"
+# Find the markers
+$startMarker = "# EMBEDDED RESOURCES (Auto-generated)"
+$endMarker = "# END EMBEDDED RESOURCES"
+$insertMarker = "# CREATE TAB CONTROL"
 
-if ($scriptContent -match "# EMBEDDED RESOURCES \(Auto-generated\)") {
+$startIndex = -1
+$endIndex = -1
+$insertIndex = -1
+
+for ($i = 0; $i -lt $scriptLines.Count; $i++) {
+    if ($scriptLines[$i] -match [regex]::Escape($startMarker)) {
+        $startIndex = $i - 1  # Include the separator line before
+    }
+    if ($scriptLines[$i] -match [regex]::Escape($endMarker)) {
+        $endIndex = $i + 1  # Include the separator line after
+    }
+    if ($scriptLines[$i] -match [regex]::Escape($insertMarker)) {
+        $insertIndex = $i - 1  # Insert before the separator line
+    }
+}
+
+$newScriptLines = @()
+
+if ($startIndex -ge 0 -and $endIndex -gt $startIndex) {
     # Replace existing section
-    $pattern = "(?s)# ============================================\r?\n# EMBEDDED RESOURCES \(Auto-generated\).*?# END EMBEDDED RESOURCES\r?\n# ============================================\r?\n"
-    $scriptContent = $scriptContent -replace $pattern, $embeddedCode
-    Write-Host "[INFO] Replaced existing embedded resources section" -ForegroundColor Green
+    Write-Host "[INFO] Replacing existing embedded resources section (lines $startIndex to $endIndex)" -ForegroundColor Green
+
+    # Add lines before the embedded section
+    $newScriptLines += $scriptLines[0..($startIndex - 1)]
+
+    # Add the new embedded code
+    $newScriptLines += $embeddedCodeLines
+
+    # Add lines after the embedded section
+    if ($endIndex -lt $scriptLines.Count - 1) {
+        $newScriptLines += $scriptLines[($endIndex + 1)..($scriptLines.Count - 1)]
+    }
+}
+elseif ($insertIndex -ge 0) {
+    # Insert new section
+    Write-Host "[INFO] Inserting new embedded resources section at line $insertIndex" -ForegroundColor Green
+
+    # Add lines before the insert point
+    $newScriptLines += $scriptLines[0..($insertIndex - 1)]
+
+    # Add the new embedded code
+    $newScriptLines += $embeddedCodeLines
+
+    # Add remaining lines
+    $newScriptLines += $scriptLines[$insertIndex..($scriptLines.Count - 1)]
 }
 else {
-    # Insert after the module imports (find a good spot)
-    # Look for the "CREATE TAB CONTROL" section and insert before it
-    $insertPoint = "# ============================================`n# CREATE TAB CONTROL"
-    if ($scriptContent -match [regex]::Escape($insertPoint)) {
-        $scriptContent = $scriptContent -replace [regex]::Escape($insertPoint), "$embeddedCode`n$insertPoint"
-        Write-Host "[INFO] Inserted new embedded resources section" -ForegroundColor Green
-    }
-    else {
-        Write-Host "[ERROR] Could not find insertion point in script" -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "[ERROR] Could not find insertion point in script" -ForegroundColor Red
+    exit 1
 }
 
 # Save the updated script
-$scriptContent | Set-Content $TargetScript -NoNewline
+$newScriptLines | Set-Content $TargetScript -Encoding UTF8
+
 Write-Host "[SUCCESS] Resources embedded successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
