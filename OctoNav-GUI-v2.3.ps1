@@ -3081,45 +3081,36 @@ $lblRightHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Dra
 $lblRightHeader.TextAlign = "MiddleCenter"
 $resultsContainer.Controls.Add($lblRightHeader)
 
-# Left RichTextBox (Original file content)
-$script:rtbLeftFile = New-Object System.Windows.Forms.RichTextBox
-$script:rtbLeftFile.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbLeftFile.Size = New-Object System.Drawing.Size(465, 250)
-$script:rtbLeftFile.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbLeftFile.ReadOnly = $true
-$script:rtbLeftFile.WordWrap = $false
-$script:rtbLeftFile.ScrollBars = "Both"
-$script:rtbLeftFile.BackColor = [System.Drawing.Color]::White
-$script:rtbLeftFile.BorderStyle = "FixedSingle"
-$script:rtbLeftFile.Anchor = "Top,Bottom,Left"
-$resultsContainer.Controls.Add($script:rtbLeftFile)
+# Left WebBrowser (Original file content) - HTML-based for performance
+$script:wbLeftFile = New-Object System.Windows.Forms.WebBrowser
+$script:wbLeftFile.Location = New-Object System.Drawing.Point(0, 25)
+$script:wbLeftFile.Size = New-Object System.Drawing.Size(465, 250)
+$script:wbLeftFile.Anchor = "Top,Bottom,Left"
+$script:wbLeftFile.IsWebBrowserContextMenuEnabled = $false
+$script:wbLeftFile.WebBrowserShortcutsEnabled = $false
+$script:wbLeftFile.ScriptErrorsSuppressed = $true
+$resultsContainer.Controls.Add($script:wbLeftFile)
 
-# Right RichTextBox (Modified file content)
-$script:rtbRightFile = New-Object System.Windows.Forms.RichTextBox
-$script:rtbRightFile.Location = New-Object System.Drawing.Point(475, 25)
-$script:rtbRightFile.Size = New-Object System.Drawing.Size(465, 250)
-$script:rtbRightFile.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbRightFile.ReadOnly = $true
-$script:rtbRightFile.WordWrap = $false
-$script:rtbRightFile.ScrollBars = "Both"
-$script:rtbRightFile.BackColor = [System.Drawing.Color]::White
-$script:rtbRightFile.BorderStyle = "FixedSingle"
-$script:rtbRightFile.Anchor = "Top,Bottom,Left,Right"
-$resultsContainer.Controls.Add($script:rtbRightFile)
+# Right WebBrowser (Modified file content) - HTML-based for performance
+$script:wbRightFile = New-Object System.Windows.Forms.WebBrowser
+$script:wbRightFile.Location = New-Object System.Drawing.Point(475, 25)
+$script:wbRightFile.Size = New-Object System.Drawing.Size(465, 250)
+$script:wbRightFile.Anchor = "Top,Bottom,Left,Right"
+$script:wbRightFile.IsWebBrowserContextMenuEnabled = $false
+$script:wbRightFile.WebBrowserShortcutsEnabled = $false
+$script:wbRightFile.ScriptErrorsSuppressed = $true
+$resultsContainer.Controls.Add($script:wbRightFile)
 
-# Unified view RichTextBox (hidden by default)
-$script:rtbUnifiedView = New-Object System.Windows.Forms.RichTextBox
-$script:rtbUnifiedView.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbUnifiedView.Size = New-Object System.Drawing.Size(940, 250)
-$script:rtbUnifiedView.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbUnifiedView.ReadOnly = $true
-$script:rtbUnifiedView.WordWrap = $false
-$script:rtbUnifiedView.ScrollBars = "Both"
-$script:rtbUnifiedView.BackColor = [System.Drawing.Color]::White
-$script:rtbUnifiedView.BorderStyle = "FixedSingle"
-$script:rtbUnifiedView.Anchor = "Top,Bottom,Left,Right"
-$script:rtbUnifiedView.Visible = $false
-$resultsContainer.Controls.Add($script:rtbUnifiedView)
+# Unified view WebBrowser (hidden by default) - HTML-based for performance
+$script:wbUnifiedView = New-Object System.Windows.Forms.WebBrowser
+$script:wbUnifiedView.Location = New-Object System.Drawing.Point(0, 25)
+$script:wbUnifiedView.Size = New-Object System.Drawing.Size(940, 250)
+$script:wbUnifiedView.Anchor = "Top,Bottom,Left,Right"
+$script:wbUnifiedView.IsWebBrowserContextMenuEnabled = $false
+$script:wbUnifiedView.WebBrowserShortcutsEnabled = $false
+$script:wbUnifiedView.ScriptErrorsSuppressed = $true
+$script:wbUnifiedView.Visible = $false
+$resultsContainer.Controls.Add($script:wbUnifiedView)
 
 # ============================================
 # EMBEDDED RESOURCES PANEL
@@ -3454,10 +3445,164 @@ function Compare-FilesContent {
     }
 }
 
+function ConvertTo-HtmlEncoded {
+    <#
+    .SYNOPSIS
+        HTML encodes a string, handling special characters
+    #>
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    return $Text -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;' -replace "'", '&#39;'
+}
+
+function Generate-ComparisonHtml {
+    <#
+    .SYNOPSIS
+        Generates HTML for file comparison display - much faster than RichTextBox
+    #>
+    param(
+        [hashtable]$Results,
+        [bool]$ShowOnlyDiffs = $false,
+        [bool]$UnifiedView = $false,
+        [string]$Side = "both"  # "left", "right", or "both"
+    )
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { 
+            height: 100%;
+            width: 100%;
+        }
+        body { 
+            font-family: 'Consolas', 'Courier New', monospace; 
+            font-size: 13px; 
+            line-height: 1.4; 
+            background: #ffffff;
+            overflow: auto;
+        }
+        .diff-container { 
+            width: 100%; 
+            min-height: 100%;
+        }
+        .diff-line { 
+            white-space: pre-wrap; 
+            word-wrap: break-word;
+            padding: 2px 8px;
+            border-bottom: 1px solid #e0e0e0;
+            display: block;
+        }
+        .line-num { 
+            display: inline-block; 
+            width: 60px; 
+            text-align: right; 
+            padding-right: 10px; 
+            color: #666; 
+            user-select: none;
+            font-weight: normal;
+        }
+        .line-content { 
+            padding-left: 5px;
+        }
+        .added { 
+            background: #d4edda; 
+            color: #155724;
+        }
+        .removed { 
+            background: #f8d7da; 
+            color: #721c24;
+        }
+        .unchanged { 
+            background: #ffffff; 
+            color: #333;
+        }
+        .added-light { 
+            background: #e6f3e9; 
+            color: #666;
+        }
+        .removed-light { 
+            background: #fce8e8; 
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="diff-container">
+"@
+
+    if ($UnifiedView) {
+        # Unified view - single column
+        foreach ($diff in $Results.Differences) {
+            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
+            
+            $lineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " } }
+            $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
+            $escapedContent = ConvertTo-HtmlEncoded -Text $content
+            $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
+            $class = $diff.Type.ToLower()
+            
+            $html += "        <div class='diff-line $class'><span class='line-num'>$lineNum</span><span class='line-content'>$prefix $escapedContent</span></div>`n"
+        }
+    }
+    else {
+        # Side-by-side view - generate left or right panel
+        foreach ($diff in $Results.Differences) {
+            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
+            
+            $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
+            $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
+            
+            switch ($diff.Type) {
+                "Added" {
+                    if ($Side -eq "left" -or $Side -eq "both") {
+                        $leftContent = ConvertTo-HtmlEncoded -Text "     |"
+                        $html += "        <div class='diff-line added-light'><span class='line-num'>     </span><span class='line-content'>  $leftContent</span></div>`n"
+                    }
+                    if ($Side -eq "right" -or $Side -eq "both") {
+                        $rightContent = ConvertTo-HtmlEncoded -Text $diff.Content2
+                        $html += "        <div class='diff-line added'><span class='line-num'>$rightLineNum</span><span class='line-content'>+ $rightContent</span></div>`n"
+                    }
+                }
+                "Removed" {
+                    if ($Side -eq "left" -or $Side -eq "both") {
+                        $leftContent = ConvertTo-HtmlEncoded -Text $diff.Content1
+                        $html += "        <div class='diff-line removed'><span class='line-num'>$leftLineNum</span><span class='line-content'>- $leftContent</span></div>`n"
+                    }
+                    if ($Side -eq "right" -or $Side -eq "both") {
+                        $rightContent = ConvertTo-HtmlEncoded -Text "     |"
+                        $html += "        <div class='diff-line removed-light'><span class='line-num'>     </span><span class='line-content'>  $rightContent</span></div>`n"
+                    }
+                }
+                "Unchanged" {
+                    if ($Side -eq "left" -or $Side -eq "both") {
+                        $leftContent = ConvertTo-HtmlEncoded -Text $diff.Content1
+                        $html += "        <div class='diff-line unchanged'><span class='line-num'>$leftLineNum</span><span class='line-content'>  $leftContent</span></div>`n"
+                    }
+                    if ($Side -eq "right" -or $Side -eq "both") {
+                        $rightContent = ConvertTo-HtmlEncoded -Text $diff.Content2
+                        $html += "        <div class='diff-line unchanged'><span class='line-num'>$rightLineNum</span><span class='line-content'>  $rightContent</span></div>`n"
+                    }
+                }
+            }
+        }
+    }
+
+    $html += @"
+    </div>
+</body>
+</html>
+"@
+    return $html
+}
+
 function Show-ComparisonResults {
     <#
     .SYNOPSIS
-        Displays comparison results in the UI with optimized rendering
+        Displays comparison results in the UI using fast HTML rendering
     #>
     param(
         [hashtable]$Results,
@@ -3471,137 +3616,31 @@ function Show-ComparisonResults {
     $lblModifiedCount.Text = "~ $($Results.Modified)"
     $lblUnchangedCount.Text = "= $($Results.Unchanged)"
 
-    # Define colors once for performance
-    $colorAddedBg = [System.Drawing.Color]::FromArgb(200, 255, 200)
-    $colorAddedFg = [System.Drawing.Color]::FromArgb(0, 100, 0)
-    $colorRemovedBg = [System.Drawing.Color]::FromArgb(255, 200, 200)
-    $colorRemovedFg = [System.Drawing.Color]::FromArgb(139, 0, 0)
-    $colorAddedLightBg = [System.Drawing.Color]::FromArgb(230, 255, 230)
-    $colorRemovedLightBg = [System.Drawing.Color]::FromArgb(255, 230, 230)
-    $colorGrayFg = [System.Drawing.Color]::FromArgb(150, 150, 150)
-
     if ($UnifiedView) {
         # Show unified view
-        $script:rtbLeftFile.Visible = $false
-        $script:rtbRightFile.Visible = $false
+        $script:wbLeftFile.Visible = $false
+        $script:wbRightFile.Visible = $false
         $lblLeftHeader.Visible = $false
         $lblRightHeader.Visible = $false
-        $script:rtbUnifiedView.Visible = $true
-
-        # Suspend drawing for performance
-        $script:rtbUnifiedView.SuspendLayout()
-        $script:rtbUnifiedView.Clear()
-
-        # Build line data first, then apply
-        $lineData = @()
-        foreach ($diff in $Results.Differences) {
-            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
-
-            switch ($diff.Type) {
-                "Added" {
-                    $lineNum = $diff.Line2.ToString().PadLeft(5)
-                    $lineData += @{ Content = "+ [$lineNum] $($diff.Content2)"; BgColor = $colorAddedBg; FgColor = $colorAddedFg }
-                }
-                "Removed" {
-                    $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $lineData += @{ Content = "- [$lineNum] $($diff.Content1)"; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg }
-                }
-                "Unchanged" {
-                    $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $lineData += @{ Content = "  [$lineNum] $($diff.Content1)"; BgColor = [System.Drawing.Color]::White; FgColor = [System.Drawing.Color]::Black }
-                }
-            }
-        }
-
-        # Apply all content with formatting
-        foreach ($line in $lineData) {
-            $startPos = $script:rtbUnifiedView.TextLength
-            $script:rtbUnifiedView.AppendText("$($line.Content)`r`n")
-            $script:rtbUnifiedView.Select($startPos, $line.Content.Length + 2)
-            $script:rtbUnifiedView.SelectionBackColor = $line.BgColor
-            $script:rtbUnifiedView.SelectionColor = $line.FgColor
-        }
-
-        $script:rtbUnifiedView.Select(0, 0)
-        $script:rtbUnifiedView.ResumeLayout()
+        $script:wbUnifiedView.Visible = $true
+        
+        # Generate and load HTML into WebBrowser - much faster than RichTextBox
+        $htmlContent = Generate-ComparisonHtml -Results $Results -ShowOnlyDiffs $ShowOnlyDiffs -UnifiedView $true
+        $script:wbUnifiedView.DocumentText = $htmlContent
     }
     else {
         # Show side-by-side view
-        $script:rtbUnifiedView.Visible = $false
-        $script:rtbLeftFile.Visible = $true
-        $script:rtbRightFile.Visible = $true
+        $script:wbUnifiedView.Visible = $false
+        $script:wbLeftFile.Visible = $true
+        $script:wbRightFile.Visible = $true
         $lblLeftHeader.Visible = $true
         $lblRightHeader.Visible = $true
-
-        # Suspend drawing for performance
-        $script:rtbLeftFile.SuspendLayout()
-        $script:rtbRightFile.SuspendLayout()
-        $script:rtbLeftFile.Clear()
-        $script:rtbRightFile.Clear()
-
-        # Build line data for both panels
-        $leftLines = @()
-        $rightLines = @()
-
-        foreach ($diff in $Results.Differences) {
-            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
-
-            switch ($diff.Type) {
-                "Added" {
-                    $leftContent = "     |".PadRight(80)
-                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
-                    $rightContent = "$rightLineNum  + $($diff.Content2)"
-                    $leftLines += @{ Content = $leftContent; BgColor = $colorAddedLightBg; FgColor = $colorGrayFg; HasColor = $true }
-                    $rightLines += @{ Content = $rightContent; BgColor = $colorAddedBg; FgColor = $colorAddedFg; HasColor = $true }
-                }
-                "Removed" {
-                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                    $leftContent = "$leftLineNum  - $($diff.Content1)"
-                    $rightContent = "     |".PadRight(80)
-                    $leftLines += @{ Content = $leftContent; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg; HasColor = $true }
-                    $rightLines += @{ Content = $rightContent; BgColor = $colorRemovedLightBg; FgColor = $colorGrayFg; HasColor = $true }
-                }
-                "Unchanged" {
-                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
-                    $leftContent = "$leftLineNum    $($diff.Content1)"
-                    $rightContent = "$rightLineNum    $($diff.Content2)"
-                    $leftLines += @{ Content = $leftContent; HasColor = $false }
-                    $rightLines += @{ Content = $rightContent; HasColor = $false }
-                }
-            }
-        }
-
-        # Apply all content to left panel
-        foreach ($line in $leftLines) {
-            if ($line.HasColor) {
-                $startPos = $script:rtbLeftFile.TextLength
-                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
-                $script:rtbLeftFile.Select($startPos, $line.Content.Length + 2)
-                $script:rtbLeftFile.SelectionBackColor = $line.BgColor
-                $script:rtbLeftFile.SelectionColor = $line.FgColor
-            } else {
-                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
-            }
-        }
-
-        # Apply all content to right panel
-        foreach ($line in $rightLines) {
-            if ($line.HasColor) {
-                $startPos = $script:rtbRightFile.TextLength
-                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
-                $script:rtbRightFile.Select($startPos, $line.Content.Length + 2)
-                $script:rtbRightFile.SelectionBackColor = $line.BgColor
-                $script:rtbRightFile.SelectionColor = $line.FgColor
-            } else {
-                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
-            }
-        }
-
-        $script:rtbLeftFile.Select(0, 0)
-        $script:rtbRightFile.Select(0, 0)
-        $script:rtbLeftFile.ResumeLayout()
-        $script:rtbRightFile.ResumeLayout()
+        
+        # Generate separate HTML for left and right panels - much faster than RichTextBox
+        $htmlLeft = Generate-ComparisonHtml -Results $Results -ShowOnlyDiffs $ShowOnlyDiffs -UnifiedView $false -Side "left"
+        $htmlRight = Generate-ComparisonHtml -Results $Results -ShowOnlyDiffs $ShowOnlyDiffs -UnifiedView $false -Side "right"
+        $script:wbLeftFile.DocumentText = $htmlLeft
+        $script:wbRightFile.DocumentText = $htmlRight
     }
 }
 
@@ -3695,9 +3734,9 @@ $btnSwapFiles.Add_Click({
 $btnClearCompare.Add_Click({
     $txtFile1Path.Text = ""
     $txtFile2Path.Text = ""
-    $script:rtbLeftFile.Clear()
-    $script:rtbRightFile.Clear()
-    $script:rtbUnifiedView.Clear()
+    $script:wbLeftFile.DocumentText = "<html><body></body></html>"
+    $script:wbRightFile.DocumentText = "<html><body></body></html>"
+    $script:wbUnifiedView.DocumentText = "<html><body></body></html>"
     $lblLeftHeader.Text = "Original File"
     $lblRightHeader.Text = "Modified File"
     $lblAddedCount.Text = "+ 0"
