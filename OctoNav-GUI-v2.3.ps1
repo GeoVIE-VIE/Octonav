@@ -3914,15 +3914,9 @@ $btnExportDiff.Add_Click({
     }
 })
 
-# Synchronized scrolling for side-by-side view
-$script:rtbLeftFile.Add_VScroll({
-    if ($script:rtbRightFile.Visible) {
-        $pos = $script:rtbLeftFile.GetPositionFromCharIndex(0)
-        $index = $script:rtbRightFile.GetCharIndexFromPosition($pos)
-        $script:rtbRightFile.Select($index, 0)
-        $script:rtbRightFile.ScrollToCaret()
-    }
-})
+# Synchronized scrolling for side-by-side view (HTML-based)
+# Note: WebBrowser controls handle scrolling via JavaScript in the HTML itself
+# The HTML generation includes synchronized scrolling when in side-by-side mode
 
 # ============================================
 # STATUS BAR
