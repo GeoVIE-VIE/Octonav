@@ -10,6 +10,56 @@
 # DHCP CACHE ENCRYPTION FUNCTIONS
 # ============================================
 
+# Session-scoped password cache to avoid multiple prompts
+$script:DHCPCachePassword = $null
+$script:DHCPCachePasswordTimestamp = $null
+$script:DHCPCachePasswordTimeout = 300  # 5 minutes timeout for password cache
+
+function Get-SessionCachedPassword {
+    <#
+    .SYNOPSIS
+        Gets the session-cached password if still valid
+    .DESCRIPTION
+        Returns the cached password if it exists and hasn't timed out.
+        Timeout is 5 minutes to balance security and usability.
+    #>
+    param(
+        [ValidateSet("Save", "Load")]
+        [string]$Action = "Load"
+    )
+
+    # Check if we have a cached password that's still valid
+    if ($script:DHCPCachePassword -and $script:DHCPCachePasswordTimestamp) {
+        $elapsed = (Get-Date) - $script:DHCPCachePasswordTimestamp
+        if ($elapsed.TotalSeconds -lt $script:DHCPCachePasswordTimeout) {
+            return $script:DHCPCachePassword
+        } else {
+            # Password expired, clear it
+            Clear-SessionCachedPassword
+        }
+    }
+
+    # No valid cached password, prompt user
+    $password = Get-DHCPCachePassword -Action $Action
+
+    if ($password) {
+        # Cache the password for this session
+        $script:DHCPCachePassword = $password
+        $script:DHCPCachePasswordTimestamp = Get-Date
+    }
+
+    return $password
+}
+
+function Clear-SessionCachedPassword {
+    <#
+    .SYNOPSIS
+        Clears the session-cached password
+    #>
+    $script:DHCPCachePassword = $null
+    $script:DHCPCachePasswordTimestamp = $null
+}
+
 function Protect-DHCPCache {
     <#
     .SYNOPSIS
@@ -435,8 +485,8 @@ function Get-CachedDHCPServers {
     # Load from encrypted .dat file
     if (Test-Path $cacheFileDat) {
         try {
-            # Prompt for password
-            $password = Get-DHCPCachePassword -Action "Load"
+            # Get password from session cache or prompt user
+            $password = Get-SessionCachedPassword -Action "Load"
             if (-not $password) {
                 Write-Warning "Password required to load DHCP servers cache"
                 return @()
@@ -498,8 +548,8 @@ function Update-DHCPServerCache {
                 }
             })
 
-            # Prompt for password to encrypt cache
-            $password = Get-DHCPCachePassword -Action "Save"
+            # Get password from session cache or prompt user
+            $password = Get-SessionCachedPassword -Action "Save"
             if (-not $password) {
                 Write-Warning "Password required to save encrypted DHCP servers cache. Cache not saved."
                 [System.Windows.Forms.MessageBox]::Show(
@@ -644,8 +694,8 @@ function Get-CachedDHCPScopes {
     # Load from encrypted .dat file
     if (Test-Path $cacheFileDat) {
         try {
-            # Prompt for password
-            $password = Get-DHCPCachePassword -Action "Load"
+            # Get password from session cache or prompt user
+            $password = Get-SessionCachedPassword -Action "Load"
             if (-not $password) {
                 Write-Warning "Password required to load DHCP cache"
                 return @()
@@ -844,8 +894,8 @@ function Update-DHCPScopeCache {
 
         Write-Progress -Activity "Caching DHCP Scopes" -Completed
 
-        # Prompt for password to encrypt cache
-        $password = Get-DHCPCachePassword -Action "Save"
+        # Get password from session cache or prompt user
+        $password = Get-SessionCachedPassword -Action "Save"
         if (-not $password) {
             Write-Warning "Password required to save encrypted DHCP cache. Cache not saved."
             [System.Windows.Forms.MessageBox]::Show(
@@ -991,5 +1041,7 @@ Export-ModuleMember -Function @(
     'Update-DHCPScopeCache',
     'Get-SystemHealthSummary',
     'New-QuickActionButton',
-    'Get-RecentActivity'
+    'Get-RecentActivity',
+    'Get-SessionCachedPassword',
+    'Clear-SessionCachedPassword'
 )
