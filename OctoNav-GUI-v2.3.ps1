@@ -3168,10 +3168,14 @@ function Compare-FilesContent {
 
         for ($i = 1; $i -le $m; $i++) {
             for ($j = 1; $j -le $n; $j++) {
-                if ($file1Lines[$i - 1] -eq $file2Lines[$j - 1]) {
-                    $lcs[$i, $j] = $lcs[($i - 1), ($j - 1)] + 1
+                $iPrev = $i - 1
+                $jPrev = $j - 1
+                if ($file1Lines[$iPrev] -eq $file2Lines[$jPrev]) {
+                    $lcs[$i, $j] = $lcs[$iPrev, $jPrev] + 1
                 } else {
-                    $lcs[$i, $j] = [Math]::Max($lcs[($i - 1), $j], $lcs[$i, ($j - 1)])
+                    $valUp = $lcs[$iPrev, $j]
+                    $valLeft = $lcs[$i, $jPrev]
+                    $lcs[$i, $j] = [Math]::Max($valUp, $valLeft)
                 }
             }
         }
@@ -3182,33 +3186,36 @@ function Compare-FilesContent {
         $diffStack = New-Object System.Collections.Stack
 
         while ($i -gt 0 -or $j -gt 0) {
-            if ($i -gt 0 -and $j -gt 0 -and $file1Lines[$i - 1] -eq $file2Lines[$j - 1]) {
+            $iPrev = $i - 1
+            $jPrev = $j - 1
+
+            if ($i -gt 0 -and $j -gt 0 -and $file1Lines[$iPrev] -eq $file2Lines[$jPrev]) {
                 $diffStack.Push(@{
                     Type = "Unchanged"
                     Line1 = $i
                     Line2 = $j
-                    Content1 = $file1Lines[$i - 1]
-                    Content2 = $file2Lines[$j - 1]
+                    Content1 = $file1Lines[$iPrev]
+                    Content2 = $file2Lines[$jPrev]
                 })
                 $i--
                 $j--
             }
-            elseif ($j -gt 0 -and ($i -eq 0 -or $lcs[$i, ($j - 1)] -ge $lcs[($i - 1), $j])) {
+            elseif ($j -gt 0 -and ($i -eq 0 -or $lcs[$i, $jPrev] -ge $lcs[$iPrev, $j])) {
                 $diffStack.Push(@{
                     Type = "Added"
                     Line1 = $null
                     Line2 = $j
                     Content1 = ""
-                    Content2 = $file2Lines[$j - 1]
+                    Content2 = $file2Lines[$jPrev]
                 })
                 $j--
             }
-            elseif ($i -gt 0 -and ($j -eq 0 -or $lcs[$i, ($j - 1)] -lt $lcs[($i - 1), $j])) {
+            elseif ($i -gt 0 -and ($j -eq 0 -or $lcs[$i, $jPrev] -lt $lcs[$iPrev, $j])) {
                 $diffStack.Push(@{
                     Type = "Removed"
                     Line1 = $i
                     Line2 = $null
-                    Content1 = $file1Lines[$i - 1]
+                    Content1 = $file1Lines[$iPrev]
                     Content2 = ""
                 })
                 $i--
