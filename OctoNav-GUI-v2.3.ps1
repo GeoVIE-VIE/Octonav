@@ -3783,7 +3783,6 @@ $btnExportDiff.Add_Click({
     if ($saveDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
             $extension = [System.IO.Path]::GetExtension($saveDialog.FileName).ToLower()
-
             switch ($extension) {
                 ".html" {
                     # Generate interactive HTML with JavaScript controls
@@ -3866,7 +3865,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("    <script>")
                     [void]$htmlFile.AppendLine("        const diffData = " + $jsonData + ";")
                     [void]$htmlFile.AppendLine("        function renderView() {")
-                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=\"viewMode\"]:checked').value;")
+                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=`"viewMode`"]:checked').value;")
                     [void]$htmlFile.AppendLine("            const showOnlyDiffs = document.getElementById('showOnlyDiffs').checked;")
                     [void]$htmlFile.AppendLine("            const container = document.getElementById('diffContent');")
                     [void]$htmlFile.AppendLine("            container.innerHTML = '';")
@@ -3882,7 +3881,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("                const className = diff.Type.toLowerCase();")
                     [void]$htmlFile.AppendLine("                const lineDiv = document.createElement('div');")
                     [void]$htmlFile.AppendLine("                lineDiv.className = 'diff-line unified ' + className;")
-                    [void]$htmlFile.AppendLine("                lineDiv.innerHTML = '<span class=`"line-num`">' + lineNum + '</span><span class=`"line-content`">' + prefix + ' ' + content + '</span>';")
+                    [void]$htmlFile.AppendLine('                lineDiv.innerHTML = ''<span class="line-num">'' + lineNum + ''</span><span class="line-content">'' + prefix + '' '' + content + ''</span>'';')
                     [void]$htmlFile.AppendLine("                div.appendChild(lineDiv);")
                     [void]$htmlFile.AppendLine("            });")
                     [void]$htmlFile.AppendLine("            container.appendChild(div);")
@@ -3900,11 +3899,11 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("                if (showOnlyDiffs && diff.Type === 'Unchanged') return;")
                     [void]$htmlFile.AppendLine("                const row = document.createElement('tr');")
                     [void]$htmlFile.AppendLine("                if (diff.Type === 'Added') {")
-                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line added-light`"><span class=`"line-num`">     </span><span class=`"line-content`">  </span></td><td class=`"diff-line added`"><span class=`"line-num`">' + diff.RightLineNum + '</span><span class=`"line-content`">+ ' + diff.RightContent + '</span></td>';")
+                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line added-light"><span class="line-num">     </span><span class="line-content">  </span></td><td class="diff-line added"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">+ '' + diff.RightContent + ''</span></td>'';')
                     [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Removed') {")
-                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line removed`"><span class=`"line-num`">' + diff.LeftLineNum + '</span><span class=`"line-content`">- ' + diff.LeftContent + '</span></td><td class=`"diff-line removed-light`"><span class=`"line-num`">     </span><span class=`"line-content`">  </span></td>';")
+                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line removed"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">- '' + diff.LeftContent + ''</span></td><td class="diff-line removed-light"><span class="line-num">     </span><span class="line-content">  </span></td>'';')
                     [void]$htmlFile.AppendLine("                } else {")
-                    [void]$htmlFile.AppendLine("                    row.innerHTML = '<td class=`"diff-line unchanged`"><span class=`"line-num`">' + diff.LeftLineNum + '</span><span class=`"line-content`">  ' + diff.LeftContent + '</span></td><td class=`"diff-line unchanged`"><span class=`"line-num`">' + diff.RightLineNum + '</span><span class=`"line-content`">  ' + diff.RightContent + '</span></td>';")
+                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line unchanged"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">  '' + diff.LeftContent + ''</span></td><td class="diff-line unchanged"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">  '' + diff.RightContent + ''</span></td>'';')
                     [void]$htmlFile.AppendLine("                }")
                     [void]$htmlFile.AppendLine("                tbody.appendChild(row);")
                     [void]$htmlFile.AppendLine("            });")
@@ -3985,15 +3984,15 @@ $btnExportDiff.Add_Click({
                     $csvData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
                 }
             }
-        }
-        catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Error exporting results:`n`n$($_.Exception.Message)",
-                "Export Error",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+            catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Error exporting results:`n`n$($_.Exception.Message)",
+                    "Export Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+            }
         }
     }
 })
