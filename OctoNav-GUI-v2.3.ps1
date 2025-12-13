@@ -990,6 +990,7 @@ $netGroupBox.Controls.Add($lblIPAddress)
 
 # IP Address TextBox
 $txtIPAddress = New-Object System.Windows.Forms.TextBox
+$txtIPAddress.Text = "192.168.1.101"
 $txtIPAddress.Size = New-Object System.Drawing.Size(200, 20)
 $txtIPAddress.Location = New-Object System.Drawing.Point(150, 78)
 $netGroupBox.Controls.Add($txtIPAddress)
@@ -1003,6 +1004,7 @@ $netGroupBox.Controls.Add($lblGateway)
 
 # Gateway TextBox
 $txtGateway = New-Object System.Windows.Forms.TextBox
+$txtGateway.Text = "192.168.1.100"
 $txtGateway.Size = New-Object System.Drawing.Size(200, 20)
 $txtGateway.Location = New-Object System.Drawing.Point(150, 118)
 $netGroupBox.Controls.Add($txtGateway)
