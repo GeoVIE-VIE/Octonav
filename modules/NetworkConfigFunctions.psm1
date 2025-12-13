@@ -419,6 +419,10 @@ function Set-NetworkConfiguration {
 
         Set-NetIPInterface -InterfaceIndex $Adapter.ifIndex -Dhcp Disabled -ErrorAction Stop
 
+        # Set network profile to Private for local network access
+        Write-Log -Message "Setting network profile to Private..." -Color "Yellow" -LogBox $LogBox
+        Set-NetConnectionProfile -InterfaceIndex $Adapter.ifIndex -NetworkCategory Private -ErrorAction Stop
+
         Write-Log -Message "Configuration applied successfully!" -Color "Green" -LogBox $LogBox
         return $true
     } catch {
