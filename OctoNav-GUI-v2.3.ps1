@@ -3628,7 +3628,9 @@ $btnCompareFiles.Add_Click({
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
             $btnExportDiff.Enabled = $false
-            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Files are identical - no differences found"
+            if ($script:StatusBarPanels) {
+                Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Files are identical - no differences found"
+            }
         } else {
             # Files have differences
             $lblComparisonSummary.Text = "Comparison Complete!`n`n" +
@@ -3637,7 +3639,9 @@ $btnCompareFiles.Add_Click({
                 "Click 'Export Results' to save the comparison report with interactive view options."
             
             $btnExportDiff.Enabled = $true
-            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found - Ready to export"
+            if ($script:StatusBarPanels) {
+                Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found - Ready to export"
+            }
         }
 
     }
@@ -3648,7 +3652,9 @@ $btnCompareFiles.Add_Click({
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
-        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison failed" -IsError
+        if ($script:StatusBarPanels) {
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison failed" -IsError
+        }
     }
     finally {
         $btnCompareFiles.Enabled = $true
@@ -3992,7 +3998,9 @@ $btnExportDiff.Add_Click({
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
-            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+            if ($script:StatusBarPanels) {
+                Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
+            }
         }
     }
 })
@@ -4007,6 +4015,19 @@ $tabControl.Location = New-Object System.Drawing.Point($margin, 30)  # 30 for me
 $tabControl.Size = New-Object System.Drawing.Size(($mainForm.ClientSize.Width - ($margin * 2)), ($mainForm.ClientSize.Height - 70))
 $tabControl.Anchor = "Top,Bottom,Left,Right"
 $mainForm.Controls.Add($tabControl)
+
+# ============================================
+# STATUS BAR
+# ============================================
+
+# Create Enhanced Status Bar with segmented panels
+$script:StatusBarPanels = New-EnhancedStatusBar -Form $mainForm
+
+# Create references for backward compatibility with existing code
+$statusStrip = $script:StatusBarPanels.StatusStrip
+$script:statusLabel = $script:StatusBarPanels.StatusLabel
+$script:progressBar = $script:StatusBarPanels.ProgressBar
+$script:progressLabel = $script:StatusBarPanels.ProgressLabel
 
 # ============================================
 # TAB 0: DASHBOARD
