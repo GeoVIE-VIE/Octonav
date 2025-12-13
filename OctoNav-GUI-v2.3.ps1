@@ -3700,7 +3700,7 @@ $btnExportDiff.Add_Click({
     $exportOptions = [System.Windows.Forms.MessageBox]::Show(
         "Export Options:`n`n" +
         "View Mode: $(if ($btnUnified.Checked) { 'Unified' } else { 'Side-by-Side' })`n" +
-        "Show Only Differences: $(if ($chkShowOnlyDiffs.Checked) { 'Yes' } else { 'No' })`n`n" +
+        "Show Only Differences: No (default)`n`n" +
         "Would you like to change these options?`n`n" +
         "Yes = Show options dialog`n" +
         "No = Use current settings`n" +
@@ -3995,18 +3995,6 @@ $btnExportDiff.Add_Click({
             Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Export failed" -IsError
         }
     }
-})
-
-$btnClearCompare.Add_Click({
-    $txtFile1Path.Text = ""
-    $txtFile2Path.Text = ""
-    $lblAddedCount.Text = "+ 0"
-    $lblRemovedCount.Text = "- 0"
-    $lblModifiedCount.Text = "~ 0"
-    $lblUnchangedCount.Text = "= 0"
-    $lblComparisonSummary.Text = "Select two files and click 'Compare Files' to generate a comparison report.`n`nUse 'Export Results' to save the comparison in your preferred format with view options."
-    $btnExportDiff.Enabled = $false
-    $script:CompareResults = $null
 })
 
 # ============================================
