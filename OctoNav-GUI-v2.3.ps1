@@ -3270,7 +3270,7 @@ function Get-LineSimilarity {
     <#
     .SYNOPSIS
         Calculate similarity ratio between two strings (0.0 to 1.0)
-        Uses character-level comparison for modification detection
+        Optimized for speed with quick rejection checks
     #>
     param(
         [string]$String1,
@@ -3285,10 +3285,24 @@ function Get-LineSimilarity {
     $len2 = $String2.Length
     $maxLen = [Math]::Max($len1, $len2)
 
-    # Quick check: if lengths differ too much, they're not similar
+    # Quick rejection: if lengths differ too much, they're not similar
     if ([Math]::Abs($len1 - $len2) -gt ($maxLen * 0.5)) { return 0.0 }
 
-    # Calculate Levenshtein distance using optimized approach
+    # For very long lines, use fast prefix/suffix matching
+    if ($maxLen -gt 300) {
+        $commonPrefix = 0
+        $minLen = [Math]::Min($len1, $len2)
+        while ($commonPrefix -lt $minLen -and $String1[$commonPrefix] -eq $String2[$commonPrefix]) {
+            $commonPrefix++
+        }
+        $commonSuffix = 0
+        while ($commonSuffix -lt ($minLen - $commonPrefix) -and $String1[$len1 - 1 - $commonSuffix] -eq $String2[$len2 - 1 - $commonSuffix]) {
+            $commonSuffix++
+        }
+        return [Math]::Round(($commonPrefix + $commonSuffix) / $maxLen, 3)
+    }
+
+    # Calculate Levenshtein distance using optimized single-row approach
     $prev = [int[]]::new($len2 + 1)
     $curr = [int[]]::new($len2 + 1)
 
@@ -3296,8 +3310,9 @@ function Get-LineSimilarity {
 
     for ($i = 1; $i -le $len1; $i++) {
         $curr[0] = $i
+        $char1 = $String1[$i-1]
         for ($j = 1; $j -le $len2; $j++) {
-            $cost = if ($String1[$i-1] -eq $String2[$j-1]) { 0 } else { 1 }
+            $cost = if ($char1 -eq $String2[$j-1]) { 0 } else { 1 }
             $curr[$j] = [Math]::Min([Math]::Min($curr[$j-1] + 1, $prev[$j] + 1), $prev[$j-1] + $cost)
         }
         $temp = $prev; $prev = $curr; $curr = $temp
@@ -3310,85 +3325,100 @@ function Get-LineSimilarity {
 function Get-InlineDiff {
     <#
     .SYNOPSIS
-        Get word-level differences between two lines for inline highlighting
+        Get word-level differences for inline highlighting
+        Optimized with size limits for performance
     #>
     param(
         [string]$OldLine,
         [string]$NewLine
     )
 
-    # Split into words while preserving whitespace
+    # Skip inline diff for very long lines (performance)
+    if ($OldLine.Length -gt 500 -or $NewLine.Length -gt 500) {
+        return @{
+            OldParts = @(@{Text=$OldLine; Changed=$true})
+            NewParts = @(@{Text=$NewLine; Changed=$true})
+        }
+    }
+
+    # Split into words
     $oldWords = @($OldLine -split '(\s+)' | Where-Object { $_ -ne '' })
     $newWords = @($NewLine -split '(\s+)' | Where-Object { $_ -ne '' })
 
-    # Simple word-level LCS for inline diff
     $m = $oldWords.Count
     $n = $newWords.Count
 
-    # Build LCS table
-    $lcs = @{}
-    for ($i = 0; $i -le $m; $i++) {
-        for ($j = 0; $j -le $n; $j++) {
-            if ($i -eq 0 -or $j -eq 0) {
-                $lcs["$i,$j"] = 0
-            }
-            elseif ($oldWords[$i-1] -eq $newWords[$j-1]) {
-                $lcs["$i,$j"] = $lcs["$($i-1),$($j-1)"] + 1
+    # Skip if too many words
+    if ($m -gt 100 -or $n -gt 100) {
+        return @{
+            OldParts = @(@{Text=$OldLine; Changed=$true})
+            NewParts = @(@{Text=$NewLine; Changed=$true})
+        }
+    }
+
+    # Build LCS table using 2D array (faster than hashtable)
+    $lcs = [int[,]]::new($m + 1, $n + 1)
+
+    for ($i = 1; $i -le $m; $i++) {
+        for ($j = 1; $j -le $n; $j++) {
+            if ($oldWords[$i-1] -eq $newWords[$j-1]) {
+                $lcs[$i,$j] = $lcs[($i-1),($j-1)] + 1
             }
             else {
-                $lcs["$i,$j"] = [Math]::Max($lcs["$($i-1),$j"], $lcs["$i,$($j-1)"])
+                $lcs[$i,$j] = [Math]::Max($lcs[($i-1),$j], $lcs[$i,($j-1)])
             }
         }
     }
 
-    # Backtrack to find differences
-    $oldDiff = @()
-    $newDiff = @()
+    # Backtrack
+    $oldDiff = [System.Collections.ArrayList]@()
+    $newDiff = [System.Collections.ArrayList]@()
     $i = $m; $j = $n
 
     while ($i -gt 0 -or $j -gt 0) {
         if ($i -gt 0 -and $j -gt 0 -and $oldWords[$i-1] -eq $newWords[$j-1]) {
-            $oldDiff = @(@{Text=$oldWords[$i-1]; Changed=$false}) + $oldDiff
-            $newDiff = @(@{Text=$newWords[$j-1]; Changed=$false}) + $newDiff
+            [void]$oldDiff.Insert(0, @{Text=$oldWords[$i-1]; Changed=$false})
+            [void]$newDiff.Insert(0, @{Text=$newWords[$j-1]; Changed=$false})
             $i--; $j--
         }
-        elseif ($j -gt 0 -and ($i -eq 0 -or $lcs["$i,$($j-1)"] -ge $lcs["$($i-1),$j"])) {
-            $newDiff = @(@{Text=$newWords[$j-1]; Changed=$true}) + $newDiff
+        elseif ($j -gt 0 -and ($i -eq 0 -or $lcs[$i,($j-1)] -ge $lcs[($i-1),$j])) {
+            [void]$newDiff.Insert(0, @{Text=$newWords[$j-1]; Changed=$true})
             $j--
         }
         else {
-            $oldDiff = @(@{Text=$oldWords[$i-1]; Changed=$true}) + $oldDiff
+            [void]$oldDiff.Insert(0, @{Text=$oldWords[$i-1]; Changed=$true})
             $i--
         }
     }
 
     return @{
-        OldParts = $oldDiff
-        NewParts = $newDiff
+        OldParts = @($oldDiff)
+        NewParts = @($newDiff)
     }
 }
 
 function Compare-FilesContent {
     <#
     .SYNOPSIS
-        Performs line-by-line comparison using LCS algorithm with modification detection
+        High-performance file comparison using Myers diff algorithm
     .DESCRIPTION
-        Uses Longest Common Subsequence (LCS) algorithm for optimal diff results.
-        Detects modified lines (similar but not identical) with inline diff support.
+        Uses Myers diff algorithm - O((M+N)*D) where D is edit distance.
+        For similar files (few changes), this is nearly linear O(M+N).
+        Optimized for files with 10,000+ lines.
+
+        Performance comparison for 10k line files:
+        - Old LCS O(M*N): ~100 million operations, minutes
+        - Myers O((M+N)*D): ~20k-200k operations for similar files, seconds
     #>
     param(
         [string]$File1Path,
         [string]$File2Path,
-        [double]$SimilarityThreshold = 0.6  # Lines with >= 60% similarity are considered "modified"
+        [double]$SimilarityThreshold = 0.6
     )
 
     try {
-        if (-not (Test-Path $File1Path)) {
-            throw "Original file not found: $File1Path"
-        }
-        if (-not (Test-Path $File2Path)) {
-            throw "Modified file not found: $File2Path"
-        }
+        if (-not (Test-Path $File1Path)) { throw "Original file not found: $File1Path" }
+        if (-not (Test-Path $File2Path)) { throw "Modified file not found: $File2Path" }
 
         $file1Lines = @(Get-Content $File1Path -ErrorAction Stop)
         $file2Lines = @(Get-Content $File2Path -ErrorAction Stop)
@@ -3398,7 +3428,7 @@ function Compare-FilesContent {
             File2Path = $File2Path
             File1Lines = $file1Lines
             File2Lines = $file2Lines
-            Differences = @()
+            Differences = [System.Collections.ArrayList]@()
             Added = 0
             Removed = 0
             Modified = 0
@@ -3409,137 +3439,140 @@ function Compare-FilesContent {
         $n = $file2Lines.Count
 
         # Handle empty files
-        if ($m -eq 0 -and $n -eq 0) {
-            return $results
-        }
+        if ($m -eq 0 -and $n -eq 0) { return $results }
         if ($m -eq 0) {
             for ($j = 0; $j -lt $n; $j++) {
-                $results.Differences += @{
-                    Type = "Added"
-                    Line1 = $null
-                    Line2 = $j + 1
-                    Content1 = ""
-                    Content2 = $file2Lines[$j]
-                    InlineDiff = $null
-                }
+                [void]$results.Differences.Add(@{Type="Added"; Line1=$null; Line2=$j+1; Content1=""; Content2=$file2Lines[$j]; InlineDiff=$null})
                 $results.Added++
             }
             return $results
         }
         if ($n -eq 0) {
             for ($i = 0; $i -lt $m; $i++) {
-                $results.Differences += @{
-                    Type = "Removed"
-                    Line1 = $i + 1
-                    Line2 = $null
-                    Content1 = $file1Lines[$i]
-                    Content2 = ""
-                    InlineDiff = $null
-                }
+                [void]$results.Differences.Add(@{Type="Removed"; Line1=$i+1; Line2=$null; Content1=$file1Lines[$i]; Content2=""; InlineDiff=$null})
                 $results.Removed++
             }
             return $results
         }
 
-        # Build LCS table using optimized memory approach
-        # Store only previous and current rows to save memory for large files
-        $prev = [int[]]::new($n + 1)
-        $curr = [int[]]::new($n + 1)
+        # === MYERS DIFF ALGORITHM ===
+        # O((M+N)*D) - much faster than O(M*N) LCS for similar files
+        $max = $m + $n
+        $vSize = 2 * $max + 1
+        $v = [int[]]::new($vSize)
+        $offset = $max
 
-        # Also build a direction table to backtrack
-        $direction = @{}  # Key: "i,j", Value: direction (0=diagonal, 1=up, 2=left)
+        # Store trace for backtracking
+        $trace = [System.Collections.ArrayList]@()
 
-        for ($i = 1; $i -le $m; $i++) {
-            $curr[0] = 0
-            for ($j = 1; $j -le $n; $j++) {
-                if ($file1Lines[$i-1] -eq $file2Lines[$j-1]) {
-                    $curr[$j] = $prev[$j-1] + 1
-                    $direction["$i,$j"] = 0  # Diagonal - match
-                }
-                elseif ($prev[$j] -ge $curr[$j-1]) {
-                    $curr[$j] = $prev[$j]
-                    $direction["$i,$j"] = 1  # Up
+        # Find shortest edit script
+        $found = $false
+        for ($d = 0; $d -le $max -and -not $found; $d++) {
+            $vCopy = [int[]]::new($vSize)
+            [Array]::Copy($v, $vCopy, $vSize)
+            [void]$trace.Add($vCopy)
+
+            for ($k = -$d; $k -le $d; $k += 2) {
+                $kIdx = $k + $offset
+                if ($k -eq -$d -or ($k -ne $d -and $v[$kIdx - 1] -lt $v[$kIdx + 1])) {
+                    $x = $v[$kIdx + 1]
                 }
                 else {
-                    $curr[$j] = $curr[$j-1]
-                    $direction["$i,$j"] = 2  # Left
+                    $x = $v[$kIdx - 1] + 1
+                }
+                $y = $x - $k
+
+                # Follow diagonal (matching lines)
+                while ($x -lt $m -and $y -lt $n -and $file1Lines[$x] -eq $file2Lines[$y]) {
+                    $x++; $y++
+                }
+                $v[$kIdx] = $x
+
+                if ($x -ge $m -and $y -ge $n) {
+                    $found = $true
+                    break
                 }
             }
-            # Swap arrays
-            $temp = $prev; $prev = $curr; $curr = $temp
         }
 
-        # Backtrack to build diff
-        $rawDiff = [System.Collections.ArrayList]@()
-        $i = $m; $j = $n
+        # Backtrack to find edit script
+        $edits = [System.Collections.ArrayList]@()
+        $x = $m; $y = $n
 
-        while ($i -gt 0 -or $j -gt 0) {
-            if ($i -gt 0 -and $j -gt 0 -and $direction["$i,$j"] -eq 0) {
-                # Match
-                [void]$rawDiff.Insert(0, @{
-                    Type = "Match"
-                    Index1 = $i - 1
-                    Index2 = $j - 1
-                })
-                $i--; $j--
-            }
-            elseif ($i -gt 0 -and ($j -eq 0 -or $direction["$i,$j"] -eq 1)) {
-                # Deletion from file1
-                [void]$rawDiff.Insert(0, @{
-                    Type = "Delete"
-                    Index1 = $i - 1
-                    Index2 = $null
-                })
-                $i--
+        for ($d = $trace.Count - 1; $d -gt 0; $d--) {
+            $vPrev = $trace[$d - 1]
+            $k = $x - $y
+            $kIdx = $k + $offset
+
+            if ($k -eq -$d -or ($k -ne $d -and $vPrev[$kIdx - 1] -lt $vPrev[$kIdx + 1])) {
+                $prevK = $k + 1
+                $prevX = $vPrev[$prevK + $offset]
             }
             else {
-                # Insertion in file2
-                [void]$rawDiff.Insert(0, @{
-                    Type = "Insert"
-                    Index1 = $null
-                    Index2 = $j - 1
-                })
-                $j--
+                $prevK = $k - 1
+                $prevX = $vPrev[$prevK + $offset]
+            }
+            $prevY = $prevX - $prevK
+
+            # Add diagonal moves (matches)
+            while ($x -gt $prevX -and $y -gt $prevY) {
+                $x--; $y--
+                [void]$edits.Insert(0, @{Type="Match"; Index1=$x; Index2=$y})
+            }
+
+            # Add insert or delete
+            if ($d -gt 0) {
+                if ($x -eq $prevX) {
+                    $y--
+                    [void]$edits.Insert(0, @{Type="Insert"; Index1=$null; Index2=$y})
+                }
+                else {
+                    $x--
+                    [void]$edits.Insert(0, @{Type="Delete"; Index1=$x; Index2=$null})
+                }
             }
         }
 
-        # Post-process to detect modifications (consecutive delete + insert with high similarity)
-        $processedDiff = [System.Collections.ArrayList]@()
+        # Add remaining diagonal at start
+        while ($x -gt 0 -and $y -gt 0) {
+            $x--; $y--
+            [void]$edits.Insert(0, @{Type="Match"; Index1=$x; Index2=$y})
+        }
+
+        # Post-process to detect modifications
         $idx = 0
+        while ($idx -lt $edits.Count) {
+            $edit = $edits[$idx]
 
-        while ($idx -lt $rawDiff.Count) {
-            $item = $rawDiff[$idx]
-
-            if ($item.Type -eq "Match") {
-                [void]$processedDiff.Add(@{
+            if ($edit.Type -eq "Match") {
+                [void]$results.Differences.Add(@{
                     Type = "Unchanged"
-                    Line1 = $item.Index1 + 1
-                    Line2 = $item.Index2 + 1
-                    Content1 = $file1Lines[$item.Index1]
-                    Content2 = $file2Lines[$item.Index2]
+                    Line1 = $edit.Index1 + 1
+                    Line2 = $edit.Index2 + 1
+                    Content1 = $file1Lines[$edit.Index1]
+                    Content2 = $file2Lines[$edit.Index2]
                     InlineDiff = $null
                 })
                 $results.Unchanged++
                 $idx++
             }
-            elseif ($item.Type -eq "Delete") {
-                # Look ahead for consecutive deletions and insertions to find modifications
+            elseif ($edit.Type -eq "Delete") {
+                # Collect consecutive deletions and insertions
                 $deletions = [System.Collections.ArrayList]@()
                 $insertions = [System.Collections.ArrayList]@()
 
-                # Collect consecutive deletions
-                while ($idx -lt $rawDiff.Count -and $rawDiff[$idx].Type -eq "Delete") {
-                    [void]$deletions.Add($rawDiff[$idx])
+                while ($idx -lt $edits.Count -and $edits[$idx].Type -eq "Delete") {
+                    [void]$deletions.Add($edits[$idx])
+                    $idx++
+                }
+                while ($idx -lt $edits.Count -and $edits[$idx].Type -eq "Insert") {
+                    [void]$insertions.Add($edits[$idx])
                     $idx++
                 }
 
-                # Collect consecutive insertions
-                while ($idx -lt $rawDiff.Count -and $rawDiff[$idx].Type -eq "Insert") {
-                    [void]$insertions.Add($rawDiff[$idx])
-                    $idx++
-                }
-
-                # Try to match deletions with insertions as modifications
+                # Match deletions with insertions (limit comparisons for performance)
+                $maxComparisons = 100
+                $comparisons = 0
                 $usedInsertions = @{}
 
                 foreach ($del in $deletions) {
@@ -3547,25 +3580,27 @@ function Compare-FilesContent {
                     $bestSim = 0
                     $bestIdx = -1
 
-                    for ($k = 0; $k -lt $insertions.Count; $k++) {
-                        if ($usedInsertions.ContainsKey($k)) { continue }
-
-                        $ins = $insertions[$k]
-                        $sim = Get-LineSimilarity -String1 $file1Lines[$del.Index1] -String2 $file2Lines[$ins.Index2]
-
-                        if ($sim -ge $SimilarityThreshold -and $sim -gt $bestSim) {
-                            $bestMatch = $ins
-                            $bestSim = $sim
-                            $bestIdx = $k
+                    if ($comparisons -lt $maxComparisons -and $insertions.Count -gt 0) {
+                        for ($k = 0; $k -lt $insertions.Count -and $comparisons -lt $maxComparisons; $k++) {
+                            if ($usedInsertions.ContainsKey($k)) { continue }
+                            $ins = $insertions[$k]
+                            $comparisons++
+                            $sim = Get-LineSimilarity -String1 $file1Lines[$del.Index1] -String2 $file2Lines[$ins.Index2]
+                            if ($sim -ge $SimilarityThreshold -and $sim -gt $bestSim) {
+                                $bestMatch = $ins
+                                $bestSim = $sim
+                                $bestIdx = $k
+                            }
                         }
                     }
 
                     if ($bestMatch) {
-                        # This is a modification
                         $usedInsertions[$bestIdx] = $true
-                        $inlineDiff = Get-InlineDiff -OldLine $file1Lines[$del.Index1] -NewLine $file2Lines[$bestMatch.Index2]
+                        $inlineDiff = if ($bestSim -lt 0.95) {
+                            Get-InlineDiff -OldLine $file1Lines[$del.Index1] -NewLine $file2Lines[$bestMatch.Index2]
+                        } else { $null }
 
-                        [void]$processedDiff.Add(@{
+                        [void]$results.Differences.Add(@{
                             Type = "Modified"
                             Line1 = $del.Index1 + 1
                             Line2 = $bestMatch.Index2 + 1
@@ -3577,8 +3612,7 @@ function Compare-FilesContent {
                         $results.Modified++
                     }
                     else {
-                        # Pure deletion
-                        [void]$processedDiff.Add(@{
+                        [void]$results.Differences.Add(@{
                             Type = "Removed"
                             Line1 = $del.Index1 + 1
                             Line2 = $null
@@ -3590,11 +3624,11 @@ function Compare-FilesContent {
                     }
                 }
 
-                # Add remaining unmatched insertions
+                # Add unmatched insertions
                 for ($k = 0; $k -lt $insertions.Count; $k++) {
                     if (-not $usedInsertions.ContainsKey($k)) {
                         $ins = $insertions[$k]
-                        [void]$processedDiff.Add(@{
+                        [void]$results.Differences.Add(@{
                             Type = "Added"
                             Line1 = $null
                             Line2 = $ins.Index2 + 1
@@ -3607,13 +3641,12 @@ function Compare-FilesContent {
                 }
             }
             else {
-                # Pure insertion (shouldn't happen after our logic, but handle it)
-                [void]$processedDiff.Add(@{
+                [void]$results.Differences.Add(@{
                     Type = "Added"
                     Line1 = $null
-                    Line2 = $item.Index2 + 1
+                    Line2 = $edit.Index2 + 1
                     Content1 = ""
-                    Content2 = $file2Lines[$item.Index2]
+                    Content2 = $file2Lines[$edit.Index2]
                     InlineDiff = $null
                 })
                 $results.Added++
@@ -3621,10 +3654,10 @@ function Compare-FilesContent {
             }
         }
 
-        # Sort by line numbers for proper display order
-        $results.Differences = @($processedDiff | Sort-Object {
-            if ($_.Line1) { $_.Line1 * 10000 + $(if ($_.Line2) { $_.Line2 } else { 0 }) }
-            else { $_.Line2 * 10000 }
+        # Sort by line numbers
+        $results.Differences = [System.Collections.ArrayList]@($results.Differences | Sort-Object {
+            if ($_.Line1) { $_.Line1 * 100000 + $(if ($_.Line2) { $_.Line2 } else { 0 }) }
+            else { $_.Line2 * 100000 }
         })
 
         return $results
