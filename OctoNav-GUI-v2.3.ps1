@@ -3356,16 +3356,20 @@ function Get-InlineDiff {
         }
     }
 
-    # Build LCS table using 2D array (faster than hashtable)
-    $lcs = [int[,]]::new($m + 1, $n + 1)
+    # Build LCS table using hashtable (PowerShell-compatible)
+    $lcs = @{}
+    for ($i = 0; $i -le $m; $i++) { $lcs["$i,0"] = 0 }
+    for ($j = 0; $j -le $n; $j++) { $lcs["0,$j"] = 0 }
 
     for ($i = 1; $i -le $m; $i++) {
         for ($j = 1; $j -le $n; $j++) {
-            if ($oldWords[$i-1] -eq $newWords[$j-1]) {
-                $lcs[$i,$j] = $lcs[($i-1),($j-1)] + 1
+            $im1 = $i - 1
+            $jm1 = $j - 1
+            if ($oldWords[$im1] -eq $newWords[$jm1]) {
+                $lcs["$i,$j"] = $lcs["$im1,$jm1"] + 1
             }
             else {
-                $lcs[$i,$j] = [Math]::Max($lcs[($i-1),$j], $lcs[$i,($j-1)])
+                $lcs["$i,$j"] = [Math]::Max($lcs["$im1,$j"], $lcs["$i,$jm1"])
             }
         }
     }
@@ -3376,17 +3380,19 @@ function Get-InlineDiff {
     $i = $m; $j = $n
 
     while ($i -gt 0 -or $j -gt 0) {
-        if ($i -gt 0 -and $j -gt 0 -and $oldWords[$i-1] -eq $newWords[$j-1]) {
-            [void]$oldDiff.Insert(0, @{Text=$oldWords[$i-1]; Changed=$false})
-            [void]$newDiff.Insert(0, @{Text=$newWords[$j-1]; Changed=$false})
+        $im1 = $i - 1
+        $jm1 = $j - 1
+        if ($i -gt 0 -and $j -gt 0 -and $oldWords[$im1] -eq $newWords[$jm1]) {
+            [void]$oldDiff.Insert(0, @{Text=$oldWords[$im1]; Changed=$false})
+            [void]$newDiff.Insert(0, @{Text=$newWords[$jm1]; Changed=$false})
             $i--; $j--
         }
-        elseif ($j -gt 0 -and ($i -eq 0 -or $lcs[$i,($j-1)] -ge $lcs[($i-1),$j])) {
-            [void]$newDiff.Insert(0, @{Text=$newWords[$j-1]; Changed=$true})
+        elseif ($j -gt 0 -and ($i -eq 0 -or $lcs["$i,$jm1"] -ge $lcs["$im1,$j"])) {
+            [void]$newDiff.Insert(0, @{Text=$newWords[$jm1]; Changed=$true})
             $j--
         }
         else {
-            [void]$oldDiff.Insert(0, @{Text=$oldWords[$i-1]; Changed=$true})
+            [void]$oldDiff.Insert(0, @{Text=$oldWords[$im1]; Changed=$true})
             $i--
         }
     }
