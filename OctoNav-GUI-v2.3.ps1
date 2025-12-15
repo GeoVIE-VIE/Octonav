@@ -4159,9 +4159,13 @@ $btnExportDiff.Add_Click({
             switch ($extension) {
                 ".html" {
                     # Generate interactive HTML with JavaScript controls
-                    # Build JavaScript data structure with inline diff support
-                    $jsDataLines = @()
+                    # Build JavaScript data structure - SKIP UNCHANGED LINES for performance
+                    # Use ArrayList for O(1) append instead of array += O(n)
+                    $jsDataList = New-Object System.Collections.ArrayList
                     foreach ($diff in $script:CompareResults.Differences) {
+                        # Skip unchanged lines - only include actual changes
+                        if ($diff.Type -eq "Unchanged") { continue }
+
                         $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
                         $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
                         $leftContent = (ConvertTo-HtmlEncoded -Text $diff.Content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
@@ -4189,9 +4193,9 @@ $btnExportDiff.Add_Click({
                             }
                         }
 
-                        $jsDataLines += "{Type:'$($diff.Type)',LeftLineNum:'$leftLineNum',RightLineNum:'$rightLineNum',LeftContent:'$leftContent',RightContent:'$rightContent',LeftInline:'$leftInline',RightInline:'$rightInline'}"
+                        [void]$jsDataList.Add("{Type:'$($diff.Type)',LeftLineNum:'$leftLineNum',RightLineNum:'$rightLineNum',LeftContent:'$leftContent',RightContent:'$rightContent',LeftInline:'$leftInline',RightInline:'$rightInline'}")
                     }
-                    $jsonData = "[" + ($jsDataLines -join ",") + "]"
+                    $jsonData = "[" + ($jsDataList -join ",") + "]"
 
                     # Build HTML file directly to avoid PowerShell parsing JavaScript
                     $htmlFile = New-Object System.Text.StringBuilder
@@ -4256,9 +4260,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("        <label for=`"viewUnified`">Unified</label>")
                     [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewSideBySide`" name=`"viewMode`" value=`"sidebyside`">")
                     [void]$htmlFile.AppendLine("        <label for=`"viewSideBySide`">Side-by-Side</label>")
-                    [void]$htmlFile.AppendLine("        <input type=`"checkbox`" id=`"showOnlyDiffs`" style=`"margin-left: 30px;`">")
-                    [void]$htmlFile.AppendLine("        <label for=`"showOnlyDiffs`">Show Only Differences</label>")
-                    [void]$htmlFile.AppendLine("        <button onclick=`"resetView()`">Reset View</button>")
+                    [void]$htmlFile.AppendLine("        <span style=`"margin-left: 30px; color: #666;`">(Showing changes only)</span>")
                     [void]$htmlFile.AppendLine("    </div>")
                     [void]$htmlFile.AppendLine("    <div class=`"diff-container`">")
                     [void]$htmlFile.AppendLine("        <div class=`"diff-header`">Comparison Details</div>")
@@ -4268,15 +4270,13 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("        const diffData = " + $jsonData + ";")
                     [void]$htmlFile.AppendLine("        function renderView() {")
                     [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=`"viewMode`"]:checked').value;")
-                    [void]$htmlFile.AppendLine("            const showOnlyDiffs = document.getElementById('showOnlyDiffs').checked;")
                     [void]$htmlFile.AppendLine("            const container = document.getElementById('diffContent');")
                     [void]$htmlFile.AppendLine("            container.innerHTML = '';")
-                    [void]$htmlFile.AppendLine("            if (viewMode === 'unified') { renderUnified(container, showOnlyDiffs); } else { renderSideBySide(container, showOnlyDiffs); }")
+                    [void]$htmlFile.AppendLine("            if (viewMode === 'unified') { renderUnified(container); } else { renderSideBySide(container); }")
                     [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function renderUnified(container, showOnlyDiffs) {")
+                    [void]$htmlFile.AppendLine("        function renderUnified(container) {")
                     [void]$htmlFile.AppendLine("            const div = document.createElement('div');")
                     [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
-                    [void]$htmlFile.AppendLine("                if (showOnlyDiffs && diff.Type === 'Unchanged') return;")
                     [void]$htmlFile.AppendLine("                if (diff.Type === 'Modified') {")
                     [void]$htmlFile.AppendLine("                    const oldDiv = document.createElement('div');")
                     [void]$htmlFile.AppendLine("                    oldDiv.className = 'diff-line modified';")
@@ -4301,7 +4301,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("            });")
                     [void]$htmlFile.AppendLine("            container.appendChild(div);")
                     [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function renderSideBySide(container, showOnlyDiffs) {")
+                    [void]$htmlFile.AppendLine("        function renderSideBySide(container) {")
                     [void]$htmlFile.AppendLine("            const table = document.createElement('table');")
                     [void]$htmlFile.AppendLine("            table.className = 'sidebyside-table';")
                     [void]$htmlFile.AppendLine("            const thead = document.createElement('thead');")
@@ -4311,7 +4311,6 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("            table.appendChild(thead);")
                     [void]$htmlFile.AppendLine("            const tbody = document.createElement('tbody');")
                     [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
-                    [void]$htmlFile.AppendLine("                if (showOnlyDiffs && diff.Type === 'Unchanged') return;")
                     [void]$htmlFile.AppendLine("                const row = document.createElement('tr');")
                     [void]$htmlFile.AppendLine("                if (diff.Type === 'Added') {")
                     [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line added-light"><span class="line-num">     </span><span class="line-content">  </span></td><td class="diff-line added"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">+ '' + diff.RightContent + ''</span></td>'';')
@@ -4329,9 +4328,8 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("            table.appendChild(tbody);")
                     [void]$htmlFile.AppendLine("            container.appendChild(table);")
                     [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function resetView() { document.getElementById('viewUnified').checked = true; document.getElementById('showOnlyDiffs').checked = false; renderView(); }")
+                    [void]$htmlFile.AppendLine("        function resetView() { document.getElementById('viewUnified').checked = true; renderView(); }")
                     [void]$htmlFile.AppendLine("        document.querySelectorAll('input[name=`"viewMode`"]').forEach(radio => { radio.addEventListener('change', renderView); });")
-                    [void]$htmlFile.AppendLine("        document.getElementById('showOnlyDiffs').addEventListener('change', renderView);")
                     [void]$htmlFile.AppendLine("        renderView();")
                     [void]$htmlFile.AppendLine("    </script>")
                     [void]$htmlFile.AppendLine("</body>")
