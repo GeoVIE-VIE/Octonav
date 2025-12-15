@@ -3258,12 +3258,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 .side .row:last-child{border-bottom:none}
 .empty-panel{background:var(--bg);min-height:20px}
 .current-change{box-shadow:inset 4px 0 0 #58a6ff}
+.chk{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2);padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg3)}
+.chk:hover{background:var(--border)}
+.chk input{accent-color:#238636;width:14px;height:14px;cursor:pointer}
 </style></head><body>
 <div class="toolbar">
 <h1><svg viewBox="0 0 16 16"><path d="M8.75 1.75V5H12a.75.75 0 010 1.5H8.75v3.25a.75.75 0 01-1.5 0V6.5H4a.75.75 0 010-1.5h3.25V1.75a.75.75 0 011.5 0zM4 13h8a.75.75 0 010 1.5H4a.75.75 0 010-1.5z"/></svg>Diff</h1>
 <div class="files"><b>$file1Name</b> → <b>$file2Name</b></div>
 <div class="stats" id="stats"></div>
 <div class="controls">
+<label class="chk"><input type="checkbox" id="ignoreBlanks" onchange="recompute()"><span>Ignore blank lines</span></label>
 <button class="btn" onclick="prevChange()" title="Previous change (↑)">▲ Prev</button>
 <span class="nav-info" id="navInfo">-/-</span>
 <button class="btn" onclick="nextChange()" title="Next change (↓)">▼ Next</button>
@@ -3279,15 +3283,54 @@ const f2=$($file2Lines | ConvertTo-Json -Compress -Depth 1);
 const CTX=4;
 let diffs=[],hunks=[],curHunk=0;
 
-function computeDiff(){
+function isBlank(s){return !s||!s.trim();}
+
+function computeDiff(ignoreBlanks){
   const m=f1.length,n=f2.length;
   const m1=new Int32Array(m).fill(-1),m2=new Int32Array(n).fill(-1);
-  // Pass 1: same position
-  for(let i=0;i<Math.min(m,n);i++)if(f1[i]===f2[i]){m1[i]=i;m2[i]=i;}
-  // Pass 2: hash remaining
-  const h2=new Map();
-  for(let j=0;j<n;j++)if(m2[j]<0){const k=f2[j];if(!h2.has(k))h2.set(k,[]);h2.get(k).push(j);}
-  for(let i=0;i<m;i++){if(m1[i]>=0)continue;const arr=h2.get(f1[i]);if(arr){for(let k=0;k<arr.length;k++){const j=arr[k];if(m2[j]<0){m1[i]=j;m2[j]=i;arr.splice(k,1);break;}}}}
+
+  // If ignoring blanks, pre-match all blank lines as "equal" to reduce noise
+  if(ignoreBlanks){
+    // Find non-blank line indices
+    const nb1=[],nb2=[];
+    for(let i=0;i<m;i++)if(!isBlank(f1[i]))nb1.push(i);
+    for(let j=0;j<n;j++)if(!isBlank(f2[j]))nb2.push(j);
+
+    // Match non-blank lines at same relative position first
+    const len=Math.min(nb1.length,nb2.length);
+    for(let k=0;k<len;k++){
+      const i=nb1[k],j=nb2[k];
+      if(f1[i]===f2[j]){m1[i]=j;m2[j]=i;}
+    }
+
+    // Hash remaining non-blank lines
+    const h2=new Map();
+    for(let j=0;j<n;j++){
+      if(m2[j]<0&&!isBlank(f2[j])){
+        const k=f2[j];if(!h2.has(k))h2.set(k,[]);h2.get(k).push(j);
+      }
+    }
+    for(let i=0;i<m;i++){
+      if(m1[i]>=0||isBlank(f1[i]))continue;
+      const arr=h2.get(f1[i]);
+      if(arr){for(let k=0;k<arr.length;k++){const j=arr[k];if(m2[j]<0){m1[i]=j;m2[j]=i;arr.splice(k,1);break;}}}
+    }
+
+    // Match blank lines to each other
+    const blankQ1=[],blankQ2=[];
+    for(let i=0;i<m;i++)if(m1[i]<0&&isBlank(f1[i]))blankQ1.push(i);
+    for(let j=0;j<n;j++)if(m2[j]<0&&isBlank(f2[j]))blankQ2.push(j);
+    const blankMatch=Math.min(blankQ1.length,blankQ2.length);
+    for(let k=0;k<blankMatch;k++){m1[blankQ1[k]]=blankQ2[k];m2[blankQ2[k]]=blankQ1[k];}
+  } else {
+    // Original algorithm: match by position first
+    for(let i=0;i<Math.min(m,n);i++)if(f1[i]===f2[i]){m1[i]=i;m2[i]=i;}
+    // Hash remaining
+    const h2=new Map();
+    for(let j=0;j<n;j++)if(m2[j]<0){const k=f2[j];if(!h2.has(k))h2.set(k,[]);h2.get(k).push(j);}
+    for(let i=0;i<m;i++){if(m1[i]>=0)continue;const arr=h2.get(f1[i]);if(arr){for(let k=0;k<arr.length;k++){const j=arr[k];if(m2[j]<0){m1[i]=j;m2[j]=i;arr.splice(k,1);break;}}}}
+  }
+
   // Build diffs
   const d=[];let i=0,j=0;
   while(i<m||j<n){
@@ -3297,6 +3340,18 @@ function computeDiff(){
     else{if(i<m){d.push({t:'-',i1:i,i2:-1});i++;}if(j<n){d.push({t:'+',i1:-1,i2:j});j++;}}
   }
   return d;
+}
+
+function recompute(){
+  const ign=document.getElementById('ignoreBlanks').checked;
+  diffs=computeDiff(ign);
+  hunks=buildHunks(diffs);
+  let add=0,del=0,eq=0;
+  diffs.forEach(d=>{if(d.t==='+')add++;else if(d.t==='-')del++;else eq++;});
+  document.getElementById('stats').innerHTML=`<span class="stat stat-add">+${add}</span><span class="stat stat-del">−${del}</span><span class="stat stat-eq">${eq} unchanged</span>`;
+  curHunk=0;
+  render();
+  if(hunks.length)goToHunk(0);
 }
 
 function buildHunks(d){
@@ -3344,13 +3399,8 @@ function prevChange(){goToHunk(curHunk-1);}
 document.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='j'){nextChange();e.preventDefault();}if(e.key==='ArrowUp'||e.key==='k'){prevChange();e.preventDefault();}});
 
 setTimeout(()=>{
-  diffs=computeDiff();
-  hunks=buildHunks(diffs);
-  let add=0,del=0,eq=0;diffs.forEach(d=>{if(d.t==='+')add++;else if(d.t==='-')del++;else eq++;});
-  document.getElementById('stats').innerHTML=`<span class="stat stat-add">+${add}</span><span class="stat stat-del">−${del}</span><span class="stat stat-eq">${eq} unchanged</span>`;
   document.getElementById('progress').style.display='none';
-  render();
-  if(hunks.length)goToHunk(0);
+  recompute();
 },50);
 </script></body></html>
 '@)
