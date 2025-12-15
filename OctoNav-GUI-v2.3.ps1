@@ -3075,7 +3075,7 @@ $resultsSummaryPanel.Controls.Add($lblComparisonSummary)
 
 $resourcesGroupBox = New-Object System.Windows.Forms.GroupBox
 $resourcesGroupBox.Text = "Embedded Resources (.RDOX Files)"
-$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 520)
+$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 200)
 $resourcesGroupBox.Size = New-Object System.Drawing.Size(940, 95)
 $resourcesGroupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $resourcesGroupBox.Anchor = "Bottom,Left,Right"
@@ -3428,8 +3428,12 @@ function Compare-FilesContent {
         if (-not (Test-Path $File1Path)) { throw "Original file not found: $File1Path" }
         if (-not (Test-Path $File2Path)) { throw "Modified file not found: $File2Path" }
 
-        $file1Lines = @(Get-Content $File1Path -ErrorAction Stop)
-        $file2Lines = @(Get-Content $File2Path -ErrorAction Stop)
+        # Use ReadAllLines for faster file reading
+        $file1Lines = [System.IO.File]::ReadAllLines($File1Path)
+        $file2Lines = [System.IO.File]::ReadAllLines($File2Path)
+
+        # Use ArrayList for O(1) append instead of O(n) array concatenation
+        $differences = New-Object System.Collections.ArrayList
 
         $results = @{
             File1Path = $File1Path
@@ -3965,6 +3969,7 @@ $btnCompareFiles.Add_Click({
         $btnCompareFiles.Text = "Comparing..."
         [System.Windows.Forms.Application]::DoEvents()
 
+        # Run comparison
         $script:CompareResults = Compare-FilesContent -File1Path $txtFile1Path.Text -File2Path $txtFile2Path.Text
 
         # Update statistics display
