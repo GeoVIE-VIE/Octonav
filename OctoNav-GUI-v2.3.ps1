@@ -1022,6 +1022,8 @@ $mainForm.Controls.Add($tabControl)
 
 $tab0 = New-Object System.Windows.Forms.TabPage
 $tab0.Text = "Dashboard"
+$tab0.AutoScroll = $true
+$tab0.Padding = New-Object System.Windows.Forms.Padding(10)
 $tabControl.Controls.Add($tab0)
 Add-IconToTab -Tab $tab0 -IconName "Stats"
 
@@ -1031,6 +1033,7 @@ $lblDashboardTitle.Text = "OctoNav System Dashboard"
 $lblDashboardTitle.Location = New-Object System.Drawing.Point(15, 15)
 $lblDashboardTitle.Size = New-Object System.Drawing.Size(900, 30)
 $lblDashboardTitle.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+$lblDashboardTitle.Anchor = "Top,Left,Right"
 $tab0.Controls.Add($lblDashboardTitle)
 
 # System Health Panels
@@ -1038,6 +1041,7 @@ $healthGroupBox = New-Object System.Windows.Forms.GroupBox
 $healthGroupBox.Text = "System Health"
 $healthGroupBox.Location = New-Object System.Drawing.Point(15, 55)
 $healthGroupBox.Size = New-Object System.Drawing.Size(920, 130)
+$healthGroupBox.Anchor = "Top,Left,Right"
 $tab0.Controls.Add($healthGroupBox)
 
 # Admin Status Panel
@@ -1061,6 +1065,7 @@ $quickActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $quickActionsGroupBox.Text = "Quick Actions"
 $quickActionsGroupBox.Location = New-Object System.Drawing.Point(15, 195)
 $quickActionsGroupBox.Size = New-Object System.Drawing.Size(920, 100)
+$quickActionsGroupBox.Anchor = "Top,Left,Right"
 $tab0.Controls.Add($quickActionsGroupBox)
 
 # Quick Action Buttons
@@ -1089,12 +1094,14 @@ $recentActivityGroupBox = New-Object System.Windows.Forms.GroupBox
 $recentActivityGroupBox.Text = "Recent Activity"
 $recentActivityGroupBox.Location = New-Object System.Drawing.Point(15, 305)
 $recentActivityGroupBox.Size = New-Object System.Drawing.Size(920, 280)
+$recentActivityGroupBox.Anchor = "Top,Bottom,Left,Right"
 $tab0.Controls.Add($recentActivityGroupBox)
 
 $script:lstRecentActivity = New-Object System.Windows.Forms.ListBox
 $script:lstRecentActivity.Location = New-Object System.Drawing.Point(15, 25)
 $script:lstRecentActivity.Size = New-Object System.Drawing.Size(885, 240)
 $script:lstRecentActivity.Font = New-Object System.Drawing.Font("Consolas", 9)
+$script:lstRecentActivity.Anchor = "Top,Bottom,Left,Right"
 $recentActivityGroupBox.Controls.Add($script:lstRecentActivity)
 
 # Dashboard update function
@@ -1144,6 +1151,8 @@ function Update-Dashboard {
 
 $tab1 = New-Object System.Windows.Forms.TabPage
 $tab1.Text = "Network Configuration"
+$tab1.AutoScroll = $true
+$tab1.Padding = New-Object System.Windows.Forms.Padding(10)
 $tabControl.Controls.Add($tab1)
 Add-IconToTab -Tab $tab1 -IconName "Network"
 
@@ -1153,6 +1162,7 @@ $lblAdminStatus.Size = New-Object System.Drawing.Size(940, 25)
 $lblAdminStatus.Location = New-Object System.Drawing.Point(10, 10)
 $lblAdminStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblAdminStatus.TextAlign = "MiddleLeft"
+$lblAdminStatus.Anchor = "Top,Left,Right"
 if ($script:IsRunningAsAdmin) {
     $lblAdminStatus.Text = "[OK] Administrator Privileges: ACTIVE - Network configuration enabled"
     $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
@@ -1169,6 +1179,7 @@ $netGroupBox = New-Object System.Windows.Forms.GroupBox
 $netGroupBox.Text = "Network Adapter Configuration"
 $netGroupBox.Size = New-Object System.Drawing.Size(940, 250)
 $netGroupBox.Location = New-Object System.Drawing.Point(10, 40)
+$netGroupBox.Anchor = "Top,Left,Right"
 $tab1.Controls.Add($netGroupBox)
 
 # Find Network Button
@@ -1245,6 +1256,7 @@ $netLogBox.WordWrap = $false
 $netLogBox.HideSelection = $false
 $netLogBox.DetectUrls = $false
 $netLogBox.Multiline = $true
+$netLogBox.Anchor = "Top,Bottom,Left,Right"
 $tab1.Controls.Add($netLogBox)
 
 # Event Handlers for Tab 1
@@ -1346,6 +1358,8 @@ $btnRestoreDefaults.Add_Click({
 
 $tab2 = New-Object System.Windows.Forms.TabPage
 $tab2.Text = "DHCP Statistics"
+$tab2.AutoScroll = $true
+$tab2.Padding = New-Object System.Windows.Forms.Padding(10)
 $tabControl.Controls.Add($tab2)
 Add-IconToTab -Tab $tab2 -IconName "Server"
 
@@ -1354,8 +1368,9 @@ $lblDHCPInfo = New-Object System.Windows.Forms.Label
 $lblDHCPInfo.Text = "Collect and analyze DHCP scope statistics from domain DHCP servers"
 $lblDHCPInfo.Location = New-Object System.Drawing.Point(15, 15)
 $lblDHCPInfo.Size = New-Object System.Drawing.Size(900, 20)
-$lblDHCPInfo.Font = New-Object System.Drawing.Font("Arial", 9, [System.Drawing.FontStyle]::Italic)
+$lblDHCPInfo.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
 $lblDHCPInfo.ForeColor = [System.Drawing.Color]::DarkBlue
+$lblDHCPInfo.Anchor = "Top,Left"
 $tab2.Controls.Add($lblDHCPInfo)
 
 # Server Configuration Group
@@ -1363,6 +1378,7 @@ $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Selection"
 $dhcpServerGroupBox.Size = New-Object System.Drawing.Size(920, 150)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
+$dhcpServerGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpServerGroupBox)
 
 # Server List Label
@@ -1437,6 +1453,7 @@ $dhcpScopeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpScopeGroupBox.Text = "Scope Selection (Optional)"
 $dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(920, 160)
 $dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 200)
+$dhcpScopeGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpScopeGroupBox)
 
 # Label for scope cache
@@ -1518,6 +1535,7 @@ $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
 $dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 90)
 $dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
+$dhcpOptionsGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
 # Row 1: DNS and Option 60
@@ -1576,6 +1594,7 @@ $dhcpActionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpActionsGroupBox.Text = "Actions"
 $dhcpActionsGroupBox.Size = New-Object System.Drawing.Size(920, 65)
 $dhcpActionsGroupBox.Location = New-Object System.Drawing.Point(10, 465)
+$dhcpActionsGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpActionsGroupBox)
 
 $btnCollectDHCP = New-Object System.Windows.Forms.Button
@@ -1615,6 +1634,7 @@ $lblCollectionLog.Location = New-Object System.Drawing.Point(945, 15)
 $lblCollectionLog.Size = New-Object System.Drawing.Size(200, 20)
 $lblCollectionLog.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $lblCollectionLog.ForeColor = [System.Drawing.Color]::DarkBlue
+$lblCollectionLog.Anchor = "Top,Right"
 $tab2.Controls.Add($lblCollectionLog)
 
 # DHCP Log (right side panel)
@@ -1629,6 +1649,7 @@ $dhcpLogBox.HideSelection = $false
 $dhcpLogBox.DetectUrls = $false
 $dhcpLogBox.Multiline = $true
 $dhcpLogBox.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+$dhcpLogBox.Anchor = "Top,Bottom,Right"
 $tab2.Controls.Add($dhcpLogBox)
 
 # Event Handlers for Tab 2
@@ -2436,6 +2457,7 @@ $btnExportDHCP.Add_Click({
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
 $tab3.AutoScroll = $true
+$tab3.Padding = New-Object System.Windows.Forms.Padding(10)
 $tabControl.Controls.Add($tab3)
 Add-IconToTab -Tab $tab3 -IconName "DNA"
 
@@ -2444,6 +2466,7 @@ $dnaConnGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaConnGroupBox.Text = "DNA Center Connection"
 $dnaConnGroupBox.Size = New-Object System.Drawing.Size(940, 140)
 $dnaConnGroupBox.Location = New-Object System.Drawing.Point(10, 10)
+$dnaConnGroupBox.Anchor = "Top,Left,Right"
 $tab3.Controls.Add($dnaConnGroupBox)
 
 # Server Label
@@ -2513,6 +2536,7 @@ $dnaFilterGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFilterGroupBox.Text = "Device Filtering & Selection"
 $dnaFilterGroupBox.Size = New-Object System.Drawing.Size(940, 350)
 $dnaFilterGroupBox.Location = New-Object System.Drawing.Point(10, 160)
+$dnaFilterGroupBox.Anchor = "Top,Left,Right"
 $tab3.Controls.Add($dnaFilterGroupBox)
 
 # Row 1: Hostname Search
@@ -2625,6 +2649,7 @@ $dnaTreeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaTreeGroupBox.Text = "DNA Center Functions - TreeView (Double-click to Execute)"
 $dnaTreeGroupBox.Size = New-Object System.Drawing.Size(460, 270)
 $dnaTreeGroupBox.Location = New-Object System.Drawing.Point(10, 520)
+$dnaTreeGroupBox.Anchor = "Top,Left"
 $tab3.Controls.Add($dnaTreeGroupBox)
 
 # TreeView for DNA Center Functions
@@ -2714,6 +2739,7 @@ $dnaFavoritesGroupBox = New-Object System.Windows.Forms.GroupBox
 $dnaFavoritesGroupBox.Text = "Favorite Functions"
 $dnaFavoritesGroupBox.Size = New-Object System.Drawing.Size(460, 270)
 $dnaFavoritesGroupBox.Location = New-Object System.Drawing.Point(480, 520)
+$dnaFavoritesGroupBox.Anchor = "Top,Right"
 $tab3.Controls.Add($dnaFavoritesGroupBox)
 
 $script:lstFavorites = New-Object System.Windows.Forms.ListBox
@@ -2995,6 +3021,7 @@ $fileSelectGroupBox.Text = "Select Files to Compare"
 $fileSelectGroupBox.Location = New-Object System.Drawing.Point(0, 40)
 $fileSelectGroupBox.Size = New-Object System.Drawing.Size(940, 110)
 $fileSelectGroupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$fileSelectGroupBox.Anchor = "Top,Left,Right"
 $compareMainPanel.Controls.Add($fileSelectGroupBox)
 
 # File 1 Selection
@@ -3649,11 +3676,13 @@ $tab5 = New-Object System.Windows.Forms.TabPage
 $tab5.Text = "Port Config"
 $tab5.BackColor = [System.Drawing.Color]::White
 $tab5.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab5.AutoScroll = $true
 $tabControl.Controls.Add($tab5)
 
 # Main panel for Port Config
 $portConfigPanel = New-Object System.Windows.Forms.Panel
 $portConfigPanel.Dock = "Fill"
+$portConfigPanel.AutoScroll = $true
 $tab5.Controls.Add($portConfigPanel)
 
 # Input GroupBox
