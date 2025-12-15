@@ -3408,15 +3408,15 @@ function Get-InlineDiff {
 function Compare-FilesContent {
     <#
     .SYNOPSIS
-        Memory-efficient file comparison using hash-based matching
+        Ultra memory-efficient file comparison using index-only storage
     .DESCRIPTION
-        Uses line hashing with a patience-style diff approach.
-        Memory: O(M + N) - only stores line hashes and results
-        Time: O(M + N) for identical files, O(M * N) worst case for completely different files
+        Stores only line INDICES in differences, not content copies.
+        Content is looked up on-demand from the original arrays.
 
-        For 20MB files (~500k lines):
-        - Memory: ~100MB (vs 10GB+ with Myers trace)
-        - Speed: Seconds for similar files
+        Memory for 20MB files (~500k lines):
+        - Line arrays: ~40MB (unavoidable - the file content)
+        - Differences: ~12 bytes per entry (just indices) vs ~100+ bytes with content
+        - Total: ~50MB for similar files, vs 500MB+ storing content copies
     #>
     param(
         [string]$File1Path,
@@ -3428,13 +3428,16 @@ function Compare-FilesContent {
         if (-not (Test-Path $File1Path)) { throw "Original file not found: $File1Path" }
         if (-not (Test-Path $File2Path)) { throw "Modified file not found: $File2Path" }
 
-        # Read files
+        # Read files - store once, reference by index
         $file1Lines = [System.IO.File]::ReadAllLines($File1Path)
         $file2Lines = [System.IO.File]::ReadAllLines($File2Path)
 
+        # Results stores the line arrays once - differences reference by index only
         $results = @{
             File1Path = $File1Path
             File2Path = $File2Path
+            File1Lines = $file1Lines  # Store once
+            File2Lines = $file2Lines  # Store once
             Differences = New-Object System.Collections.ArrayList
             Added = 0
             Removed = 0
@@ -3445,18 +3448,18 @@ function Compare-FilesContent {
         $m = $file1Lines.Count
         $n = $file2Lines.Count
 
-        # Handle empty files
+        # Handle empty files - use indices only (0-based internally, display as 1-based)
         if ($m -eq 0 -and $n -eq 0) { return $results }
         if ($m -eq 0) {
             for ($j = 0; $j -lt $n; $j++) {
-                [void]$results.Differences.Add(@{Type="Added"; Line1=$null; Line2=$j+1; Content1=""; Content2=$file2Lines[$j]; InlineDiff=$null})
+                [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
                 $results.Added++
             }
             return $results
         }
         if ($n -eq 0) {
             for ($i = 0; $i -lt $m; $i++) {
-                [void]$results.Differences.Add(@{Type="Removed"; Line1=$i+1; Line2=$null; Content1=$file1Lines[$i]; Content2=""; InlineDiff=$null})
+                [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
                 $results.Removed++
             }
             return $results
@@ -3586,78 +3589,43 @@ function Compare-FilesContent {
             # Process unmatched lines before next match
             while ($i -lt $nextMatchI -or $j -lt $nextMatchJ) {
                 if ($i -lt $nextMatchI -and $modifications.ContainsKey($i)) {
-                    # Modified line
+                    # Modified line - store indices only, no content copy
                     $mod = $modifications[$i]
-                    $inlineDiff = if ($mod.similarity -lt 0.95) {
-                        Get-InlineDiff -OldLine $file1Lines[$i] -NewLine $file2Lines[$mod.i2]
-                    } else { $null }
-
                     [void]$results.Differences.Add(@{
                         Type = "Modified"
-                        Line1 = $i + 1
-                        Line2 = $mod.i2 + 1
-                        Content1 = $file1Lines[$i]
-                        Content2 = $file2Lines[$mod.i2]
-                        InlineDiff = $inlineDiff
+                        Idx1 = $i
+                        Idx2 = $mod.i2
                         Similarity = $mod.similarity
                     })
                     $results.Modified++
                     $i++
-
-                    # Skip the matched j if we've reached it
                     if ($j -eq $mod.i2) { $j++ }
                 }
                 elseif ($i -lt $nextMatchI -and -not $file1Matched[$i]) {
-                    # Removed line
-                    [void]$results.Differences.Add(@{
-                        Type = "Removed"
-                        Line1 = $i + 1
-                        Line2 = $null
-                        Content1 = $file1Lines[$i]
-                        Content2 = ""
-                        InlineDiff = $null
-                    })
+                    # Removed line - index only
+                    [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
                     $results.Removed++
                     $i++
                 }
                 elseif ($j -lt $nextMatchJ -and -not $file2Matched[$j]) {
-                    # Added line
-                    [void]$results.Differences.Add(@{
-                        Type = "Added"
-                        Line1 = $null
-                        Line2 = $j + 1
-                        Content1 = ""
-                        Content2 = $file2Lines[$j]
-                        InlineDiff = $null
-                    })
+                    # Added line - index only
+                    [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
                     $results.Added++
                     $j++
                 }
                 else {
-                    # Skip already processed
                     if ($i -lt $nextMatchI) { $i++ }
                     if ($j -lt $nextMatchJ) { $j++ }
                 }
             }
 
-            # Process the matched pair
+            # Process the matched pair - index only
             if ($i -lt $m -and $j -lt $n -and $i -eq $nextMatchI -and $j -eq $nextMatchJ) {
-                [void]$results.Differences.Add(@{
-                    Type = "Unchanged"
-                    Line1 = $i + 1
-                    Line2 = $j + 1
-                    Content1 = $file1Lines[$i]
-                    Content2 = $file2Lines[$j]
-                    InlineDiff = $null
-                })
+                [void]$results.Differences.Add(@{Type="Unchanged"; Idx1=$i; Idx2=$j})
                 $results.Unchanged++
                 $i++
                 $j++
-
-                # Remove processed match from list for efficiency
-                if ($matches.Count -gt 0) {
-                    $matches.RemoveAt(0)
-                }
+                if ($matches.Count -gt 0) { $matches.RemoveAt(0) }
             }
         }
 
@@ -4167,8 +4135,11 @@ $btnExportDiff.Add_Click({
                     }
 
                     # Second pass: build JSON with context, adding separators for gaps
+                    # Look up content from stored line arrays (index-based storage)
                     $jsDataList = New-Object System.Collections.ArrayList
                     $lastIncludedIndex = -2
+                    $file1Lines = $script:CompareResults.File1Lines
+                    $file2Lines = $script:CompareResults.File2Lines
 
                     for ($i = 0; $i -lt $totalDiffs; $i++) {
                         if (-not $includeIndex.Contains($i)) { continue }
@@ -4181,29 +4152,37 @@ $btnExportDiff.Add_Click({
                         $lastIncludedIndex = $i
 
                         $diff = $script:CompareResults.Differences[$i]
-                        $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                        $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
-                        $leftContent = (ConvertTo-HtmlEncoded -Text $diff.Content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                        $rightContent = (ConvertTo-HtmlEncoded -Text $diff.Content2) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                        # Use indices to look up content (0-based index, display as 1-based line number)
+                        $idx1 = $diff.Idx1
+                        $idx2 = $diff.Idx2
+                        $leftLineNum = if ($idx1 -ge 0) { ($idx1 + 1).ToString().PadLeft(5) } else { "     " }
+                        $rightLineNum = if ($idx2 -ge 0) { ($idx2 + 1).ToString().PadLeft(5) } else { "     " }
+                        $content1 = if ($idx1 -ge 0) { $file1Lines[$idx1] } else { "" }
+                        $content2 = if ($idx2 -ge 0) { $file2Lines[$idx2] } else { "" }
+                        $leftContent = (ConvertTo-HtmlEncoded -Text $content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                        $rightContent = (ConvertTo-HtmlEncoded -Text $content2) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
 
-                        # Build inline diff HTML for Modified lines
+                        # Build inline diff HTML for Modified lines (generate on-demand)
                         $leftInline = ""
                         $rightInline = ""
-                        if ($diff.Type -eq "Modified" -and $diff.InlineDiff) {
-                            foreach ($part in $diff.InlineDiff.OldParts) {
-                                $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                                if ($part.Changed) {
-                                    $leftInline += "<span class=''inline-del''>$escaped</span>"
-                                } else {
-                                    $leftInline += $escaped
+                        if ($diff.Type -eq "Modified" -and $diff.Similarity -and $diff.Similarity -lt 0.95) {
+                            $inlineDiff = Get-InlineDiff -OldLine $content1 -NewLine $content2
+                            if ($inlineDiff) {
+                                foreach ($part in $inlineDiff.OldParts) {
+                                    $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                                    if ($part.Changed) {
+                                        $leftInline += "<span class=''inline-del''>$escaped</span>"
+                                    } else {
+                                        $leftInline += $escaped
+                                    }
                                 }
-                            }
-                            foreach ($part in $diff.InlineDiff.NewParts) {
-                                $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                                if ($part.Changed) {
-                                    $rightInline += "<span class=''inline-add''>$escaped</span>"
-                                } else {
-                                    $rightInline += $escaped
+                                foreach ($part in $inlineDiff.NewParts) {
+                                    $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                                    if ($part.Changed) {
+                                        $rightInline += "<span class=''inline-add''>$escaped</span>"
+                                    } else {
+                                        $rightInline += $escaped
+                                    }
                                 }
                             }
                         }
@@ -4377,20 +4356,27 @@ $btnExportDiff.Add_Click({
                     $output += "=" * 80
                     $output += ""
 
+                    # Get line arrays for content lookup
+                    $f1Lines = $script:CompareResults.File1Lines
+                    $f2Lines = $script:CompareResults.File2Lines
+
                     if ($unifiedView) {
                         # Unified view
                         foreach ($diff in $script:CompareResults.Differences) {
                             if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
+                            $idx1 = $diff.Idx1
+                            $idx2 = $diff.Idx2
+                            $content1 = if ($idx1 -ge 0) { $f1Lines[$idx1] } else { "" }
+                            $content2 = if ($idx2 -ge 0) { $f2Lines[$idx2] } else { "" }
 
                             if ($diff.Type -eq "Modified") {
-                                # Show both old and new lines for modifications
-                                $output += "~ [$($diff.Line1.ToString().PadLeft(5))] - $($diff.Content1)"
-                                $output += "~ [$($diff.Line2.ToString().PadLeft(5))] + $($diff.Content2)"
+                                $output += "~ [$(($idx1+1).ToString().PadLeft(5))] - $content1"
+                                $output += "~ [$(($idx2+1).ToString().PadLeft(5))] + $content2"
                             }
                             else {
-                                $lineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " } }
+                                $lineNum = if ($idx1 -ge 0) { ($idx1+1).ToString().PadLeft(5) } elseif ($idx2 -ge 0) { ($idx2+1).ToString().PadLeft(5) } else { "     " }
                                 $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
-                                $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
+                                $content = if ($diff.Type -eq "Added") { $content2 } else { $content1 }
                                 $output += "$prefix [$lineNum] $content"
                             }
                         }
@@ -4398,22 +4384,18 @@ $btnExportDiff.Add_Click({
                         # Side-by-side view
                         foreach ($diff in $script:CompareResults.Differences) {
                             if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
-                            $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                            $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
+                            $idx1 = $diff.Idx1
+                            $idx2 = $diff.Idx2
+                            $leftLineNum = if ($idx1 -ge 0) { ($idx1+1).ToString().PadLeft(5) } else { "     " }
+                            $rightLineNum = if ($idx2 -ge 0) { ($idx2+1).ToString().PadLeft(5) } else { "     " }
+                            $content1 = if ($idx1 -ge 0) { $f1Lines[$idx1] } else { "" }
+                            $content2 = if ($idx2 -ge 0) { $f2Lines[$idx2] } else { "" }
 
                             switch ($diff.Type) {
-                                "Added" {
-                                    $output += "[$leftLineNum]     |  [$rightLineNum] + $($diff.Content2)"
-                                }
-                                "Removed" {
-                                    $output += "[$leftLineNum] - $($diff.Content1)  |  [$rightLineNum]     |"
-                                }
-                                "Modified" {
-                                    $output += "[$leftLineNum] ~ $($diff.Content1)  |  [$rightLineNum] ~ $($diff.Content2)"
-                                }
-                                "Unchanged" {
-                                    $output += "[$leftLineNum]   $($diff.Content1)  |  [$rightLineNum]   $($diff.Content2)"
-                                }
+                                "Added"     { $output += "[$leftLineNum]     |  [$rightLineNum] + $content2" }
+                                "Removed"   { $output += "[$leftLineNum] - $content1  |  [$rightLineNum]     |" }
+                                "Modified"  { $output += "[$leftLineNum] ~ $content1  |  [$rightLineNum] ~ $content2" }
+                                "Unchanged" { $output += "[$leftLineNum]   $content1  |  [$rightLineNum]   $content2" }
                             }
                         }
                     }
@@ -4421,16 +4403,20 @@ $btnExportDiff.Add_Click({
                     $output | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
                 }
                 ".csv" {
+                    $f1Lines = $script:CompareResults.File1Lines
+                    $f2Lines = $script:CompareResults.File2Lines
                     $csvData = @()
                     foreach ($diff in $script:CompareResults.Differences) {
                         if ($showOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
+                        $idx1 = $diff.Idx1
+                        $idx2 = $diff.Idx2
                         $csvData += [PSCustomObject]@{
-                            OriginalLineNumber = if ($diff.Line1) { $diff.Line1 } else { "" }
-                            ModifiedLineNumber = if ($diff.Line2) { $diff.Line2 } else { "" }
+                            OriginalLineNumber = if ($idx1 -ge 0) { $idx1 + 1 } else { "" }
+                            ModifiedLineNumber = if ($idx2 -ge 0) { $idx2 + 1 } else { "" }
                             Status = $diff.Type
                             Similarity = if ($diff.Type -eq "Modified" -and $diff.Similarity) { "$([Math]::Round($diff.Similarity * 100))%" } else { "" }
-                            OriginalContent = $diff.Content1
-                            ModifiedContent = $diff.Content2
+                            OriginalContent = if ($idx1 -ge 0) { $f1Lines[$idx1] } else { "" }
+                            ModifiedContent = if ($idx2 -ge 0) { $f2Lines[$idx2] } else { "" }
                         }
                     }
                     $csvData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
