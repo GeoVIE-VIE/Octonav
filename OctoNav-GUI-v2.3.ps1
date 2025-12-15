@@ -3723,7 +3723,7 @@ $cboVendor = New-Object System.Windows.Forms.ComboBox
 $cboVendor.Location = New-Object System.Drawing.Point(120, 27)
 $cboVendor.Size = New-Object System.Drawing.Size(250, 25)
 $cboVendor.DropDownStyle = "DropDownList"
-$cboVendor.Items.AddRange(@("Cisco", "ICX", "FCX 8030", "FCX 7.3"))
+$cboVendor.Items.AddRange(@("Cisco", "ICX/FCX 8030", "FCX 7.3"))
 $cboVendor.SelectedIndex = 0
 $portInputGroup.Controls.Add($cboVendor)
 
