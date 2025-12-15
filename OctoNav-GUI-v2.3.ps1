@@ -2889,237 +2889,7 @@ $btnClearCompare.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnClearCompare.Cursor = [System.Windows.Forms.Cursors]::Hand
 $actionPanel.Controls.Add($btnClearCompare)
 
-$btnExportDiff = New-Object System.Windows.Forms.Button
-$btnExportDiff.Text = "Export Results"
-$btnExportDiff.Location = New-Object System.Drawing.Point(350, 5)
-$btnExportDiff.Size = New-Object System.Drawing.Size(120, 35)
-$btnExportDiff.FlatStyle = "Flat"
-$btnExportDiff.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
-$btnExportDiff.ForeColor = [System.Drawing.Color]::White
-$btnExportDiff.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$btnExportDiff.Cursor = [System.Windows.Forms.Cursors]::Hand
-$btnExportDiff.Enabled = $false
-$actionPanel.Controls.Add($btnExportDiff)
 
-# Statistics Summary Panel
-$statsPanel = New-Object System.Windows.Forms.Panel
-$statsPanel.Location = New-Object System.Drawing.Point(550, 0)
-$statsPanel.Size = New-Object System.Drawing.Size(390, 45)
-$statsPanel.BackColor = [System.Drawing.Color]::FromArgb(248, 249, 250)
-$statsPanel.BorderStyle = "FixedSingle"
-$actionPanel.Controls.Add($statsPanel)
-
-$lblStatsTitle = New-Object System.Windows.Forms.Label
-$lblStatsTitle.Text = "Summary:"
-$lblStatsTitle.Location = New-Object System.Drawing.Point(10, 12)
-$lblStatsTitle.Size = New-Object System.Drawing.Size(60, 20)
-$lblStatsTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$statsPanel.Controls.Add($lblStatsTitle)
-
-$lblAddedCount = New-Object System.Windows.Forms.Label
-$lblAddedCount.Text = "+ 0"
-$lblAddedCount.Location = New-Object System.Drawing.Point(75, 12)
-$lblAddedCount.Size = New-Object System.Drawing.Size(60, 20)
-$lblAddedCount.Font = New-Object System.Drawing.Font("Consolas", 10, [System.Drawing.FontStyle]::Bold)
-$lblAddedCount.ForeColor = [System.Drawing.Color]::FromArgb(34, 139, 34)
-$statsPanel.Controls.Add($lblAddedCount)
-
-$lblRemovedCount = New-Object System.Windows.Forms.Label
-$lblRemovedCount.Text = "- 0"
-$lblRemovedCount.Location = New-Object System.Drawing.Point(145, 12)
-$lblRemovedCount.Size = New-Object System.Drawing.Size(60, 20)
-$lblRemovedCount.Font = New-Object System.Drawing.Font("Consolas", 10, [System.Drawing.FontStyle]::Bold)
-$lblRemovedCount.ForeColor = [System.Drawing.Color]::FromArgb(178, 34, 34)
-$statsPanel.Controls.Add($lblRemovedCount)
-
-$lblModifiedCount = New-Object System.Windows.Forms.Label
-$lblModifiedCount.Text = "~ 0"
-$lblModifiedCount.Location = New-Object System.Drawing.Point(215, 12)
-$lblModifiedCount.Size = New-Object System.Drawing.Size(60, 20)
-$lblModifiedCount.Font = New-Object System.Drawing.Font("Consolas", 10, [System.Drawing.FontStyle]::Bold)
-$lblModifiedCount.ForeColor = [System.Drawing.Color]::FromArgb(184, 134, 11)
-$statsPanel.Controls.Add($lblModifiedCount)
-
-$lblUnchangedCount = New-Object System.Windows.Forms.Label
-$lblUnchangedCount.Text = "= 0"
-$lblUnchangedCount.Location = New-Object System.Drawing.Point(285, 12)
-$lblUnchangedCount.Size = New-Object System.Drawing.Size(90, 20)
-$lblUnchangedCount.Font = New-Object System.Drawing.Font("Consolas", 10)
-$lblUnchangedCount.ForeColor = [System.Drawing.Color]::Gray
-$statsPanel.Controls.Add($lblUnchangedCount)
-
-# Legend Panel
-$legendPanel = New-Object System.Windows.Forms.Panel
-$legendPanel.Location = New-Object System.Drawing.Point(0, 200)
-$legendPanel.Size = New-Object System.Drawing.Size(940, 30)
-$legendPanel.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
-$compareMainPanel.Controls.Add($legendPanel)
-
-$lblLegend = New-Object System.Windows.Forms.Label
-$lblLegend.Text = "Legend:"
-$lblLegend.Location = New-Object System.Drawing.Point(10, 5)
-$lblLegend.Size = New-Object System.Drawing.Size(55, 20)
-$lblLegend.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$legendPanel.Controls.Add($lblLegend)
-
-# Added legend item
-$pnlAddedLegend = New-Object System.Windows.Forms.Panel
-$pnlAddedLegend.Location = New-Object System.Drawing.Point(70, 7)
-$pnlAddedLegend.Size = New-Object System.Drawing.Size(16, 16)
-$pnlAddedLegend.BackColor = [System.Drawing.Color]::FromArgb(200, 255, 200)
-$pnlAddedLegend.BorderStyle = "FixedSingle"
-$legendPanel.Controls.Add($pnlAddedLegend)
-
-$lblAddedLegend = New-Object System.Windows.Forms.Label
-$lblAddedLegend.Text = "Added"
-$lblAddedLegend.Location = New-Object System.Drawing.Point(90, 5)
-$lblAddedLegend.Size = New-Object System.Drawing.Size(50, 20)
-$lblAddedLegend.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($lblAddedLegend)
-
-# Removed legend item
-$pnlRemovedLegend = New-Object System.Windows.Forms.Panel
-$pnlRemovedLegend.Location = New-Object System.Drawing.Point(150, 7)
-$pnlRemovedLegend.Size = New-Object System.Drawing.Size(16, 16)
-$pnlRemovedLegend.BackColor = [System.Drawing.Color]::FromArgb(255, 200, 200)
-$pnlRemovedLegend.BorderStyle = "FixedSingle"
-$legendPanel.Controls.Add($pnlRemovedLegend)
-
-$lblRemovedLegend = New-Object System.Windows.Forms.Label
-$lblRemovedLegend.Text = "Removed"
-$lblRemovedLegend.Location = New-Object System.Drawing.Point(170, 5)
-$lblRemovedLegend.Size = New-Object System.Drawing.Size(60, 20)
-$lblRemovedLegend.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($lblRemovedLegend)
-
-# Modified legend item
-$pnlModifiedLegend = New-Object System.Windows.Forms.Panel
-$pnlModifiedLegend.Location = New-Object System.Drawing.Point(240, 7)
-$pnlModifiedLegend.Size = New-Object System.Drawing.Size(16, 16)
-$pnlModifiedLegend.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 180)
-$pnlModifiedLegend.BorderStyle = "FixedSingle"
-$legendPanel.Controls.Add($pnlModifiedLegend)
-
-$lblModifiedLegend = New-Object System.Windows.Forms.Label
-$lblModifiedLegend.Text = "Modified"
-$lblModifiedLegend.Location = New-Object System.Drawing.Point(260, 5)
-$lblModifiedLegend.Size = New-Object System.Drawing.Size(55, 20)
-$lblModifiedLegend.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($lblModifiedLegend)
-
-# Unchanged legend item
-$pnlUnchangedLegend = New-Object System.Windows.Forms.Panel
-$pnlUnchangedLegend.Location = New-Object System.Drawing.Point(325, 7)
-$pnlUnchangedLegend.Size = New-Object System.Drawing.Size(16, 16)
-$pnlUnchangedLegend.BackColor = [System.Drawing.Color]::White
-$pnlUnchangedLegend.BorderStyle = "FixedSingle"
-$legendPanel.Controls.Add($pnlUnchangedLegend)
-
-$lblUnchangedLegend = New-Object System.Windows.Forms.Label
-$lblUnchangedLegend.Text = "Unchanged"
-$lblUnchangedLegend.Location = New-Object System.Drawing.Point(345, 5)
-$lblUnchangedLegend.Size = New-Object System.Drawing.Size(70, 20)
-$lblUnchangedLegend.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($lblUnchangedLegend)
-
-# View toggle buttons
-$lblViewMode = New-Object System.Windows.Forms.Label
-$lblViewMode.Text = "View:"
-$lblViewMode.Location = New-Object System.Drawing.Point(650, 5)
-$lblViewMode.Size = New-Object System.Drawing.Size(40, 20)
-$lblViewMode.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$legendPanel.Controls.Add($lblViewMode)
-
-$btnSideBySide = New-Object System.Windows.Forms.RadioButton
-$btnSideBySide.Text = "Side-by-Side"
-$btnSideBySide.Location = New-Object System.Drawing.Point(695, 4)
-$btnSideBySide.Size = New-Object System.Drawing.Size(95, 22)
-$btnSideBySide.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$btnSideBySide.Checked = $true
-$legendPanel.Controls.Add($btnSideBySide)
-
-$btnUnified = New-Object System.Windows.Forms.RadioButton
-$btnUnified.Text = "Unified"
-$btnUnified.Location = New-Object System.Drawing.Point(795, 4)
-$btnUnified.Size = New-Object System.Drawing.Size(70, 22)
-$btnUnified.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($btnUnified)
-
-$chkShowOnlyDiffs = New-Object System.Windows.Forms.CheckBox
-$chkShowOnlyDiffs.Text = "Only Differences"
-$chkShowOnlyDiffs.Location = New-Object System.Drawing.Point(870, 4)
-$chkShowOnlyDiffs.Size = New-Object System.Drawing.Size(120, 22)
-$chkShowOnlyDiffs.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$legendPanel.Controls.Add($chkShowOnlyDiffs)
-
-# Results Container Panel (for side-by-side view)
-$resultsContainer = New-Object System.Windows.Forms.Panel
-$resultsContainer.Location = New-Object System.Drawing.Point(0, 235)
-$resultsContainer.Size = New-Object System.Drawing.Size(940, 280)
-$resultsContainer.Anchor = "Top,Bottom,Left,Right"
-$compareMainPanel.Controls.Add($resultsContainer)
-
-# Left panel header (Original file)
-$lblLeftHeader = New-Object System.Windows.Forms.Label
-$lblLeftHeader.Text = "Original File"
-$lblLeftHeader.Location = New-Object System.Drawing.Point(0, 0)
-$lblLeftHeader.Size = New-Object System.Drawing.Size(465, 25)
-$lblLeftHeader.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
-$lblLeftHeader.ForeColor = [System.Drawing.Color]::White
-$lblLeftHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$lblLeftHeader.TextAlign = "MiddleCenter"
-$resultsContainer.Controls.Add($lblLeftHeader)
-
-# Right panel header (Modified file)
-$lblRightHeader = New-Object System.Windows.Forms.Label
-$lblRightHeader.Text = "Modified File"
-$lblRightHeader.Location = New-Object System.Drawing.Point(475, 0)
-$lblRightHeader.Size = New-Object System.Drawing.Size(465, 25)
-$lblRightHeader.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
-$lblRightHeader.ForeColor = [System.Drawing.Color]::White
-$lblRightHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$lblRightHeader.TextAlign = "MiddleCenter"
-$resultsContainer.Controls.Add($lblRightHeader)
-
-# Left RichTextBox (Original file content)
-$script:rtbLeftFile = New-Object System.Windows.Forms.RichTextBox
-$script:rtbLeftFile.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbLeftFile.Size = New-Object System.Drawing.Size(465, 250)
-$script:rtbLeftFile.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbLeftFile.ReadOnly = $true
-$script:rtbLeftFile.WordWrap = $false
-$script:rtbLeftFile.ScrollBars = "Both"
-$script:rtbLeftFile.BackColor = [System.Drawing.Color]::White
-$script:rtbLeftFile.BorderStyle = "FixedSingle"
-$script:rtbLeftFile.Anchor = "Top,Bottom,Left"
-$resultsContainer.Controls.Add($script:rtbLeftFile)
-
-# Right RichTextBox (Modified file content)
-$script:rtbRightFile = New-Object System.Windows.Forms.RichTextBox
-$script:rtbRightFile.Location = New-Object System.Drawing.Point(475, 25)
-$script:rtbRightFile.Size = New-Object System.Drawing.Size(465, 250)
-$script:rtbRightFile.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbRightFile.ReadOnly = $true
-$script:rtbRightFile.WordWrap = $false
-$script:rtbRightFile.ScrollBars = "Both"
-$script:rtbRightFile.BackColor = [System.Drawing.Color]::White
-$script:rtbRightFile.BorderStyle = "FixedSingle"
-$script:rtbRightFile.Anchor = "Top,Bottom,Left,Right"
-$resultsContainer.Controls.Add($script:rtbRightFile)
-
-# Unified view RichTextBox (hidden by default)
-$script:rtbUnifiedView = New-Object System.Windows.Forms.RichTextBox
-$script:rtbUnifiedView.Location = New-Object System.Drawing.Point(0, 25)
-$script:rtbUnifiedView.Size = New-Object System.Drawing.Size(940, 250)
-$script:rtbUnifiedView.Font = New-Object System.Drawing.Font("Consolas", 9)
-$script:rtbUnifiedView.ReadOnly = $true
-$script:rtbUnifiedView.WordWrap = $false
-$script:rtbUnifiedView.ScrollBars = "Both"
-$script:rtbUnifiedView.BackColor = [System.Drawing.Color]::White
-$script:rtbUnifiedView.BorderStyle = "FixedSingle"
-$script:rtbUnifiedView.Anchor = "Top,Bottom,Left,Right"
-$script:rtbUnifiedView.Visible = $false
-$resultsContainer.Controls.Add($script:rtbUnifiedView)
 
 # ============================================
 # EMBEDDED RESOURCES PANEL
@@ -3127,7 +2897,7 @@ $resultsContainer.Controls.Add($script:rtbUnifiedView)
 
 $resourcesGroupBox = New-Object System.Windows.Forms.GroupBox
 $resourcesGroupBox.Text = "Embedded Resources (.RDOX Files)"
-$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 520)
+$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 200)
 $resourcesGroupBox.Size = New-Object System.Drawing.Size(940, 95)
 $resourcesGroupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $resourcesGroupBox.Anchor = "Bottom,Left,Right"
@@ -3323,7 +3093,7 @@ $script:CompareResults = $null
 function Compare-FilesContent {
     <#
     .SYNOPSIS
-        Performs line-by-line comparison of two files using optimized sequential algorithm
+        Performs optimized line-by-line comparison of two files - supports large files (20MB+)
     #>
     param(
         [string]$File1Path,
@@ -3338,15 +3108,17 @@ function Compare-FilesContent {
             throw "Modified file not found: $File2Path"
         }
 
-        $file1Lines = @(Get-Content $File1Path -ErrorAction Stop)
-        $file2Lines = @(Get-Content $File2Path -ErrorAction Stop)
+        # Use ReadAllLines for faster file reading
+        $file1Lines = [System.IO.File]::ReadAllLines($File1Path)
+        $file2Lines = [System.IO.File]::ReadAllLines($File2Path)
+
+        # Use ArrayList for O(1) append instead of O(n) array concatenation
+        $differences = New-Object System.Collections.ArrayList
 
         $results = @{
             File1Path = $File1Path
             File2Path = $File2Path
-            File1Lines = $file1Lines
-            File2Lines = $file2Lines
-            Differences = @()
+            Differences = $differences
             Added = 0
             Removed = 0
             Modified = 0
@@ -3361,22 +3133,21 @@ function Compare-FilesContent {
         for ($j = 0; $j -lt $n; $j++) {
             $line = $file2Lines[$j]
             if (-not $file2Hash.ContainsKey($line)) {
-                $file2Hash[$line] = [System.Collections.ArrayList]@()
+                $file2Hash[$line] = New-Object System.Collections.ArrayList
             }
-            $file2Hash[$line].Add($j) | Out-Null
+            [void]$file2Hash[$line].Add($j)
         }
 
         # Track which lines in file2 have been matched
         $file2Matched = @{}
 
         # First pass: find matching lines using greedy approach
-        $matches = @{}  # file1 index -> file2 index
+        $matches = @{}
         $lastMatchJ = -1
 
         for ($i = 0; $i -lt $m; $i++) {
             $line = $file1Lines[$i]
             if ($file2Hash.ContainsKey($line)) {
-                # Find the first unmatched occurrence after lastMatchJ
                 foreach ($j in $file2Hash[$line]) {
                     if ($j -gt $lastMatchJ -and -not $file2Matched.ContainsKey($j)) {
                         $matches[$i] = $j
@@ -3391,6 +3162,9 @@ function Compare-FilesContent {
         # Build output by merging both files
         $i = 0
         $j = 0
+        $addedCount = 0
+        $removedCount = 0
+        $unchangedCount = 0
 
         while ($i -lt $m -or $j -lt $n) {
             if ($i -lt $m -and $matches.ContainsKey($i)) {
@@ -3398,54 +3172,61 @@ function Compare-FilesContent {
 
                 # Output any added lines before this match
                 while ($j -lt $matchedJ) {
-                    $results.Differences += @{
+                    [void]$differences.Add(@{
                         Type = "Added"
                         Line1 = $null
                         Line2 = $j + 1
                         Content1 = ""
                         Content2 = $file2Lines[$j]
-                    }
-                    $results.Added++
+                    })
+                    $addedCount++
                     $j++
                 }
 
                 # Output the matching line
-                $results.Differences += @{
+                [void]$differences.Add(@{
                     Type = "Unchanged"
                     Line1 = $i + 1
                     Line2 = $j + 1
                     Content1 = $file1Lines[$i]
                     Content2 = $file2Lines[$j]
-                }
-                $results.Unchanged++
+                })
+                $unchangedCount++
                 $i++
                 $j++
             }
             elseif ($i -lt $m) {
-                # Line in file1 has no match - it was removed
-                $results.Differences += @{
+                [void]$differences.Add(@{
                     Type = "Removed"
                     Line1 = $i + 1
                     Line2 = $null
                     Content1 = $file1Lines[$i]
                     Content2 = ""
-                }
-                $results.Removed++
+                })
+                $removedCount++
                 $i++
             }
             else {
-                # Remaining lines in file2 are added
-                $results.Differences += @{
+                [void]$differences.Add(@{
                     Type = "Added"
                     Line1 = $null
                     Line2 = $j + 1
                     Content1 = ""
                     Content2 = $file2Lines[$j]
-                }
-                $results.Added++
+                })
+                $addedCount++
                 $j++
             }
         }
+
+        $results.Added = $addedCount
+        $results.Removed = $removedCount
+        $results.Unchanged = $unchangedCount
+
+        # Clear large arrays to free memory
+        $file1Lines = $null
+        $file2Lines = $null
+        [System.GC]::Collect()
 
         return $results
     }
@@ -3457,7 +3238,7 @@ function Compare-FilesContent {
 function New-HtmlDiffReport {
     <#
     .SYNOPSIS
-        Generates a professional HTML diff report and opens it in the default browser
+        Generates a professional HTML diff report - optimized for large files (20MB+)
     #>
     param(
         [hashtable]$Results,
@@ -3468,72 +3249,38 @@ function New-HtmlDiffReport {
     $file2Name = [System.IO.Path]::GetFileName($Results.File2Path)
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 
-    # Build the diff rows for side-by-side view
-    $diffRowsHtml = ""
+    # Use StringBuilder for O(1) append instead of O(n) string concatenation
+    $sbSideBySide = New-Object System.Text.StringBuilder
+    $sbUnified = New-Object System.Text.StringBuilder
+
     foreach ($diff in $Results.Differences) {
         $leftLineNum = if ($diff.Line1) { $diff.Line1 } else { "" }
         $rightLineNum = if ($diff.Line2) { $diff.Line2 } else { "" }
-        $leftContent = [System.Web.HttpUtility]::HtmlEncode($diff.Content1)
-        $rightContent = [System.Web.HttpUtility]::HtmlEncode($diff.Content2)
+        $leftContent = [System.Net.WebUtility]::HtmlEncode($diff.Content1)
+        $rightContent = [System.Net.WebUtility]::HtmlEncode($diff.Content2)
 
         switch ($diff.Type) {
             "Added" {
-                $diffRowsHtml += @"
-                <tr class="diff-row added">
-                    <td class="line-num empty"></td>
-                    <td class="line-content empty"></td>
-                    <td class="gutter">+</td>
-                    <td class="line-num">$rightLineNum</td>
-                    <td class="line-content added">$rightContent</td>
-                </tr>
-"@
+                [void]$sbSideBySide.AppendLine("<tr class=`"diff-row added`"><td class=`"line-num empty`"></td><td class=`"line-content empty`"></td><td class=`"gutter`">+</td><td class=`"line-num`">$rightLineNum</td><td class=`"line-content added`">$rightContent</td></tr>")
+                [void]$sbUnified.AppendLine("<tr class=`"diff-row added`"><td class=`"line-num`">$rightLineNum</td><td class=`"gutter`">+</td><td class=`"line-content added`">$rightContent</td></tr>")
             }
             "Removed" {
-                $diffRowsHtml += @"
-                <tr class="diff-row removed">
-                    <td class="line-num">$leftLineNum</td>
-                    <td class="line-content removed">$leftContent</td>
-                    <td class="gutter">-</td>
-                    <td class="line-num empty"></td>
-                    <td class="line-content empty"></td>
-                </tr>
-"@
+                [void]$sbSideBySide.AppendLine("<tr class=`"diff-row removed`"><td class=`"line-num`">$leftLineNum</td><td class=`"line-content removed`">$leftContent</td><td class=`"gutter`">-</td><td class=`"line-num empty`"></td><td class=`"line-content empty`"></td></tr>")
+                [void]$sbUnified.AppendLine("<tr class=`"diff-row removed`"><td class=`"line-num`">$leftLineNum</td><td class=`"gutter`">-</td><td class=`"line-content removed`">$leftContent</td></tr>")
             }
             "Unchanged" {
-                $diffRowsHtml += @"
-                <tr class="diff-row unchanged">
-                    <td class="line-num">$leftLineNum</td>
-                    <td class="line-content">$leftContent</td>
-                    <td class="gutter">&nbsp;</td>
-                    <td class="line-num">$rightLineNum</td>
-                    <td class="line-content">$rightContent</td>
-                </tr>
-"@
+                [void]$sbSideBySide.AppendLine("<tr class=`"diff-row unchanged`"><td class=`"line-num`">$leftLineNum</td><td class=`"line-content`">$leftContent</td><td class=`"gutter`">&nbsp;</td><td class=`"line-num`">$rightLineNum</td><td class=`"line-content`">$rightContent</td></tr>")
+                [void]$sbUnified.AppendLine("<tr class=`"diff-row unchanged`"><td class=`"line-num`">$leftLineNum</td><td class=`"gutter`"> </td><td class=`"line-content`">$leftContent</td></tr>")
             }
         }
     }
 
-    # Build unified view rows
-    $unifiedRowsHtml = ""
-    foreach ($diff in $Results.Differences) {
-        $lineNum = if ($diff.Line1) { $diff.Line1 } elseif ($diff.Line2) { $diff.Line2 } else { "" }
-        $content = if ($diff.Type -eq "Added") {
-            [System.Web.HttpUtility]::HtmlEncode($diff.Content2)
-        } else {
-            [System.Web.HttpUtility]::HtmlEncode($diff.Content1)
-        }
+    $diffRowsHtml = $sbSideBySide.ToString()
+    $unifiedRowsHtml = $sbUnified.ToString()
 
-        $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
-        $rowClass = $diff.Type.ToLower()
-
-        $unifiedRowsHtml += @"
-                <tr class="diff-row $rowClass">
-                    <td class="line-num">$lineNum</td>
-                    <td class="gutter">$prefix</td>
-                    <td class="line-content $rowClass">$content</td>
-                </tr>
-"@
-    }
+    # Clear StringBuilders to free memory
+    $sbSideBySide = $null
+    $sbUnified = $null
 
     $html = @"
 <!DOCTYPE html>
@@ -3879,9 +3626,18 @@ $unifiedRowsHtml
 </html>
 "@
 
-    # Save to temp file
+    # Save to temp file using StreamWriter for better performance
     $tempFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "OctoNav_Diff_$(Get-Date -Format 'yyyyMMdd_HHmmss').html")
-    $html | Out-File -FilePath $tempFile -Encoding UTF8
+    $writer = New-Object System.IO.StreamWriter($tempFile, $false, [System.Text.Encoding]::UTF8)
+    $writer.Write($html)
+    $writer.Close()
+    $writer.Dispose()
+
+    # Clear the large HTML string
+    $html = $null
+    $diffRowsHtml = $null
+    $unifiedRowsHtml = $null
+    [System.GC]::Collect()
 
     if ($OpenInBrowser) {
         Start-Process $tempFile
@@ -3890,156 +3646,6 @@ $unifiedRowsHtml
     return $tempFile
 }
 
-function Show-ComparisonResults {
-    <#
-    .SYNOPSIS
-        Displays comparison results in the UI with optimized rendering
-    #>
-    param(
-        [hashtable]$Results,
-        [bool]$ShowOnlyDiffs = $false,
-        [bool]$UnifiedView = $false
-    )
-
-    # Update statistics
-    $lblAddedCount.Text = "+ $($Results.Added)"
-    $lblRemovedCount.Text = "- $($Results.Removed)"
-    $lblModifiedCount.Text = "~ $($Results.Modified)"
-    $lblUnchangedCount.Text = "= $($Results.Unchanged)"
-
-    # Define colors once for performance
-    $colorAddedBg = [System.Drawing.Color]::FromArgb(200, 255, 200)
-    $colorAddedFg = [System.Drawing.Color]::FromArgb(0, 100, 0)
-    $colorRemovedBg = [System.Drawing.Color]::FromArgb(255, 200, 200)
-    $colorRemovedFg = [System.Drawing.Color]::FromArgb(139, 0, 0)
-    $colorAddedLightBg = [System.Drawing.Color]::FromArgb(230, 255, 230)
-    $colorRemovedLightBg = [System.Drawing.Color]::FromArgb(255, 230, 230)
-    $colorGrayFg = [System.Drawing.Color]::FromArgb(150, 150, 150)
-
-    if ($UnifiedView) {
-        # Show unified view
-        $script:rtbLeftFile.Visible = $false
-        $script:rtbRightFile.Visible = $false
-        $lblLeftHeader.Visible = $false
-        $lblRightHeader.Visible = $false
-        $script:rtbUnifiedView.Visible = $true
-
-        # Suspend drawing for performance
-        $script:rtbUnifiedView.SuspendLayout()
-        $script:rtbUnifiedView.Clear()
-
-        # Build line data first, then apply
-        $lineData = @()
-        foreach ($diff in $Results.Differences) {
-            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
-
-            switch ($diff.Type) {
-                "Added" {
-                    $lineNum = $diff.Line2.ToString().PadLeft(5)
-                    $lineData += @{ Content = "+ [$lineNum] $($diff.Content2)"; BgColor = $colorAddedBg; FgColor = $colorAddedFg }
-                }
-                "Removed" {
-                    $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $lineData += @{ Content = "- [$lineNum] $($diff.Content1)"; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg }
-                }
-                "Unchanged" {
-                    $lineNum = $diff.Line1.ToString().PadLeft(5)
-                    $lineData += @{ Content = "  [$lineNum] $($diff.Content1)"; BgColor = [System.Drawing.Color]::White; FgColor = [System.Drawing.Color]::Black }
-                }
-            }
-        }
-
-        # Apply all content with formatting
-        foreach ($line in $lineData) {
-            $startPos = $script:rtbUnifiedView.TextLength
-            $script:rtbUnifiedView.AppendText("$($line.Content)`r`n")
-            $script:rtbUnifiedView.Select($startPos, $line.Content.Length + 2)
-            $script:rtbUnifiedView.SelectionBackColor = $line.BgColor
-            $script:rtbUnifiedView.SelectionColor = $line.FgColor
-        }
-
-        $script:rtbUnifiedView.Select(0, 0)
-        $script:rtbUnifiedView.ResumeLayout()
-    }
-    else {
-        # Show side-by-side view
-        $script:rtbUnifiedView.Visible = $false
-        $script:rtbLeftFile.Visible = $true
-        $script:rtbRightFile.Visible = $true
-        $lblLeftHeader.Visible = $true
-        $lblRightHeader.Visible = $true
-
-        # Suspend drawing for performance
-        $script:rtbLeftFile.SuspendLayout()
-        $script:rtbRightFile.SuspendLayout()
-        $script:rtbLeftFile.Clear()
-        $script:rtbRightFile.Clear()
-
-        # Build line data for both panels
-        $leftLines = @()
-        $rightLines = @()
-
-        foreach ($diff in $Results.Differences) {
-            if ($ShowOnlyDiffs -and $diff.Type -eq "Unchanged") { continue }
-
-            switch ($diff.Type) {
-                "Added" {
-                    $leftContent = "     |".PadRight(80)
-                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
-                    $rightContent = "$rightLineNum  + $($diff.Content2)"
-                    $leftLines += @{ Content = $leftContent; BgColor = $colorAddedLightBg; FgColor = $colorGrayFg; HasColor = $true }
-                    $rightLines += @{ Content = $rightContent; BgColor = $colorAddedBg; FgColor = $colorAddedFg; HasColor = $true }
-                }
-                "Removed" {
-                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                    $leftContent = "$leftLineNum  - $($diff.Content1)"
-                    $rightContent = "     |".PadRight(80)
-                    $leftLines += @{ Content = $leftContent; BgColor = $colorRemovedBg; FgColor = $colorRemovedFg; HasColor = $true }
-                    $rightLines += @{ Content = $rightContent; BgColor = $colorRemovedLightBg; FgColor = $colorGrayFg; HasColor = $true }
-                }
-                "Unchanged" {
-                    $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
-                    $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
-                    $leftContent = "$leftLineNum    $($diff.Content1)"
-                    $rightContent = "$rightLineNum    $($diff.Content2)"
-                    $leftLines += @{ Content = $leftContent; HasColor = $false }
-                    $rightLines += @{ Content = $rightContent; HasColor = $false }
-                }
-            }
-        }
-
-        # Apply all content to left panel
-        foreach ($line in $leftLines) {
-            if ($line.HasColor) {
-                $startPos = $script:rtbLeftFile.TextLength
-                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
-                $script:rtbLeftFile.Select($startPos, $line.Content.Length + 2)
-                $script:rtbLeftFile.SelectionBackColor = $line.BgColor
-                $script:rtbLeftFile.SelectionColor = $line.FgColor
-            } else {
-                $script:rtbLeftFile.AppendText("$($line.Content)`r`n")
-            }
-        }
-
-        # Apply all content to right panel
-        foreach ($line in $rightLines) {
-            if ($line.HasColor) {
-                $startPos = $script:rtbRightFile.TextLength
-                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
-                $script:rtbRightFile.Select($startPos, $line.Content.Length + 2)
-                $script:rtbRightFile.SelectionBackColor = $line.BgColor
-                $script:rtbRightFile.SelectionColor = $line.FgColor
-            } else {
-                $script:rtbRightFile.AppendText("$($line.Content)`r`n")
-            }
-        }
-
-        $script:rtbLeftFile.Select(0, 0)
-        $script:rtbRightFile.Select(0, 0)
-        $script:rtbLeftFile.ResumeLayout()
-        $script:rtbRightFile.ResumeLayout()
-    }
-}
 
 # ============================================
 # FILE COMPARISON EVENT HANDLERS
@@ -4090,15 +3696,18 @@ $btnCompareFiles.Add_Click({
         $btnCompareFiles.Text = "Comparing..."
         [System.Windows.Forms.Application]::DoEvents()
 
+        # Run comparison
         $script:CompareResults = Compare-FilesContent -File1Path $txtFile1Path.Text -File2Path $txtFile2Path.Text
 
-        Show-ComparisonResults -Results $script:CompareResults -ShowOnlyDiffs $chkShowOnlyDiffs.Checked -UnifiedView $btnUnified.Checked
+        $btnCompareFiles.Text = "Generating Report..."
+        [System.Windows.Forms.Application]::DoEvents()
 
-        $btnExportDiff.Enabled = $true
+        # Generate and open HTML report in browser
+        $reportPath = New-HtmlDiffReport -Results $script:CompareResults -OpenInBrowser
 
         # Update status bar
-        $totalChanges = $script:CompareResults.Added + $script:CompareResults.Removed + $script:CompareResults.Modified
-        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found"
+        $totalChanges = $script:CompareResults.Added + $script:CompareResults.Removed
+        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Comparison complete: $totalChanges change(s) found - Report opened in browser"
 
     }
     catch {
@@ -4121,205 +3730,15 @@ $btnSwapFiles.Add_Click({
     $temp = $txtFile1Path.Text
     $txtFile1Path.Text = $txtFile2Path.Text
     $txtFile2Path.Text = $temp
-
-    $tempHeader = $lblLeftHeader.Text
-    $lblLeftHeader.Text = $lblRightHeader.Text -replace "Modified:", "Original:"
-    $lblRightHeader.Text = $tempHeader -replace "Original:", "Modified:"
 })
 
 # Clear
 $btnClearCompare.Add_Click({
     $txtFile1Path.Text = ""
     $txtFile2Path.Text = ""
-    $script:rtbLeftFile.Clear()
-    $script:rtbRightFile.Clear()
-    $script:rtbUnifiedView.Clear()
-    $lblLeftHeader.Text = "Original File"
-    $lblRightHeader.Text = "Modified File"
-    $lblAddedCount.Text = "+ 0"
-    $lblRemovedCount.Text = "- 0"
-    $lblModifiedCount.Text = "~ 0"
-    $lblUnchangedCount.Text = "= 0"
-    $btnExportDiff.Enabled = $false
     $script:CompareResults = $null
 })
 
-# View mode toggles
-$btnSideBySide.Add_CheckedChanged({
-    if ($btnSideBySide.Checked -and $script:CompareResults) {
-        Show-ComparisonResults -Results $script:CompareResults -ShowOnlyDiffs $chkShowOnlyDiffs.Checked -UnifiedView $false
-    }
-})
-
-$btnUnified.Add_CheckedChanged({
-    if ($btnUnified.Checked -and $script:CompareResults) {
-        Show-ComparisonResults -Results $script:CompareResults -ShowOnlyDiffs $chkShowOnlyDiffs.Checked -UnifiedView $true
-    }
-})
-
-$chkShowOnlyDiffs.Add_CheckedChanged({
-    if ($script:CompareResults) {
-        Show-ComparisonResults -Results $script:CompareResults -ShowOnlyDiffs $chkShowOnlyDiffs.Checked -UnifiedView $btnUnified.Checked
-    }
-})
-
-# Export Results
-$btnExportDiff.Add_Click({
-    if (-not $script:CompareResults) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "No comparison results to export. Please compare files first.",
-            "No Results",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-        return
-    }
-
-    $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
-    $saveDialog.Title = "Export Comparison Results"
-    $saveDialog.Filter = "HTML Report (*.html)|*.html|Text File (*.txt)|*.txt|CSV File (*.csv)|*.csv"
-    $saveDialog.FilterIndex = 1
-    $saveDialog.FileName = "FileComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-
-    if ($saveDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        try {
-            $extension = [System.IO.Path]::GetExtension($saveDialog.FileName).ToLower()
-
-            switch ($extension) {
-                ".html" {
-                    $html = @"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>File Comparison Report</title>
-    <style>
-        body { font-family: 'Segoe UI', Consolas, monospace; margin: 20px; background: #f5f5f5; }
-        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .header h1 { margin: 0 0 10px 0; }
-        .stats { display: flex; gap: 20px; margin: 20px 0; }
-        .stat-box { padding: 15px 25px; border-radius: 8px; text-align: center; min-width: 100px; }
-        .stat-added { background: #d4edda; border: 2px solid #28a745; }
-        .stat-removed { background: #f8d7da; border: 2px solid #dc3545; }
-        .stat-unchanged { background: #e9ecef; border: 2px solid #6c757d; }
-        .stat-box .number { font-size: 24px; font-weight: bold; }
-        .diff-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .diff-header { background: #343a40; color: white; padding: 10px 15px; font-weight: bold; }
-        .diff-line { padding: 2px 15px; font-family: Consolas, monospace; font-size: 13px; border-bottom: 1px solid #eee; white-space: pre-wrap; }
-        .added { background: #d4edda; color: #155724; }
-        .removed { background: #f8d7da; color: #721c24; }
-        .unchanged { background: white; color: #333; }
-        .line-num { display: inline-block; width: 50px; color: #6c757d; text-align: right; margin-right: 15px; user-select: none; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>File Comparison Report</h1>
-        <p><strong>Original:</strong> $($script:CompareResults.File1Path)</p>
-        <p><strong>Modified:</strong> $($script:CompareResults.File2Path)</p>
-        <p><strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>
-    </div>
-
-    <div class="stats">
-        <div class="stat-box stat-added">
-            <div class="number">+$($script:CompareResults.Added)</div>
-            <div>Added</div>
-        </div>
-        <div class="stat-box stat-removed">
-            <div class="number">-$($script:CompareResults.Removed)</div>
-            <div>Removed</div>
-        </div>
-        <div class="stat-box stat-unchanged">
-            <div class="number">$($script:CompareResults.Unchanged)</div>
-            <div>Unchanged</div>
-        </div>
-    </div>
-
-    <div class="diff-container">
-        <div class="diff-header">Differences</div>
-"@
-                    $lineNum = 0
-                    foreach ($diff in $script:CompareResults.Differences) {
-                        $lineNum++
-                        $class = $diff.Type.ToLower()
-                        $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
-                        $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
-                        $escapedContent = [System.Web.HttpUtility]::HtmlEncode($content)
-                        $html += "        <div class='diff-line $class'><span class='line-num'>$lineNum</span>$prefix $escapedContent</div>`n"
-                    }
-
-                    $html += @"
-    </div>
-</body>
-</html>
-"@
-                    $html | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
-                }
-                ".txt" {
-                    $output = @()
-                    $output += "=" * 80
-                    $output += "FILE COMPARISON REPORT"
-                    $output += "=" * 80
-                    $output += "Original: $($script:CompareResults.File1Path)"
-                    $output += "Modified: $($script:CompareResults.File2Path)"
-                    $output += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-                    $output += ""
-                    $output += "SUMMARY: +$($script:CompareResults.Added) Added | -$($script:CompareResults.Removed) Removed | $($script:CompareResults.Unchanged) Unchanged"
-                    $output += "=" * 80
-                    $output += ""
-
-                    foreach ($diff in $script:CompareResults.Differences) {
-                        $prefix = switch ($diff.Type) { "Added" { "+ " } "Removed" { "- " } default { "  " } }
-                        $content = if ($diff.Type -eq "Added") { $diff.Content2 } else { $diff.Content1 }
-                        $output += "$prefix$content"
-                    }
-
-                    $output | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
-                }
-                ".csv" {
-                    $csvData = @()
-                    $lineNum = 0
-                    foreach ($diff in $script:CompareResults.Differences) {
-                        $lineNum++
-                        $csvData += [PSCustomObject]@{
-                            LineNumber = $lineNum
-                            Status = $diff.Type
-                            OriginalContent = $diff.Content1
-                            ModifiedContent = $diff.Content2
-                        }
-                    }
-                    $csvData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
-                }
-            }
-
-            [System.Windows.Forms.MessageBox]::Show(
-                "Comparison results exported successfully!`n`nFile: $($saveDialog.FileName)",
-                "Export Complete",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
-            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Results exported to $([System.IO.Path]::GetFileName($saveDialog.FileName))"
-        }
-        catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Error exporting results:`n`n$($_.Exception.Message)",
-                "Export Error",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-        }
-    }
-})
-
-# Synchronized scrolling for side-by-side view
-$script:rtbLeftFile.Add_VScroll({
-    if ($script:rtbRightFile.Visible) {
-        $pos = $script:rtbLeftFile.GetPositionFromCharIndex(0)
-        $index = $script:rtbRightFile.GetCharIndexFromPosition($pos)
-        $script:rtbRightFile.Select($index, 0)
-        $script:rtbRightFile.ScrollToCaret()
-    }
-})
 
 # ============================================
 # STATUS BAR
