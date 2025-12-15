@@ -913,11 +913,30 @@ set vlan {{VLAN}}
     }
 }
 
+# Helper function to convert PSCustomObject to Hashtable (PowerShell 5.1 compatible)
+function ConvertTo-Hashtable {
+    param([Parameter(ValueFromPipeline)]$InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+        $collection = @()
+        foreach ($object in $InputObject) { $collection += ConvertTo-Hashtable $object }
+        return $collection
+    }
+    if ($InputObject -is [PSCustomObject]) {
+        $hash = @{}
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $hash[$property.Name] = ConvertTo-Hashtable $property.Value
+        }
+        return $hash
+    }
+    return $InputObject
+}
+
 # Load saved templates from JSON file (overrides embedded defaults)
 $templateFile = Join-Path $PSScriptRoot "PortTemplates.json"
 if (Test-Path $templateFile) {
     try {
-        $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json -AsHashtable
+        $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json | ConvertTo-Hashtable
         foreach ($vendor in $savedTemplates.Keys) {
             if (-not $script:PortTemplates.ContainsKey($vendor)) {
                 $script:PortTemplates[$vendor] = @{}
@@ -3994,7 +4013,7 @@ $btnSaveTemplate.Add_Click({
         # Load existing or create new
         $savedTemplates = @{}
         if (Test-Path $templateFile) {
-            $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json -AsHashtable
+            $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json | ConvertTo-Hashtable
         }
 
         # Update with new template
