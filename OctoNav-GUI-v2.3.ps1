@@ -3465,96 +3465,70 @@ function Compare-FilesContent {
             return $results
         }
 
-        # === MEMORY-EFFICIENT HASH-BASED DIFF ===
-        # Build hash lookup for file2 lines (hash -> list of indices)
-        $file2Hash = @{}
-        for ($j = 0; $j -lt $n; $j++) {
-            $hash = $file2Lines[$j].GetHashCode()
-            if (-not $file2Hash.ContainsKey($hash)) {
-                $file2Hash[$hash] = New-Object System.Collections.ArrayList
-            }
-            [void]$file2Hash[$hash].Add($j)
-        }
+        # === SIMPLE TWO-PASS DIFF ALGORITHM ===
+        # Optimized for "slightly different" files (most lines match at same position)
+        # Pass 1: Match identical lines at same position (O(min(m,n)))
+        # Pass 2: Hash-match remaining lines (O(m+n))
 
-        # Track which lines are matched
         $file1Matched = [bool[]]::new($m)
         $file2Matched = [bool[]]::new($n)
-        $matches = New-Object System.Collections.ArrayList  # stores @{i1; i2}
+        $matchPairs = @{}  # i -> j for matched pairs
 
-        # First pass: find exact matches using longest increasing subsequence approach
-        # This finds the longest sequence of matching lines in order
-        $i = 0
-        $j = 0
-        while ($i -lt $m -and $j -lt $n) {
-            if ($file1Lines[$i] -eq $file2Lines[$j]) {
-                # Exact match at current position
-                [void]$matches.Add(@{i1=$i; i2=$j})
+        # Pass 1: Match lines at same positions (handles 99% of lines for similar files)
+        $minLen = [Math]::Min($m, $n)
+        for ($i = 0; $i -lt $minLen; $i++) {
+            if ($file1Lines[$i] -eq $file2Lines[$i]) {
                 $file1Matched[$i] = $true
-                $file2Matched[$j] = $true
-                $i++
-                $j++
+                $file2Matched[$i] = $true
+                $matchPairs[$i] = $i
             }
-            else {
-                # Try to find file1[$i] ahead in file2
-                $hash = $file1Lines[$i].GetHashCode()
-                $foundAhead = $false
-                if ($file2Hash.ContainsKey($hash)) {
-                    foreach ($jCandidate in $file2Hash[$hash]) {
-                        if ($jCandidate -gt $j -and -not $file2Matched[$jCandidate]) {
-                            if ($file1Lines[$i] -eq $file2Lines[$jCandidate]) {
-                                # Mark lines between j and jCandidate as potential additions
-                                # Jump ahead
-                                $j = $jCandidate
-                                [void]$matches.Add(@{i1=$i; i2=$j})
-                                $file1Matched[$i] = $true
-                                $file2Matched[$j] = $true
-                                $i++
-                                $j++
-                                $foundAhead = $true
-                                break
-                            }
-                        }
+        }
+
+        # Pass 2: Hash lookup for unmatched lines
+        $file2Hash = @{}
+        for ($j = 0; $j -lt $n; $j++) {
+            if (-not $file2Matched[$j]) {
+                $hash = $file2Lines[$j].GetHashCode()
+                if (-not $file2Hash.ContainsKey($hash)) {
+                    $file2Hash[$hash] = New-Object System.Collections.ArrayList
+                }
+                [void]$file2Hash[$hash].Add($j)
+            }
+        }
+
+        # Match unmatched file1 lines to file2 using hash
+        for ($i = 0; $i -lt $m; $i++) {
+            if ($file1Matched[$i]) { continue }
+
+            $hash = $file1Lines[$i].GetHashCode()
+            if ($file2Hash.ContainsKey($hash)) {
+                foreach ($j in $file2Hash[$hash]) {
+                    if (-not $file2Matched[$j] -and $file1Lines[$i] -eq $file2Lines[$j]) {
+                        $file1Matched[$i] = $true
+                        $file2Matched[$j] = $true
+                        $matchPairs[$i] = $j
+                        [void]$file2Hash[$hash].Remove($j)
+                        break
                     }
                 }
-                if (-not $foundAhead) {
-                    $i++
-                }
             }
         }
 
-        # Second pass: try to match remaining unmatched lines from file1 with unmatched in file2
-        # (for detecting modifications - similar but not identical lines)
-        $unmatchedFile1 = New-Object System.Collections.ArrayList
-        $unmatchedFile2 = New-Object System.Collections.ArrayList
+        # Pass 3: Find modifications (similar lines within proximity)
+        $modifications = @{}
+        $proximityWindow = 20
 
         for ($i = 0; $i -lt $m; $i++) {
-            if (-not $file1Matched[$i]) { [void]$unmatchedFile1.Add($i) }
-        }
-        for ($j = 0; $j -lt $n; $j++) {
-            if (-not $file2Matched[$j]) { [void]$unmatchedFile2.Add($j) }
-        }
-
-        # Build list of modifications by matching similar unmatched lines
-        $modifications = @{}  # i1 -> @{i2; similarity}
-        $usedJ = @{}
-
-        # Limit similarity checks for performance (max 1000 comparisons)
-        $maxSimilarityChecks = 1000
-        $checksRemaining = $maxSimilarityChecks
-
-        foreach ($i in $unmatchedFile1) {
-            if ($checksRemaining -le 0) { break }
+            if ($file1Matched[$i]) { continue }
 
             $bestJ = -1
             $bestSim = 0
+            $searchStart = [Math]::Max(0, $i - $proximityWindow)
+            $searchEnd = [Math]::Min($n - 1, $i + $proximityWindow)
 
-            foreach ($j in $unmatchedFile2) {
-                if ($usedJ.ContainsKey($j)) { continue }
-                if ($checksRemaining -le 0) { break }
-
-                $checksRemaining--
+            for ($j = $searchStart; $j -le $searchEnd; $j++) {
+                if ($file2Matched[$j]) { continue }
                 $sim = Get-LineSimilarity -String1 $file1Lines[$i] -String2 $file2Lines[$j]
-
                 if ($sim -ge $SimilarityThreshold -and $sim -gt $bestSim) {
                     $bestJ = $j
                     $bestSim = $sim
@@ -3562,71 +3536,58 @@ function Compare-FilesContent {
             }
 
             if ($bestJ -ge 0) {
-                $modifications[$i] = @{i2=$bestJ; similarity=$bestSim}
-                $usedJ[$bestJ] = $true
+                $modifications[$i] = @{j=$bestJ; sim=$bestSim}
                 $file1Matched[$i] = $true
                 $file2Matched[$bestJ] = $true
             }
         }
 
-        # Build final differences list in line order
-        $i = 0
+        # Build differences list - simple sequential walk
         $j = 0
-
-        while ($i -lt $m -or $j -lt $n) {
-            # Find next matched pair or end
-            $nextMatchI = $m
-            $nextMatchJ = $n
-
-            foreach ($match in $matches) {
-                if ($match.i1 -ge $i -and $match.i2 -ge $j) {
-                    $nextMatchI = $match.i1
-                    $nextMatchJ = $match.i2
-                    break
-                }
+        for ($i = 0; $i -lt $m; $i++) {
+            # Output any added lines in file2 before this position
+            while ($j -lt $n -and -not $file2Matched[$j] -and ($matchPairs.ContainsKey($i) -and $j -lt $matchPairs[$i] -or -not $matchPairs.ContainsKey($i))) {
+                [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                $results.Added++
+                $j++
+                if (-not $matchPairs.ContainsKey($i)) { break }
             }
 
-            # Process unmatched lines before next match
-            while ($i -lt $nextMatchI -or $j -lt $nextMatchJ) {
-                if ($i -lt $nextMatchI -and $modifications.ContainsKey($i)) {
-                    # Modified line - store indices only, no content copy
-                    $mod = $modifications[$i]
-                    [void]$results.Differences.Add(@{
-                        Type = "Modified"
-                        Idx1 = $i
-                        Idx2 = $mod.i2
-                        Similarity = $mod.similarity
-                    })
-                    $results.Modified++
-                    $i++
-                    if ($j -eq $mod.i2) { $j++ }
-                }
-                elseif ($i -lt $nextMatchI -and -not $file1Matched[$i]) {
-                    # Removed line - index only
-                    [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
-                    $results.Removed++
-                    $i++
-                }
-                elseif ($j -lt $nextMatchJ -and -not $file2Matched[$j]) {
-                    # Added line - index only
-                    [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
-                    $results.Added++
+            if ($matchPairs.ContainsKey($i)) {
+                # Matched line - unchanged
+                $matchedJ = $matchPairs[$i]
+                # First output any skipped added lines
+                while ($j -lt $matchedJ) {
+                    if (-not $file2Matched[$j]) {
+                        [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                        $results.Added++
+                    }
                     $j++
                 }
-                else {
-                    if ($i -lt $nextMatchI) { $i++ }
-                    if ($j -lt $nextMatchJ) { $j++ }
-                }
-            }
-
-            # Process the matched pair - index only
-            if ($i -lt $m -and $j -lt $n -and $i -eq $nextMatchI -and $j -eq $nextMatchJ) {
-                [void]$results.Differences.Add(@{Type="Unchanged"; Idx1=$i; Idx2=$j})
+                [void]$results.Differences.Add(@{Type="Unchanged"; Idx1=$i; Idx2=$matchedJ})
                 $results.Unchanged++
-                $i++
-                $j++
-                if ($matches.Count -gt 0) { $matches.RemoveAt(0) }
+                $j = $matchedJ + 1
             }
+            elseif ($modifications.ContainsKey($i)) {
+                # Modified line
+                $mod = $modifications[$i]
+                [void]$results.Differences.Add(@{Type="Modified"; Idx1=$i; Idx2=$mod.j; Similarity=$mod.sim})
+                $results.Modified++
+            }
+            else {
+                # Removed line
+                [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
+                $results.Removed++
+            }
+        }
+
+        # Output remaining added lines at end of file2
+        while ($j -lt $n) {
+            if (-not $file2Matched[$j]) {
+                [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                $results.Added++
+            }
+            $j++
         }
 
         return $results
