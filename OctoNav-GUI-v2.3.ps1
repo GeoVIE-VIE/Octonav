@@ -1023,7 +1023,8 @@ $mainForm.Controls.Add($tabControl)
 $tab0 = New-Object System.Windows.Forms.TabPage
 $tab0.Text = "Dashboard"
 $tab0.AutoScroll = $true
-$tab0.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab0.AutoScrollMinSize = New-Object System.Drawing.Size(980, 650)
+$tab0.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab0)
 Add-IconToTab -Tab $tab0 -IconName "Stats"
 
@@ -1152,7 +1153,8 @@ function Update-Dashboard {
 $tab1 = New-Object System.Windows.Forms.TabPage
 $tab1.Text = "Network Configuration"
 $tab1.AutoScroll = $true
-$tab1.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab1.AutoScrollMinSize = New-Object System.Drawing.Size(980, 680)
+$tab1.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab1)
 Add-IconToTab -Tab $tab1 -IconName "Network"
 
@@ -1359,7 +1361,8 @@ $btnRestoreDefaults.Add_Click({
 $tab2 = New-Object System.Windows.Forms.TabPage
 $tab2.Text = "DHCP Statistics"
 $tab2.AutoScroll = $true
-$tab2.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab2.AutoScrollMinSize = New-Object System.Drawing.Size(1280, 600)
+$tab2.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab2)
 Add-IconToTab -Tab $tab2 -IconName "Server"
 
@@ -2457,7 +2460,8 @@ $btnExportDHCP.Add_Click({
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
 $tab3.AutoScroll = $true
-$tab3.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab3.AutoScrollMinSize = New-Object System.Drawing.Size(980, 920)
+$tab3.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab3)
 Add-IconToTab -Tab $tab3 -IconName "DNA"
 
@@ -2751,7 +2755,7 @@ $dnaFavoritesGroupBox.Controls.Add($script:lstFavorites)
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
 $dnaLogBox.Size = New-Object System.Drawing.Size(940, 90)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 550)
+$dnaLogBox.Location = New-Object System.Drawing.Point(10, 800)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $dnaLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
@@ -2996,6 +3000,8 @@ $lstDevices.Add_ItemCheck({
 $tab4 = New-Object System.Windows.Forms.TabPage
 $tab4.Text = "File Compare"
 $tab4.AutoScroll = $true
+$tab4.AutoScrollMinSize = New-Object System.Drawing.Size(980, 700)
+$tab4.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab4)
 Add-IconToTab -Tab $tab4 -IconName "DNA"
 
@@ -3675,14 +3681,16 @@ setTimeout(()=>{
 $tab5 = New-Object System.Windows.Forms.TabPage
 $tab5.Text = "Port Config"
 $tab5.BackColor = [System.Drawing.Color]::White
-$tab5.Padding = New-Object System.Windows.Forms.Padding(10)
-$tab5.AutoScroll = $true
+$tab5.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab5)
 
 # Main panel for Port Config
 $portConfigPanel = New-Object System.Windows.Forms.Panel
-$portConfigPanel.Dock = "Fill"
+$portConfigPanel.Location = New-Object System.Drawing.Point(0, 0)
+$portConfigPanel.Size = New-Object System.Drawing.Size(1200, 800)
+$portConfigPanel.Anchor = "Top,Bottom,Left,Right"
 $portConfigPanel.AutoScroll = $true
+$portConfigPanel.AutoScrollMinSize = New-Object System.Drawing.Size(950, 650)
 $tab5.Controls.Add($portConfigPanel)
 
 # Input GroupBox
