@@ -3887,17 +3887,17 @@ $portOutputGroup.Location = New-Object System.Drawing.Point(420, 10)
 $portOutputGroup.Size = New-Object System.Drawing.Size(500, 600)
 $portOutputGroup.Anchor = "Top,Bottom,Left,Right"
 $portOutputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$portOutputGroup.Padding = New-Object System.Windows.Forms.Padding(5, 20, 5, 5)
 $portConfigPanel.Controls.Add($portOutputGroup)
 
-# Output TextBox
+# Output TextBox - Use Dock=Fill for proper scrolling
 $txtConfigOutput = New-Object System.Windows.Forms.TextBox
-$txtConfigOutput.Location = New-Object System.Drawing.Point(10, 25)
-$txtConfigOutput.Size = New-Object System.Drawing.Size(480, 565)
+$txtConfigOutput.Dock = "Fill"
 $txtConfigOutput.Multiline = $true
 $txtConfigOutput.ScrollBars = "Both"
 $txtConfigOutput.WordWrap = $false
 $txtConfigOutput.Font = New-Object System.Drawing.Font("Consolas", 10)
-$txtConfigOutput.Anchor = "Top,Bottom,Left,Right"
+$txtConfigOutput.BorderStyle = "Fixed3D"
 $portOutputGroup.Controls.Add($txtConfigOutput)
 
 # Generate Config Click Handler
