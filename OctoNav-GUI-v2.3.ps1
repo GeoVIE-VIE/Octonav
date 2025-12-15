@@ -3738,8 +3738,7 @@ $cboPortType = New-Object System.Windows.Forms.ComboBox
 $cboPortType.Location = New-Object System.Drawing.Point(120, 57)
 $cboPortType.Size = New-Object System.Drawing.Size(250, 25)
 $cboPortType.DropDownStyle = "DropDownList"
-$cboPortType.Items.AddRange(@("Type1", "Type2", "Type3", "Type4", "Type5", "Type6"))
-$cboPortType.SelectedIndex = 0
+# Port types will be populated dynamically based on vendor selection
 $portInputGroup.Controls.Add($cboPortType)
 
 # Interface Label & TextBox
@@ -3815,12 +3814,29 @@ $chkEnablePort.Size = New-Object System.Drawing.Size(200, 25)
 $chkEnablePort.Checked = $true
 $portInputGroup.Controls.Add($chkEnablePort)
 
-# Show/Hide Old VLAN based on vendor selection (only FCX 7.3 uses OLD_VLAN for migrations)
+# Update Port Type dropdown and Old VLAN visibility when vendor changes
 $cboVendor.Add_SelectedIndexChanged({
-    $isFCX73 = $cboVendor.SelectedItem -eq "FCX 7.3"
+    $vendor = $cboVendor.SelectedItem
+
+    # Show/Hide Old VLAN based on vendor (only FCX 7.3 uses OLD_VLAN for migrations)
+    $isFCX73 = $vendor -eq "FCX 7.3"
     $lblOldVlan.Visible = $isFCX73
     $txtOldVlan.Visible = $isFCX73
+
+    # Populate Port Type dropdown based on available templates for this vendor
+    $cboPortType.Items.Clear()
+    if ($script:PortTemplates.ContainsKey($vendor)) {
+        foreach ($portType in $script:PortTemplates[$vendor].Keys) {
+            $cboPortType.Items.Add($portType) | Out-Null
+        }
+        if ($cboPortType.Items.Count -gt 0) {
+            $cboPortType.SelectedIndex = 0
+        }
+    }
 })
+
+# Initialize Port Type dropdown with first vendor's templates
+$cboVendor.SelectedIndex = 0
 
 # Generate Button
 $btnGenerateConfig = New-Object System.Windows.Forms.Button
