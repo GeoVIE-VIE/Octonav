@@ -3465,96 +3465,70 @@ function Compare-FilesContent {
             return $results
         }
 
-        # === MEMORY-EFFICIENT HASH-BASED DIFF ===
-        # Build hash lookup for file2 lines (hash -> list of indices)
-        $file2Hash = @{}
-        for ($j = 0; $j -lt $n; $j++) {
-            $hash = $file2Lines[$j].GetHashCode()
-            if (-not $file2Hash.ContainsKey($hash)) {
-                $file2Hash[$hash] = New-Object System.Collections.ArrayList
-            }
-            [void]$file2Hash[$hash].Add($j)
-        }
+        # === SIMPLE TWO-PASS DIFF ALGORITHM ===
+        # Optimized for "slightly different" files (most lines match at same position)
+        # Pass 1: Match identical lines at same position (O(min(m,n)))
+        # Pass 2: Hash-match remaining lines (O(m+n))
 
-        # Track which lines are matched
         $file1Matched = [bool[]]::new($m)
         $file2Matched = [bool[]]::new($n)
-        $matches = New-Object System.Collections.ArrayList  # stores @{i1; i2}
+        $matchPairs = @{}  # i -> j for matched pairs
 
-        # First pass: find exact matches using longest increasing subsequence approach
-        # This finds the longest sequence of matching lines in order
-        $i = 0
-        $j = 0
-        while ($i -lt $m -and $j -lt $n) {
-            if ($file1Lines[$i] -eq $file2Lines[$j]) {
-                # Exact match at current position
-                [void]$matches.Add(@{i1=$i; i2=$j})
+        # Pass 1: Match lines at same positions (handles 99% of lines for similar files)
+        $minLen = [Math]::Min($m, $n)
+        for ($i = 0; $i -lt $minLen; $i++) {
+            if ($file1Lines[$i] -eq $file2Lines[$i]) {
                 $file1Matched[$i] = $true
-                $file2Matched[$j] = $true
-                $i++
-                $j++
+                $file2Matched[$i] = $true
+                $matchPairs[$i] = $i
             }
-            else {
-                # Try to find file1[$i] ahead in file2
-                $hash = $file1Lines[$i].GetHashCode()
-                $foundAhead = $false
-                if ($file2Hash.ContainsKey($hash)) {
-                    foreach ($jCandidate in $file2Hash[$hash]) {
-                        if ($jCandidate -gt $j -and -not $file2Matched[$jCandidate]) {
-                            if ($file1Lines[$i] -eq $file2Lines[$jCandidate]) {
-                                # Mark lines between j and jCandidate as potential additions
-                                # Jump ahead
-                                $j = $jCandidate
-                                [void]$matches.Add(@{i1=$i; i2=$j})
-                                $file1Matched[$i] = $true
-                                $file2Matched[$j] = $true
-                                $i++
-                                $j++
-                                $foundAhead = $true
-                                break
-                            }
-                        }
+        }
+
+        # Pass 2: Hash lookup for unmatched lines
+        $file2Hash = @{}
+        for ($j = 0; $j -lt $n; $j++) {
+            if (-not $file2Matched[$j]) {
+                $hash = $file2Lines[$j].GetHashCode()
+                if (-not $file2Hash.ContainsKey($hash)) {
+                    $file2Hash[$hash] = New-Object System.Collections.ArrayList
+                }
+                [void]$file2Hash[$hash].Add($j)
+            }
+        }
+
+        # Match unmatched file1 lines to file2 using hash
+        for ($i = 0; $i -lt $m; $i++) {
+            if ($file1Matched[$i]) { continue }
+
+            $hash = $file1Lines[$i].GetHashCode()
+            if ($file2Hash.ContainsKey($hash)) {
+                foreach ($j in $file2Hash[$hash]) {
+                    if (-not $file2Matched[$j] -and $file1Lines[$i] -eq $file2Lines[$j]) {
+                        $file1Matched[$i] = $true
+                        $file2Matched[$j] = $true
+                        $matchPairs[$i] = $j
+                        [void]$file2Hash[$hash].Remove($j)
+                        break
                     }
                 }
-                if (-not $foundAhead) {
-                    $i++
-                }
             }
         }
 
-        # Second pass: try to match remaining unmatched lines from file1 with unmatched in file2
-        # (for detecting modifications - similar but not identical lines)
-        $unmatchedFile1 = New-Object System.Collections.ArrayList
-        $unmatchedFile2 = New-Object System.Collections.ArrayList
+        # Pass 3: Find modifications (similar lines within proximity)
+        $modifications = @{}
+        $proximityWindow = 20
 
         for ($i = 0; $i -lt $m; $i++) {
-            if (-not $file1Matched[$i]) { [void]$unmatchedFile1.Add($i) }
-        }
-        for ($j = 0; $j -lt $n; $j++) {
-            if (-not $file2Matched[$j]) { [void]$unmatchedFile2.Add($j) }
-        }
-
-        # Build list of modifications by matching similar unmatched lines
-        $modifications = @{}  # i1 -> @{i2; similarity}
-        $usedJ = @{}
-
-        # Limit similarity checks for performance (max 1000 comparisons)
-        $maxSimilarityChecks = 1000
-        $checksRemaining = $maxSimilarityChecks
-
-        foreach ($i in $unmatchedFile1) {
-            if ($checksRemaining -le 0) { break }
+            if ($file1Matched[$i]) { continue }
 
             $bestJ = -1
             $bestSim = 0
+            $searchStart = [Math]::Max(0, $i - $proximityWindow)
+            $searchEnd = [Math]::Min($n - 1, $i + $proximityWindow)
 
-            foreach ($j in $unmatchedFile2) {
-                if ($usedJ.ContainsKey($j)) { continue }
-                if ($checksRemaining -le 0) { break }
-
-                $checksRemaining--
+            for ($j = $searchStart; $j -le $searchEnd; $j++) {
+                if ($file2Matched[$j]) { continue }
                 $sim = Get-LineSimilarity -String1 $file1Lines[$i] -String2 $file2Lines[$j]
-
                 if ($sim -ge $SimilarityThreshold -and $sim -gt $bestSim) {
                     $bestJ = $j
                     $bestSim = $sim
@@ -3562,71 +3536,58 @@ function Compare-FilesContent {
             }
 
             if ($bestJ -ge 0) {
-                $modifications[$i] = @{i2=$bestJ; similarity=$bestSim}
-                $usedJ[$bestJ] = $true
+                $modifications[$i] = @{j=$bestJ; sim=$bestSim}
                 $file1Matched[$i] = $true
                 $file2Matched[$bestJ] = $true
             }
         }
 
-        # Build final differences list in line order
-        $i = 0
+        # Build differences list - simple sequential walk
         $j = 0
-
-        while ($i -lt $m -or $j -lt $n) {
-            # Find next matched pair or end
-            $nextMatchI = $m
-            $nextMatchJ = $n
-
-            foreach ($match in $matches) {
-                if ($match.i1 -ge $i -and $match.i2 -ge $j) {
-                    $nextMatchI = $match.i1
-                    $nextMatchJ = $match.i2
-                    break
-                }
+        for ($i = 0; $i -lt $m; $i++) {
+            # Output any added lines in file2 before this position
+            while ($j -lt $n -and -not $file2Matched[$j] -and ($matchPairs.ContainsKey($i) -and $j -lt $matchPairs[$i] -or -not $matchPairs.ContainsKey($i))) {
+                [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                $results.Added++
+                $j++
+                if (-not $matchPairs.ContainsKey($i)) { break }
             }
 
-            # Process unmatched lines before next match
-            while ($i -lt $nextMatchI -or $j -lt $nextMatchJ) {
-                if ($i -lt $nextMatchI -and $modifications.ContainsKey($i)) {
-                    # Modified line - store indices only, no content copy
-                    $mod = $modifications[$i]
-                    [void]$results.Differences.Add(@{
-                        Type = "Modified"
-                        Idx1 = $i
-                        Idx2 = $mod.i2
-                        Similarity = $mod.similarity
-                    })
-                    $results.Modified++
-                    $i++
-                    if ($j -eq $mod.i2) { $j++ }
-                }
-                elseif ($i -lt $nextMatchI -and -not $file1Matched[$i]) {
-                    # Removed line - index only
-                    [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
-                    $results.Removed++
-                    $i++
-                }
-                elseif ($j -lt $nextMatchJ -and -not $file2Matched[$j]) {
-                    # Added line - index only
-                    [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
-                    $results.Added++
+            if ($matchPairs.ContainsKey($i)) {
+                # Matched line - unchanged
+                $matchedJ = $matchPairs[$i]
+                # First output any skipped added lines
+                while ($j -lt $matchedJ) {
+                    if (-not $file2Matched[$j]) {
+                        [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                        $results.Added++
+                    }
                     $j++
                 }
-                else {
-                    if ($i -lt $nextMatchI) { $i++ }
-                    if ($j -lt $nextMatchJ) { $j++ }
-                }
-            }
-
-            # Process the matched pair - index only
-            if ($i -lt $m -and $j -lt $n -and $i -eq $nextMatchI -and $j -eq $nextMatchJ) {
-                [void]$results.Differences.Add(@{Type="Unchanged"; Idx1=$i; Idx2=$j})
+                [void]$results.Differences.Add(@{Type="Unchanged"; Idx1=$i; Idx2=$matchedJ})
                 $results.Unchanged++
-                $i++
-                $j++
-                if ($matches.Count -gt 0) { $matches.RemoveAt(0) }
+                $j = $matchedJ + 1
             }
+            elseif ($modifications.ContainsKey($i)) {
+                # Modified line
+                $mod = $modifications[$i]
+                [void]$results.Differences.Add(@{Type="Modified"; Idx1=$i; Idx2=$mod.j; Similarity=$mod.sim})
+                $results.Modified++
+            }
+            else {
+                # Removed line
+                [void]$results.Differences.Add(@{Type="Removed"; Idx1=$i; Idx2=-1})
+                $results.Removed++
+            }
+        }
+
+        # Output remaining added lines at end of file2
+        while ($j -lt $n) {
+            if (-not $file2Matched[$j]) {
+                [void]$results.Differences.Add(@{Type="Added"; Idx1=-1; Idx2=$j})
+                $results.Added++
+            }
+            $j++
         }
 
         return $results
@@ -4115,231 +4076,115 @@ $btnExportDiff.Add_Click({
             $extension = [System.IO.Path]::GetExtension($saveDialog.FileName).ToLower()
             switch ($extension) {
                 ".html" {
-                    # Generate interactive HTML with JavaScript controls
-                    # Show changes WITH CONTEXT (5 lines before/after each change, like git diff)
-                    # Use ArrayList for O(1) append instead of array += O(n)
+                    # === STREAMING HTML EXPORT - writes directly to file ===
+                    # No intermediate data structures, no JavaScript rendering
+                    # Much faster and more memory efficient
+
                     $contextLines = 5
                     $totalDiffs = $script:CompareResults.Differences.Count
-
-                    # First pass: mark which indices should be included (changes + context)
-                    $includeIndex = New-Object System.Collections.Generic.HashSet[int]
-                    for ($i = 0; $i -lt $totalDiffs; $i++) {
-                        if ($script:CompareResults.Differences[$i].Type -ne "Unchanged") {
-                            # Include this change and surrounding context
-                            $start = [Math]::Max(0, $i - $contextLines)
-                            $end = [Math]::Min($totalDiffs - 1, $i + $contextLines)
-                            for ($j = $start; $j -le $end; $j++) {
-                                [void]$includeIndex.Add($j)
-                            }
-                        }
-                    }
-
-                    # Second pass: build JSON with context, adding separators for gaps
-                    # Look up content from stored line arrays (index-based storage)
-                    $jsDataList = New-Object System.Collections.ArrayList
-                    $lastIncludedIndex = -2
                     $file1Lines = $script:CompareResults.File1Lines
                     $file2Lines = $script:CompareResults.File2Lines
 
+                    # Build context index set (which diff entries to include)
+                    $includeIndex = New-Object System.Collections.Generic.HashSet[int]
+                    for ($i = 0; $i -lt $totalDiffs; $i++) {
+                        if ($script:CompareResults.Differences[$i].Type -ne "Unchanged") {
+                            $start = [Math]::Max(0, $i - $contextLines)
+                            $end = [Math]::Min($totalDiffs - 1, $i + $contextLines)
+                            for ($j = $start; $j -le $end; $j++) { [void]$includeIndex.Add($j) }
+                        }
+                    }
+
+                    # Stream directly to file
+                    $writer = [System.IO.StreamWriter]::new($saveDialog.FileName, $false, [System.Text.Encoding]::UTF8)
+
+                    # Write HTML header
+                    $writer.WriteLine('<!DOCTYPE html><html><head><meta charset="utf-8"><title>File Comparison Report</title>')
+                    $writer.WriteLine('<style>')
+                    $writer.WriteLine('*{margin:0;padding:0;box-sizing:border-box}')
+                    $writer.WriteLine('body{font-family:Consolas,monospace;margin:20px;background:#1e1e1e;color:#d4d4d4}')
+                    $writer.WriteLine('.header{background:#0d47a1;color:#fff;padding:20px;border-radius:8px;margin-bottom:20px}')
+                    $writer.WriteLine('.stats{display:flex;gap:15px;margin:15px 0;flex-wrap:wrap}')
+                    $writer.WriteLine('.stat{padding:10px 20px;border-radius:6px;text-align:center}')
+                    $writer.WriteLine('.stat-add{background:#1b5e20;color:#a5d6a7}.stat-del{background:#b71c1c;color:#ef9a9a}')
+                    $writer.WriteLine('.stat-mod{background:#e65100;color:#ffcc80}.stat-unch{background:#37474f;color:#90a4ae}')
+                    $writer.WriteLine('.stat .num{font-size:24px;font-weight:bold}')
+                    $writer.WriteLine('table{width:100%;border-collapse:collapse;margin-top:20px;background:#252526}')
+                    $writer.WriteLine('th{background:#333;color:#fff;padding:10px;text-align:left;position:sticky;top:0}')
+                    $writer.WriteLine('td{padding:2px 8px;border-bottom:1px solid #3c3c3c;font-size:13px;vertical-align:top}')
+                    $writer.WriteLine('.ln{color:#858585;text-align:right;width:50px;user-select:none;padding-right:10px;border-right:1px solid #3c3c3c}')
+                    $writer.WriteLine('.sym{width:20px;text-align:center;font-weight:bold}')
+                    $writer.WriteLine('.add{background:#1b3d1b}.add .sym{color:#4caf50}')
+                    $writer.WriteLine('.del{background:#3d1b1b}.del .sym{color:#f44336}')
+                    $writer.WriteLine('.mod{background:#3d2e1b}.mod .sym{color:#ff9800}')
+                    $writer.WriteLine('.ctx{background:#252526}')
+                    $writer.WriteLine('.sep{background:#1e1e1e;color:#666;text-align:center;font-style:italic}')
+                    $writer.WriteLine('.sep td{padding:8px;border:2px dashed #444}')
+                    $writer.WriteLine('pre{margin:0;white-space:pre-wrap;word-wrap:break-word}')
+                    $writer.WriteLine('.hi-del{background:#5c1b1b;color:#ff6b6b}.hi-add{background:#1b5c1b;color:#6bff6b}')
+                    $writer.WriteLine('</style></head><body>')
+
+                    # Header with file info
+                    $writer.WriteLine('<div class="header">')
+                    $writer.WriteLine("<h2>File Comparison Report</h2>")
+                    $writer.WriteLine("<p><b>Original:</b> $($script:CompareResults.File1Path)</p>")
+                    $writer.WriteLine("<p><b>Modified:</b> $($script:CompareResults.File2Path)</p>")
+                    $writer.WriteLine("<p><b>Generated:</b> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>")
+                    $writer.WriteLine('</div>')
+
+                    # Stats
+                    $writer.WriteLine('<div class="stats">')
+                    $writer.WriteLine("<div class='stat stat-add'><div class='num'>+$($script:CompareResults.Added)</div>Added</div>")
+                    $writer.WriteLine("<div class='stat stat-del'><div class='num'>-$($script:CompareResults.Removed)</div>Removed</div>")
+                    $writer.WriteLine("<div class='stat stat-mod'><div class='num'>~$($script:CompareResults.Modified)</div>Modified</div>")
+                    $writer.WriteLine("<div class='stat stat-unch'><div class='num'>$($script:CompareResults.Unchanged)</div>Unchanged</div>")
+                    $writer.WriteLine('</div>')
+
+                    # Table with dual line numbers
+                    $writer.WriteLine('<table><thead><tr><th class="ln">Old#</th><th class="ln">New#</th><th class="sym"></th><th>Content</th></tr></thead><tbody>')
+
+                    # Stream each diff row
+                    $lastIncludedIndex = -2
                     for ($i = 0; $i -lt $totalDiffs; $i++) {
                         if (-not $includeIndex.Contains($i)) { continue }
 
-                        # Add separator if there's a gap (skipped lines)
+                        # Separator for gaps
                         if ($lastIncludedIndex -ge 0 -and ($i - $lastIncludedIndex) -gt 1) {
                             $skipped = $i - $lastIncludedIndex - 1
-                            [void]$jsDataList.Add("{Type:'Separator',LeftLineNum:'',RightLineNum:'',LeftContent:'... $skipped lines hidden ...',RightContent:'... $skipped lines hidden ...',LeftInline:'',RightInline:''}")
+                            $writer.WriteLine("<tr class='sep'><td colspan='4'>··· $skipped unchanged lines ···</td></tr>")
                         }
                         $lastIncludedIndex = $i
 
                         $diff = $script:CompareResults.Differences[$i]
-                        # Use indices to look up content (0-based index, display as 1-based line number)
                         $idx1 = $diff.Idx1
                         $idx2 = $diff.Idx2
-                        $leftLineNum = if ($idx1 -ge 0) { ($idx1 + 1).ToString().PadLeft(5) } else { "     " }
-                        $rightLineNum = if ($idx2 -ge 0) { ($idx2 + 1).ToString().PadLeft(5) } else { "     " }
-                        $content1 = if ($idx1 -ge 0) { $file1Lines[$idx1] } else { "" }
-                        $content2 = if ($idx2 -ge 0) { $file2Lines[$idx2] } else { "" }
-                        $leftContent = (ConvertTo-HtmlEncoded -Text $content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                        $rightContent = (ConvertTo-HtmlEncoded -Text $content2) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
+                        $ln1 = if ($idx1 -ge 0) { $idx1 + 1 } else { "" }
+                        $ln2 = if ($idx2 -ge 0) { $idx2 + 1 } else { "" }
 
-                        # Build inline diff HTML for Modified lines (generate on-demand)
-                        $leftInline = ""
-                        $rightInline = ""
-                        if ($diff.Type -eq "Modified" -and $diff.Similarity -and $diff.Similarity -lt 0.95) {
-                            $inlineDiff = Get-InlineDiff -OldLine $content1 -NewLine $content2
-                            if ($inlineDiff) {
-                                foreach ($part in $inlineDiff.OldParts) {
-                                    $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                                    if ($part.Changed) {
-                                        $leftInline += "<span class=''inline-del''>$escaped</span>"
-                                    } else {
-                                        $leftInline += $escaped
-                                    }
-                                }
-                                foreach ($part in $inlineDiff.NewParts) {
-                                    $escaped = (ConvertTo-HtmlEncoded -Text $part.Text) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
-                                    if ($part.Changed) {
-                                        $rightInline += "<span class=''inline-add''>$escaped</span>"
-                                    } else {
-                                        $rightInline += $escaped
-                                    }
-                                }
+                        switch ($diff.Type) {
+                            "Added" {
+                                $content = ConvertTo-HtmlEncoded -Text $file2Lines[$idx2]
+                                $writer.WriteLine("<tr class='add'><td class='ln'></td><td class='ln'>$ln2</td><td class='sym'>+</td><td><pre>$content</pre></td></tr>")
+                            }
+                            "Removed" {
+                                $content = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
+                                $writer.WriteLine("<tr class='del'><td class='ln'>$ln1</td><td class='ln'></td><td class='sym'>−</td><td><pre>$content</pre></td></tr>")
+                            }
+                            "Modified" {
+                                $c1 = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
+                                $c2 = ConvertTo-HtmlEncoded -Text $file2Lines[$idx2]
+                                $writer.WriteLine("<tr class='del'><td class='ln'>$ln1</td><td class='ln'></td><td class='sym'>−</td><td><pre>$c1</pre></td></tr>")
+                                $writer.WriteLine("<tr class='add'><td class='ln'></td><td class='ln'>$ln2</td><td class='sym'>+</td><td><pre>$c2</pre></td></tr>")
+                            }
+                            "Unchanged" {
+                                $content = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
+                                $writer.WriteLine("<tr class='ctx'><td class='ln'>$ln1</td><td class='ln'>$ln2</td><td class='sym'></td><td><pre>$content</pre></td></tr>")
                             }
                         }
-
-                        [void]$jsDataList.Add("{Type:'$($diff.Type)',LeftLineNum:'$leftLineNum',RightLineNum:'$rightLineNum',LeftContent:'$leftContent',RightContent:'$rightContent',LeftInline:'$leftInline',RightInline:'$rightInline'}")
                     }
-                    $jsonData = "[" + ($jsDataList -join ",") + "]"
 
-                    # Build HTML file directly to avoid PowerShell parsing JavaScript
-                    $htmlFile = New-Object System.Text.StringBuilder
-                    [void]$htmlFile.AppendLine("<!DOCTYPE html>")
-                    [void]$htmlFile.AppendLine("<html>")
-                    [void]$htmlFile.AppendLine("<head>")
-                    [void]$htmlFile.AppendLine("    <meta charset=`"utf-8`">")
-                    [void]$htmlFile.AppendLine("    <title>File Comparison Report</title>")
-                    [void]$htmlFile.AppendLine("    <style>")
-                    [void]$htmlFile.AppendLine("        * { margin: 0; padding: 0; box-sizing: border-box; }")
-                    [void]$htmlFile.AppendLine("        body { font-family: 'Segoe UI', Consolas, monospace; margin: 20px; background: #f5f5f5; }")
-                    [void]$htmlFile.AppendLine("        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }")
-                    [void]$htmlFile.AppendLine("        .header h1 { margin: 0 0 10px 0; }")
-                    [void]$htmlFile.AppendLine("        .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }")
-                    [void]$htmlFile.AppendLine("        .controls label { margin-right: 15px; font-weight: bold; }")
-                    [void]$htmlFile.AppendLine("        .controls input[type=`"radio`"], .controls input[type=`"checkbox`"] { margin-right: 5px; }")
-                    [void]$htmlFile.AppendLine("        .controls button { margin-left: 10px; padding: 5px 15px; cursor: pointer; }")
-                    [void]$htmlFile.AppendLine("        .stats { display: flex; gap: 20px; margin: 20px 0; flex-wrap: wrap; }")
-                    [void]$htmlFile.AppendLine("        .stat-box { padding: 15px 25px; border-radius: 8px; text-align: center; min-width: 100px; }")
-                    [void]$htmlFile.AppendLine("        .stat-added { background: #d4edda; border: 2px solid #28a745; }")
-                    [void]$htmlFile.AppendLine("        .stat-removed { background: #f8d7da; border: 2px solid #dc3545; }")
-                    [void]$htmlFile.AppendLine("        .stat-modified { background: #fff3cd; border: 2px solid #ffc107; }")
-                    [void]$htmlFile.AppendLine("        .stat-unchanged { background: #e9ecef; border: 2px solid #6c757d; }")
-                    [void]$htmlFile.AppendLine("        .stat-box .number { font-size: 24px; font-weight: bold; }")
-                    [void]$htmlFile.AppendLine("        .diff-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-top: 20px; }")
-                    [void]$htmlFile.AppendLine("        .diff-header { background: #343a40; color: white; padding: 10px 15px; font-weight: bold; }")
-                    [void]$htmlFile.AppendLine("        .diff-content { max-height: 70vh; overflow: auto; }")
-                    [void]$htmlFile.AppendLine("        .diff-line { padding: 2px 8px; white-space: pre-wrap; word-wrap: break-word; border-bottom: 1px solid #e0e0e0; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; }")
-                    [void]$htmlFile.AppendLine("        .line-num { display: inline-block; width: 60px; text-align: right; padding-right: 10px; color: #666; user-select: none; font-weight: normal; }")
-                    [void]$htmlFile.AppendLine("        .line-content { padding-left: 5px; }")
-                    [void]$htmlFile.AppendLine("        .added { background: #d4edda; color: #155724; }")
-                    [void]$htmlFile.AppendLine("        .removed { background: #f8d7da; color: #721c24; }")
-                    [void]$htmlFile.AppendLine("        .modified { background: #fff3cd; color: #856404; }")
-                    [void]$htmlFile.AppendLine("        .unchanged { background: #ffffff; color: #333; }")
-                    [void]$htmlFile.AppendLine("        .added-light { background: #e6f3e9; color: #666; }")
-                    [void]$htmlFile.AppendLine("        .removed-light { background: #fce8e8; color: #666; }")
-                    [void]$htmlFile.AppendLine("        .modified-light { background: #fef8e6; color: #666; }")
-                    [void]$htmlFile.AppendLine("        .inline-del { background: #ffc0c0; text-decoration: line-through; color: #a00; }")
-                    [void]$htmlFile.AppendLine("        .inline-add { background: #c0ffc0; font-weight: bold; color: #060; }")
-                    [void]$htmlFile.AppendLine("        .sidebyside-table { width: 100%; border-collapse: collapse; display: table; }")
-                    [void]$htmlFile.AppendLine("        .sidebyside-table td { padding: 2px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; width: 50%; }")
-                    [void]$htmlFile.AppendLine("        .sidebyside-table thead th { background: #4682B4; color: white; padding: 10px; text-align: left; }")
-                    [void]$htmlFile.AppendLine("        .sidebyside-table thead th:last-child { background: #2E8B57; }")
-                    [void]$htmlFile.AppendLine("        .separator { background: #e9ecef; color: #6c757d; text-align: center; font-style: italic; border-top: 2px dashed #adb5bd; border-bottom: 2px dashed #adb5bd; }")
-                    [void]$htmlFile.AppendLine("    </style>")
-                    [void]$htmlFile.AppendLine("</head>")
-                    [void]$htmlFile.AppendLine("<body>")
-                    [void]$htmlFile.AppendLine("    <div class=`"header`">")
-                    [void]$htmlFile.AppendLine("        <h1>File Comparison Report</h1>")
-                    [void]$htmlFile.AppendLine("        <p><strong>Original:</strong> $($script:CompareResults.File1Path)</p>")
-                    [void]$htmlFile.AppendLine("        <p><strong>Modified:</strong> $($script:CompareResults.File2Path)</p>")
-                    [void]$htmlFile.AppendLine("        <p><strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>")
-                    [void]$htmlFile.AppendLine("    </div>")
-                    [void]$htmlFile.AppendLine("    <div class=`"stats`">")
-                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-added`"><div class=`"number`">+$($script:CompareResults.Added)</div><div>Added</div></div>")
-                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-removed`"><div class=`"number`">-$($script:CompareResults.Removed)</div><div>Removed</div></div>")
-                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-modified`"><div class=`"number`">~$($script:CompareResults.Modified)</div><div>Modified</div></div>")
-                    [void]$htmlFile.AppendLine("        <div class=`"stat-box stat-unchanged`"><div class=`"number`">$($script:CompareResults.Unchanged)</div><div>Unchanged</div></div>")
-                    [void]$htmlFile.AppendLine("    </div>")
-                    [void]$htmlFile.AppendLine("    <div class=`"controls`">")
-                    [void]$htmlFile.AppendLine("        <label>View Mode:</label>")
-                    [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewUnified`" name=`"viewMode`" value=`"unified`" checked>")
-                    [void]$htmlFile.AppendLine("        <label for=`"viewUnified`">Unified</label>")
-                    [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewSideBySide`" name=`"viewMode`" value=`"sidebyside`">")
-                    [void]$htmlFile.AppendLine("        <label for=`"viewSideBySide`">Side-by-Side</label>")
-                    [void]$htmlFile.AppendLine("        <span style=`"margin-left: 30px; color: #666;`">(Changes with 5 lines of context)</span>")
-                    [void]$htmlFile.AppendLine("    </div>")
-                    [void]$htmlFile.AppendLine("    <div class=`"diff-container`">")
-                    [void]$htmlFile.AppendLine("        <div class=`"diff-header`">Comparison Details</div>")
-                    [void]$htmlFile.AppendLine("        <div class=`"diff-content`" id=`"diffContent`"></div>")
-                    [void]$htmlFile.AppendLine("    </div>")
-                    [void]$htmlFile.AppendLine("    <script>")
-                    [void]$htmlFile.AppendLine("        const diffData = " + $jsonData + ";")
-                    [void]$htmlFile.AppendLine("        function renderView() {")
-                    [void]$htmlFile.AppendLine("            const viewMode = document.querySelector('input[name=`"viewMode`"]:checked').value;")
-                    [void]$htmlFile.AppendLine("            const container = document.getElementById('diffContent');")
-                    [void]$htmlFile.AppendLine("            container.innerHTML = '';")
-                    [void]$htmlFile.AppendLine("            if (viewMode === 'unified') { renderUnified(container); } else { renderSideBySide(container); }")
-                    [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function renderUnified(container) {")
-                    [void]$htmlFile.AppendLine("            const div = document.createElement('div');")
-                    [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
-                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Separator') {")
-                    [void]$htmlFile.AppendLine("                    const sepDiv = document.createElement('div');")
-                    [void]$htmlFile.AppendLine("                    sepDiv.className = 'diff-line separator';")
-                    [void]$htmlFile.AppendLine('                    sepDiv.innerHTML = diff.LeftContent;')
-                    [void]$htmlFile.AppendLine("                    div.appendChild(sepDiv);")
-                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Modified') {")
-                    [void]$htmlFile.AppendLine("                    const oldDiv = document.createElement('div');")
-                    [void]$htmlFile.AppendLine("                    oldDiv.className = 'diff-line modified';")
-                    [void]$htmlFile.AppendLine("                    const oldContent = diff.LeftInline || diff.LeftContent;")
-                    [void]$htmlFile.AppendLine('                    oldDiv.innerHTML = ''<span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">- '' + oldContent + ''</span>'';')
-                    [void]$htmlFile.AppendLine("                    div.appendChild(oldDiv);")
-                    [void]$htmlFile.AppendLine("                    const newDiv = document.createElement('div');")
-                    [void]$htmlFile.AppendLine("                    newDiv.className = 'diff-line modified';")
-                    [void]$htmlFile.AppendLine("                    const newContent = diff.RightInline || diff.RightContent;")
-                    [void]$htmlFile.AppendLine('                    newDiv.innerHTML = ''<span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">+ '' + newContent + ''</span>'';')
-                    [void]$htmlFile.AppendLine("                    div.appendChild(newDiv);")
-                    [void]$htmlFile.AppendLine("                } else {")
-                    [void]$htmlFile.AppendLine("                    const lineNum = diff.LeftLineNum !== '     ' ? diff.LeftLineNum : diff.RightLineNum;")
-                    [void]$htmlFile.AppendLine("                    const content = diff.Type === 'Added' ? diff.RightContent : diff.LeftContent;")
-                    [void]$htmlFile.AppendLine("                    const prefix = diff.Type === 'Added' ? '+' : diff.Type === 'Removed' ? '-' : ' ';")
-                    [void]$htmlFile.AppendLine("                    const className = diff.Type.toLowerCase();")
-                    [void]$htmlFile.AppendLine("                    const lineDiv = document.createElement('div');")
-                    [void]$htmlFile.AppendLine("                    lineDiv.className = 'diff-line ' + className;")
-                    [void]$htmlFile.AppendLine('                    lineDiv.innerHTML = ''<span class="line-num">'' + lineNum + ''</span><span class="line-content">'' + prefix + '' '' + content + ''</span>'';')
-                    [void]$htmlFile.AppendLine("                    div.appendChild(lineDiv);")
-                    [void]$htmlFile.AppendLine("                }")
-                    [void]$htmlFile.AppendLine("            });")
-                    [void]$htmlFile.AppendLine("            container.appendChild(div);")
-                    [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function renderSideBySide(container) {")
-                    [void]$htmlFile.AppendLine("            const table = document.createElement('table');")
-                    [void]$htmlFile.AppendLine("            table.className = 'sidebyside-table';")
-                    [void]$htmlFile.AppendLine("            const thead = document.createElement('thead');")
-                    [void]$htmlFile.AppendLine("            const headerRow = document.createElement('tr');")
-                    [void]$htmlFile.AppendLine("            headerRow.innerHTML = '<th>Original File</th><th>Modified File</th>';")
-                    [void]$htmlFile.AppendLine("            thead.appendChild(headerRow);")
-                    [void]$htmlFile.AppendLine("            table.appendChild(thead);")
-                    [void]$htmlFile.AppendLine("            const tbody = document.createElement('tbody');")
-                    [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
-                    [void]$htmlFile.AppendLine("                const row = document.createElement('tr');")
-                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Separator') {")
-                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td colspan="2" class="diff-line separator">'' + diff.LeftContent + ''</td>'';')
-                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Added') {")
-                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line added-light"><span class="line-num">     </span><span class="line-content">  </span></td><td class="diff-line added"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">+ '' + diff.RightContent + ''</span></td>'';')
-                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Removed') {")
-                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line removed"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">- '' + diff.LeftContent + ''</span></td><td class="diff-line removed-light"><span class="line-num">     </span><span class="line-content">  </span></td>'';')
-                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Modified') {")
-                    [void]$htmlFile.AppendLine("                    const leftContent = diff.LeftInline || diff.LeftContent;")
-                    [void]$htmlFile.AppendLine("                    const rightContent = diff.RightInline || diff.RightContent;")
-                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line modified"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">~ '' + leftContent + ''</span></td><td class="diff-line modified"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">~ '' + rightContent + ''</span></td>'';')
-                    [void]$htmlFile.AppendLine("                } else {")
-                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line unchanged"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">  '' + diff.LeftContent + ''</span></td><td class="diff-line unchanged"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">  '' + diff.RightContent + ''</span></td>'';')
-                    [void]$htmlFile.AppendLine("                }")
-                    [void]$htmlFile.AppendLine("                tbody.appendChild(row);")
-                    [void]$htmlFile.AppendLine("            });")
-                    [void]$htmlFile.AppendLine("            table.appendChild(tbody);")
-                    [void]$htmlFile.AppendLine("            container.appendChild(table);")
-                    [void]$htmlFile.AppendLine("        }")
-                    [void]$htmlFile.AppendLine("        function resetView() { document.getElementById('viewUnified').checked = true; renderView(); }")
-                    [void]$htmlFile.AppendLine("        document.querySelectorAll('input[name=`"viewMode`"]').forEach(radio => { radio.addEventListener('change', renderView); });")
-                    [void]$htmlFile.AppendLine("        renderView();")
-                    [void]$htmlFile.AppendLine("    </script>")
-                    [void]$htmlFile.AppendLine("</body>")
-                    [void]$htmlFile.AppendLine("</html>")
-
-                    # Replace the JSON placeholder in the HTML
-                    $htmlContent = $htmlFile.ToString() -replace '\$jsonData', $jsonData
-                    $htmlContent | Out-File -FilePath $saveDialog.FileName -Encoding UTF8
+                    $writer.WriteLine('</tbody></table></body></html>')
+                    $writer.Close()
                 }
                 ".txt" {
                     $output = @()
