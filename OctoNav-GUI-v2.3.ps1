@@ -4076,114 +4076,171 @@ $btnExportDiff.Add_Click({
             $extension = [System.IO.Path]::GetExtension($saveDialog.FileName).ToLower()
             switch ($extension) {
                 ".html" {
-                    # === STREAMING HTML EXPORT - writes directly to file ===
-                    # No intermediate data structures, no JavaScript rendering
-                    # Much faster and more memory efficient
+                    # === BROWSER-BASED DIFF - JavaScript does the comparison ===
+                    # PowerShell just outputs raw lines as JSON
+                    # Browser's V8/SpiderMonkey engine does the diff (10-100x faster)
 
-                    $contextLines = 5
-                    $totalDiffs = $script:CompareResults.Differences.Count
                     $file1Lines = $script:CompareResults.File1Lines
                     $file2Lines = $script:CompareResults.File2Lines
 
-                    # Build context index set (which diff entries to include)
-                    $includeIndex = New-Object System.Collections.Generic.HashSet[int]
-                    for ($i = 0; $i -lt $totalDiffs; $i++) {
-                        if ($script:CompareResults.Differences[$i].Type -ne "Unchanged") {
-                            $start = [Math]::Max(0, $i - $contextLines)
-                            $end = [Math]::Min($totalDiffs - 1, $i + $contextLines)
-                            for ($j = $start; $j -le $end; $j++) { [void]$includeIndex.Add($j) }
-                        }
-                    }
-
-                    # Stream directly to file
                     $writer = [System.IO.StreamWriter]::new($saveDialog.FileName, $false, [System.Text.Encoding]::UTF8)
 
-                    # Write HTML header
-                    $writer.WriteLine('<!DOCTYPE html><html><head><meta charset="utf-8"><title>File Comparison Report</title>')
+                    # Minimal HTML header
+                    $writer.WriteLine('<!DOCTYPE html><html><head><meta charset="utf-8"><title>File Comparison</title>')
                     $writer.WriteLine('<style>')
                     $writer.WriteLine('*{margin:0;padding:0;box-sizing:border-box}')
-                    $writer.WriteLine('body{font-family:Consolas,monospace;margin:20px;background:#1e1e1e;color:#d4d4d4}')
-                    $writer.WriteLine('.header{background:#0d47a1;color:#fff;padding:20px;border-radius:8px;margin-bottom:20px}')
-                    $writer.WriteLine('.stats{display:flex;gap:15px;margin:15px 0;flex-wrap:wrap}')
-                    $writer.WriteLine('.stat{padding:10px 20px;border-radius:6px;text-align:center}')
-                    $writer.WriteLine('.stat-add{background:#1b5e20;color:#a5d6a7}.stat-del{background:#b71c1c;color:#ef9a9a}')
-                    $writer.WriteLine('.stat-mod{background:#e65100;color:#ffcc80}.stat-unch{background:#37474f;color:#90a4ae}')
-                    $writer.WriteLine('.stat .num{font-size:24px;font-weight:bold}')
-                    $writer.WriteLine('table{width:100%;border-collapse:collapse;margin-top:20px;background:#252526}')
-                    $writer.WriteLine('th{background:#333;color:#fff;padding:10px;text-align:left;position:sticky;top:0}')
-                    $writer.WriteLine('td{padding:2px 8px;border-bottom:1px solid #3c3c3c;font-size:13px;vertical-align:top}')
-                    $writer.WriteLine('.ln{color:#858585;text-align:right;width:50px;user-select:none;padding-right:10px;border-right:1px solid #3c3c3c}')
-                    $writer.WriteLine('.sym{width:20px;text-align:center;font-weight:bold}')
+                    $writer.WriteLine('body{font-family:Consolas,monospace;background:#1e1e1e;color:#d4d4d4}')
+                    $writer.WriteLine('.header{background:#0d47a1;color:#fff;padding:15px 20px;position:sticky;top:0;z-index:100}')
+                    $writer.WriteLine('.header h2{margin-bottom:5px}')
+                    $writer.WriteLine('.info{font-size:12px;opacity:0.9}')
+                    $writer.WriteLine('.stats{display:flex;gap:10px;padding:10px 20px;background:#252526;border-bottom:1px solid #3c3c3c}')
+                    $writer.WriteLine('.stat{padding:8px 15px;border-radius:4px;font-size:13px}')
+                    $writer.WriteLine('.stat-add{background:#1b5e20;color:#a5d6a7}')
+                    $writer.WriteLine('.stat-del{background:#b71c1c;color:#ef9a9a}')
+                    $writer.WriteLine('.stat-mod{background:#e65100;color:#ffcc80}')
+                    $writer.WriteLine('.stat-unch{background:#37474f;color:#90a4ae}')
+                    $writer.WriteLine('.stat b{font-size:16px}')
+                    $writer.WriteLine('#progress{padding:20px;text-align:center;font-size:14px}')
+                    $writer.WriteLine('#diff{font-size:13px}')
+                    $writer.WriteLine('.row{display:flex;border-bottom:1px solid #2d2d2d}')
+                    $writer.WriteLine('.ln{width:55px;padding:1px 8px;text-align:right;color:#606060;background:#1a1a1a;flex-shrink:0;user-select:none}')
+                    $writer.WriteLine('.sym{width:20px;padding:1px 4px;text-align:center;font-weight:bold;flex-shrink:0}')
+                    $writer.WriteLine('.content{flex:1;padding:1px 8px;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word}')
                     $writer.WriteLine('.add{background:#1b3d1b}.add .sym{color:#4caf50}')
                     $writer.WriteLine('.del{background:#3d1b1b}.del .sym{color:#f44336}')
-                    $writer.WriteLine('.mod{background:#3d2e1b}.mod .sym{color:#ff9800}')
                     $writer.WriteLine('.ctx{background:#252526}')
-                    $writer.WriteLine('.sep{background:#1e1e1e;color:#666;text-align:center;font-style:italic}')
-                    $writer.WriteLine('.sep td{padding:8px;border:2px dashed #444}')
-                    $writer.WriteLine('pre{margin:0;white-space:pre-wrap;word-wrap:break-word}')
-                    $writer.WriteLine('.hi-del{background:#5c1b1b;color:#ff6b6b}.hi-add{background:#1b5c1b;color:#6bff6b}')
+                    $writer.WriteLine('.sep{background:#1a1a1a;color:#555;text-align:center;padding:6px;font-style:italic;border:1px dashed #333}')
                     $writer.WriteLine('</style></head><body>')
 
-                    # Header with file info
+                    # Header
                     $writer.WriteLine('<div class="header">')
-                    $writer.WriteLine("<h2>File Comparison Report</h2>")
-                    $writer.WriteLine("<p><b>Original:</b> $($script:CompareResults.File1Path)</p>")
-                    $writer.WriteLine("<p><b>Modified:</b> $($script:CompareResults.File2Path)</p>")
-                    $writer.WriteLine("<p><b>Generated:</b> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>")
+                    $writer.WriteLine('<h2>File Comparison</h2>')
+                    $writer.WriteLine("<div class='info'><b>Original:</b> $($script:CompareResults.File1Path)</div>")
+                    $writer.WriteLine("<div class='info'><b>Modified:</b> $($script:CompareResults.File2Path)</div>")
                     $writer.WriteLine('</div>')
+                    $writer.WriteLine('<div class="stats" id="stats">Computing diff...</div>')
+                    $writer.WriteLine('<div id="progress">Comparing files...</div>')
+                    $writer.WriteLine('<div id="diff"></div>')
 
-                    # Stats
-                    $writer.WriteLine('<div class="stats">')
-                    $writer.WriteLine("<div class='stat stat-add'><div class='num'>+$($script:CompareResults.Added)</div>Added</div>")
-                    $writer.WriteLine("<div class='stat stat-del'><div class='num'>-$($script:CompareResults.Removed)</div>Removed</div>")
-                    $writer.WriteLine("<div class='stat stat-mod'><div class='num'>~$($script:CompareResults.Modified)</div>Modified</div>")
-                    $writer.WriteLine("<div class='stat stat-unch'><div class='num'>$($script:CompareResults.Unchanged)</div>Unchanged</div>")
-                    $writer.WriteLine('</div>')
+                    # Output file data as JSON
+                    $writer.WriteLine('<script>')
+                    $writer.WriteLine('const file1=' + ($file1Lines | ConvertTo-Json -Compress -Depth 1) + ';')
+                    $writer.WriteLine('const file2=' + ($file2Lines | ConvertTo-Json -Compress -Depth 1) + ';')
 
-                    # Table with dual line numbers
-                    $writer.WriteLine('<table><thead><tr><th class="ln">Old#</th><th class="ln">New#</th><th class="sym"></th><th>Content</th></tr></thead><tbody>')
+                    # JavaScript diff algorithm and renderer
+                    $writer.WriteLine(@'
+const CTX=5; // context lines
 
-                    # Stream each diff row
-                    $lastIncludedIndex = -2
-                    for ($i = 0; $i -lt $totalDiffs; $i++) {
-                        if (-not $includeIndex.Contains($i)) { continue }
+function diff(){
+  const m=file1.length, n=file2.length;
+  const match1=new Array(m).fill(-1); // file1[i] matched to file2[match1[i]]
+  const match2=new Array(n).fill(-1); // file2[j] matched to file1[match2[j]]
 
-                        # Separator for gaps
-                        if ($lastIncludedIndex -ge 0 -and ($i - $lastIncludedIndex) -gt 1) {
-                            $skipped = $i - $lastIncludedIndex - 1
-                            $writer.WriteLine("<tr class='sep'><td colspan='4'>··· $skipped unchanged lines ···</td></tr>")
-                        }
-                        $lastIncludedIndex = $i
+  // Pass 1: Match lines at same position (fast path for similar files)
+  const minLen=Math.min(m,n);
+  for(let i=0;i<minLen;i++){
+    if(file1[i]===file2[i]){match1[i]=i;match2[i]=i;}
+  }
 
-                        $diff = $script:CompareResults.Differences[$i]
-                        $idx1 = $diff.Idx1
-                        $idx2 = $diff.Idx2
-                        $ln1 = if ($idx1 -ge 0) { $idx1 + 1 } else { "" }
-                        $ln2 = if ($idx2 -ge 0) { $idx2 + 1 } else { "" }
+  // Pass 2: Hash unmatched file2 lines
+  const hash2={};
+  for(let j=0;j<n;j++){
+    if(match2[j]<0){
+      const h=file2[j];
+      if(!hash2[h])hash2[h]=[];
+      hash2[h].push(j);
+    }
+  }
 
-                        switch ($diff.Type) {
-                            "Added" {
-                                $content = ConvertTo-HtmlEncoded -Text $file2Lines[$idx2]
-                                $writer.WriteLine("<tr class='add'><td class='ln'></td><td class='ln'>$ln2</td><td class='sym'>+</td><td><pre>$content</pre></td></tr>")
-                            }
-                            "Removed" {
-                                $content = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
-                                $writer.WriteLine("<tr class='del'><td class='ln'>$ln1</td><td class='ln'></td><td class='sym'>−</td><td><pre>$content</pre></td></tr>")
-                            }
-                            "Modified" {
-                                $c1 = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
-                                $c2 = ConvertTo-HtmlEncoded -Text $file2Lines[$idx2]
-                                $writer.WriteLine("<tr class='del'><td class='ln'>$ln1</td><td class='ln'></td><td class='sym'>−</td><td><pre>$c1</pre></td></tr>")
-                                $writer.WriteLine("<tr class='add'><td class='ln'></td><td class='ln'>$ln2</td><td class='sym'>+</td><td><pre>$c2</pre></td></tr>")
-                            }
-                            "Unchanged" {
-                                $content = ConvertTo-HtmlEncoded -Text $file1Lines[$idx1]
-                                $writer.WriteLine("<tr class='ctx'><td class='ln'>$ln1</td><td class='ln'>$ln2</td><td class='sym'></td><td><pre>$content</pre></td></tr>")
-                            }
-                        }
-                    }
+  // Pass 3: Match remaining file1 lines via hash
+  for(let i=0;i<m;i++){
+    if(match1[i]>=0)continue;
+    const h=file1[i];
+    if(hash2[h]){
+      for(let k=0;k<hash2[h].length;k++){
+        const j=hash2[h][k];
+        if(match2[j]<0){
+          match1[i]=j;match2[j]=i;
+          hash2[h].splice(k,1);
+          break;
+        }
+      }
+    }
+  }
 
-                    $writer.WriteLine('</tbody></table></body></html>')
+  // Build diff list
+  const diffs=[];
+  let i=0,j=0;
+  while(i<m||j<n){
+    if(i<m&&match1[i]>=0&&match1[i]===j){
+      diffs.push({t:'=',i1:i,i2:j});i++;j++;
+    }else if(i<m&&match1[i]<0){
+      diffs.push({t:'-',i1:i,i2:-1});i++;
+    }else if(j<n&&match2[j]<0){
+      diffs.push({t:'+',i1:-1,i2:j});j++;
+    }else{
+      // Both matched but not to each other - output as change
+      if(i<m&&j<n){
+        diffs.push({t:'-',i1:i,i2:-1});i++;
+        diffs.push({t:'+',i1:-1,i2:j});j++;
+      }else if(i<m){i++;}else{j++;}
+    }
+  }
+  return diffs;
+}
+
+function render(diffs){
+  // Find which indices to show (changes + context)
+  const show=new Set();
+  for(let i=0;i<diffs.length;i++){
+    if(diffs[i].t!=='='){
+      for(let k=Math.max(0,i-CTX);k<=Math.min(diffs.length-1,i+CTX);k++)show.add(k);
+    }
+  }
+
+  // Count stats
+  let added=0,removed=0,unchanged=0;
+  diffs.forEach(d=>{if(d.t==='+')added++;else if(d.t==='-')removed++;else unchanged++;});
+
+  document.getElementById('stats').innerHTML=
+    `<div class="stat stat-add"><b>+${added}</b> Added</div>`+
+    `<div class="stat stat-del"><b>-${removed}</b> Removed</div>`+
+    `<div class="stat stat-unch"><b>${unchanged}</b> Unchanged</div>`;
+
+  // Render rows
+  let html='';
+  let lastShown=-2;
+  for(let i=0;i<diffs.length;i++){
+    if(!show.has(i))continue;
+    if(lastShown>=0&&i-lastShown>1){
+      html+=`<div class="sep">··· ${i-lastShown-1} unchanged lines ···</div>`;
+    }
+    lastShown=i;
+    const d=diffs[i];
+    const ln1=d.i1>=0?(d.i1+1):'';
+    const ln2=d.i2>=0?(d.i2+1):'';
+    const content=d.t==='+'?esc(file2[d.i2]):d.i1>=0?esc(file1[d.i1]):'';
+    const cls=d.t==='+'?'add':d.t==='-'?'del':'ctx';
+    const sym=d.t==='+'?'+':d.t==='-'?'−':'';
+    html+=`<div class="row ${cls}"><div class="ln">${ln1}</div><div class="ln">${ln2}</div><div class="sym">${sym}</div><div class="content">${content}</div></div>`;
+  }
+  document.getElementById('diff').innerHTML=html;
+  document.getElementById('progress').style.display='none';
+}
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// Run diff after page loads
+setTimeout(()=>{
+  document.getElementById('progress').textContent='Running diff algorithm...';
+  setTimeout(()=>{
+    const diffs=diff();
+    document.getElementById('progress').textContent='Rendering results...';
+    setTimeout(()=>render(diffs),10);
+  },10);
+},10);
+</script></body></html>
+'@)
                     $writer.Close()
                 }
                 ".txt" {
