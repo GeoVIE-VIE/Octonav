@@ -3723,7 +3723,7 @@ $cboVendor = New-Object System.Windows.Forms.ComboBox
 $cboVendor.Location = New-Object System.Drawing.Point(120, 27)
 $cboVendor.Size = New-Object System.Drawing.Size(250, 25)
 $cboVendor.DropDownStyle = "DropDownList"
-$cboVendor.Items.AddRange(@("X", "Y", "Z"))
+$cboVendor.Items.AddRange(@("Cisco", "ICX", "FCX 8030", "FCX 7.3"))
 $cboVendor.SelectedIndex = 0
 $portInputGroup.Controls.Add($cboVendor)
 
@@ -3815,11 +3815,11 @@ $chkEnablePort.Size = New-Object System.Drawing.Size(200, 25)
 $chkEnablePort.Checked = $true
 $portInputGroup.Controls.Add($chkEnablePort)
 
-# Show/Hide Old VLAN based on vendor selection
+# Show/Hide Old VLAN based on vendor selection (only FCX 7.3 uses OLD_VLAN for migrations)
 $cboVendor.Add_SelectedIndexChanged({
-    $isVendorX = $cboVendor.SelectedItem -eq "X"
-    $lblOldVlan.Visible = $isVendorX
-    $txtOldVlan.Visible = $isVendorX
+    $isFCX73 = $cboVendor.SelectedItem -eq "FCX 7.3"
+    $lblOldVlan.Visible = $isFCX73
+    $txtOldVlan.Visible = $isFCX73
 })
 
 # Generate Button
