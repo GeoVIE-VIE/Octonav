@@ -936,19 +936,36 @@ function ConvertTo-Hashtable {
 $templateFile = Join-Path $PSScriptRoot "PortTemplates.json"
 if (Test-Path $templateFile) {
     try {
-        $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json | ConvertTo-Hashtable
+        Write-Host "Loading PortTemplates.json from: $templateFile" -ForegroundColor Cyan
+        $jsonContent = Get-Content $templateFile -Raw
+        $savedTemplates = $jsonContent | ConvertFrom-Json | ConvertTo-Hashtable
+
+        $templateCount = 0
         foreach ($vendor in $savedTemplates.Keys) {
             if (-not $script:PortTemplates.ContainsKey($vendor)) {
                 $script:PortTemplates[$vendor] = @{}
             }
             foreach ($portType in $savedTemplates[$vendor].Keys) {
                 $script:PortTemplates[$vendor][$portType] = $savedTemplates[$vendor][$portType]
+                $templateCount++
             }
+            Write-Host "  Loaded vendor '$vendor' with $($savedTemplates[$vendor].Keys.Count) port types" -ForegroundColor Green
         }
+        Write-Host "Successfully loaded $templateCount templates from JSON file" -ForegroundColor Green
     }
     catch {
-        # Silently ignore load errors - will use embedded defaults
+        Write-Host "ERROR loading PortTemplates.json: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Yellow
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to load PortTemplates.json:`n`n$($_.Exception.Message)`n`nUsing embedded defaults instead.",
+            "Template Load Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
     }
+} else {
+    Write-Host "PortTemplates.json not found at: $templateFile" -ForegroundColor Yellow
+    Write-Host "Using embedded default templates" -ForegroundColor Yellow
 }
 
 function Get-EmbeddedResourceList {
