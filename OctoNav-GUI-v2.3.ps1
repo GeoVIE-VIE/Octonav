@@ -3343,15 +3343,22 @@ function computeDiff(ignoreBlanks){
 }
 
 function recompute(){
-  const ign=document.getElementById('ignoreBlanks').checked;
-  diffs=computeDiff(ign);
-  hunks=buildHunks(diffs);
-  let add=0,del=0,eq=0;
-  diffs.forEach(d=>{if(d.t==='+')add++;else if(d.t==='-')del++;else eq++;});
-  document.getElementById('stats').innerHTML=`<span class="stat stat-add">+${add}</span><span class="stat stat-del">−${del}</span><span class="stat stat-eq">${eq} unchanged</span>`;
-  curHunk=0;
-  render();
-  if(hunks.length)goToHunk(0);
+  // Show spinner immediately so checkbox feels responsive
+  document.getElementById('progress').style.display='block';
+  document.getElementById('diff').innerHTML='';
+  // Defer computation to let UI update first
+  setTimeout(()=>{
+    const ign=document.getElementById('ignoreBlanks').checked;
+    diffs=computeDiff(ign);
+    hunks=buildHunks(diffs);
+    let add=0,del=0,eq=0;
+    diffs.forEach(d=>{if(d.t==='+')add++;else if(d.t==='-')del++;else eq++;});
+    document.getElementById('stats').innerHTML=`<span class="stat stat-add">+${add}</span><span class="stat stat-del">−${del}</span><span class="stat stat-eq">${eq} unchanged</span>`;
+    document.getElementById('progress').style.display='none';
+    curHunk=0;
+    render();
+    if(hunks.length)goToHunk(0);
+  },10);
 }
 
 function buildHunks(d){
