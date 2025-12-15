@@ -3267,7 +3267,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 <button class="btn" onclick="prevChange()" title="Previous change (↑)">▲ Prev</button>
 <span class="nav-info" id="navInfo">-/-</span>
 <button class="btn" onclick="nextChange()" title="Next change (↓)">▼ Next</button>
-<button class="btn" id="btnView" onclick="toggleView()">Side-by-Side</button>
 </div>
 </div>
 <div id="progress"><div class="spinner"></div>Computing differences...</div>
@@ -3278,7 +3277,7 @@ const f2=$($file2Lines | ConvertTo-Json -Compress -Depth 1);
 "@)
                     $writer.WriteLine(@'
 const CTX=4;
-let diffs=[],hunks=[],curHunk=0,viewMode='unified';
+let diffs=[],hunks=[],curHunk=0;
 
 function computeDiff(){
   const m=f1.length,n=f2.length;
@@ -3317,22 +3316,7 @@ function buildHunks(d){
 
 function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-function renderUnified(){
-  let html='';
-  hunks.forEach((h,hi)=>{
-    html+=`<div class="hunk" id="hunk${hi}"><div class="hunk-header">@@ Lines ${h.startLine1} / ${h.startLine2} @@</div>`;
-    h.lines.forEach(d=>{
-      const ln1=d.i1>=0?d.i1+1:'',ln2=d.i2>=0?d.i2+1:'';
-      const cls=d.t==='+'?'row-add':d.t==='-'?'row-del':'row-ctx';
-      const txt=d.t==='+'?esc(f2[d.i2]):d.i1>=0?esc(f1[d.i1]):'';
-      html+=`<div class="row ${cls}"><div class="ln">${ln1}</div><div class="ln">${ln2}</div><div class="code">${txt}</div></div>`;
-    });
-    html+='</div>';
-  });
-  document.getElementById('diff').innerHTML=html||'<div style="padding:40px;text-align:center;color:var(--text2)">Files are identical</div>';
-}
-
-function renderSideBySide(){
+function render(){
   let html='';
   hunks.forEach((h,hi)=>{
     html+=`<div class="hunk" id="hunk${hi}"><div class="hunk-header">@@ Lines ${h.startLine1} / ${h.startLine2} @@</div><div class="side"><div class="panel"><div class="panel-header">Original</div>`;
@@ -3350,10 +3334,9 @@ function renderSideBySide(){
     html+=`</div></div></div>`;
   });
   document.getElementById('diff').innerHTML=html||'<div style="padding:40px;text-align:center;color:var(--text2)">Files are identical</div>';
+  updateNav();
 }
 
-function render(){viewMode==='unified'?renderUnified():renderSideBySide();updateNav();}
-function toggleView(){viewMode=viewMode==='unified'?'side':'unified';document.getElementById('btnView').textContent=viewMode==='unified'?'Side-by-Side':'Unified';render();}
 function updateNav(){document.getElementById('navInfo').textContent=hunks.length?`${curHunk+1}/${hunks.length}`:'0/0';}
 function goToHunk(i){if(hunks.length===0)return;curHunk=Math.max(0,Math.min(hunks.length-1,i));document.querySelectorAll('.hunk').forEach((e,j)=>e.classList.toggle('current-change',j===curHunk));document.getElementById('hunk'+curHunk)?.scrollIntoView({behavior:'smooth',block:'center'});updateNav();}
 function nextChange(){goToHunk(curHunk+1);}
