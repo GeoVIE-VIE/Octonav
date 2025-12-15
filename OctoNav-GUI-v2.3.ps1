@@ -913,6 +913,25 @@ set vlan {{VLAN}}
     }
 }
 
+# Load saved templates from JSON file (overrides embedded defaults)
+$templateFile = Join-Path $PSScriptRoot "PortTemplates.json"
+if (Test-Path $templateFile) {
+    try {
+        $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json -AsHashtable
+        foreach ($vendor in $savedTemplates.Keys) {
+            if (-not $script:PortTemplates.ContainsKey($vendor)) {
+                $script:PortTemplates[$vendor] = @{}
+            }
+            foreach ($portType in $savedTemplates[$vendor].Keys) {
+                $script:PortTemplates[$vendor][$portType] = $savedTemplates[$vendor][$portType]
+            }
+        }
+    }
+    catch {
+        # Silently ignore load errors - will use embedded defaults
+    }
+}
+
 function Get-EmbeddedResourceList {
     <#
     .SYNOPSIS
@@ -3791,9 +3810,42 @@ $btnClearConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnClearConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
 $portConfigPanel.Controls.Add($btnClearConfig)
 
-# Output GroupBox
+# Save Template Button
+$btnSaveTemplate = New-Object System.Windows.Forms.Button
+$btnSaveTemplate.Text = "Save as Template"
+$btnSaveTemplate.Location = New-Object System.Drawing.Point(10, 345)
+$btnSaveTemplate.Size = New-Object System.Drawing.Size(130, 35)
+$btnSaveTemplate.FlatStyle = "Flat"
+$btnSaveTemplate.BackColor = [System.Drawing.Color]::FromArgb(128, 0, 128)
+$btnSaveTemplate.ForeColor = [System.Drawing.Color]::White
+$btnSaveTemplate.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnSaveTemplate.Cursor = [System.Windows.Forms.Cursors]::Hand
+$portConfigPanel.Controls.Add($btnSaveTemplate)
+
+# Load Template Button
+$btnLoadTemplate = New-Object System.Windows.Forms.Button
+$btnLoadTemplate.Text = "Load Template"
+$btnLoadTemplate.Location = New-Object System.Drawing.Point(150, 345)
+$btnLoadTemplate.Size = New-Object System.Drawing.Size(110, 35)
+$btnLoadTemplate.FlatStyle = "Flat"
+$btnLoadTemplate.BackColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
+$btnLoadTemplate.ForeColor = [System.Drawing.Color]::White
+$btnLoadTemplate.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnLoadTemplate.Cursor = [System.Windows.Forms.Cursors]::Hand
+$portConfigPanel.Controls.Add($btnLoadTemplate)
+
+# Placeholder help label
+$lblPlaceholderHelp = New-Object System.Windows.Forms.Label
+$lblPlaceholderHelp.Text = "Placeholders: {{INTERFACE}} {{DESCRIPTION}} {{VLAN}} {{OLD_VLAN}} {{VOICE_VLAN}} {{STATUS}}"
+$lblPlaceholderHelp.Location = New-Object System.Drawing.Point(10, 390)
+$lblPlaceholderHelp.Size = New-Object System.Drawing.Size(400, 20)
+$lblPlaceholderHelp.Font = New-Object System.Drawing.Font("Consolas", 8)
+$lblPlaceholderHelp.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
+$portConfigPanel.Controls.Add($lblPlaceholderHelp)
+
+# Output GroupBox - now for both output AND template editing
 $portOutputGroup = New-Object System.Windows.Forms.GroupBox
-$portOutputGroup.Text = "Generated Configuration"
+$portOutputGroup.Text = "Generated Configuration / Template Editor (paste template with {{PLACEHOLDERS}})"
 $portOutputGroup.Location = New-Object System.Drawing.Point(420, 10)
 $portOutputGroup.Size = New-Object System.Drawing.Size(500, 600)
 $portOutputGroup.Anchor = "Top,Bottom,Left,Right"
@@ -3870,6 +3922,109 @@ $btnClearConfig.Add_Click({
     $txtVoiceVlan.Text = "200"
     $chkEnablePort.Checked = $true
     $txtConfigOutput.Text = ""
+})
+
+# Save Template Click Handler
+$btnSaveTemplate.Add_Click({
+    $vendor = $cboVendor.SelectedItem
+    $portType = $cboPortType.SelectedItem
+    $templateContent = $txtConfigOutput.Text
+
+    if ([string]::IsNullOrWhiteSpace($templateContent)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Please paste your template configuration in the text area first.`n`n" +
+            "Use placeholders like {{INTERFACE}}, {{VLAN}}, etc. where variables should go.",
+            "No Template Content",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return
+    }
+
+    # Confirm save
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "Save this template for:`n`n" +
+        "Vendor: $vendor`n" +
+        "Port Type: $portType`n`n" +
+        "This will overwrite any existing template for this combination.",
+        "Confirm Save Template",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    # Save to script's PortTemplates hashtable (runtime only)
+    if (-not $script:PortTemplates.ContainsKey($vendor)) {
+        $script:PortTemplates[$vendor] = @{}
+    }
+    $script:PortTemplates[$vendor][$portType] = $templateContent
+
+    # Also save to external JSON file for persistence
+    $templateFile = Join-Path $PSScriptRoot "PortTemplates.json"
+    try {
+        # Load existing or create new
+        $savedTemplates = @{}
+        if (Test-Path $templateFile) {
+            $savedTemplates = Get-Content $templateFile -Raw | ConvertFrom-Json -AsHashtable
+        }
+
+        # Update with new template
+        if (-not $savedTemplates.ContainsKey($vendor)) {
+            $savedTemplates[$vendor] = @{}
+        }
+        $savedTemplates[$vendor][$portType] = $templateContent
+
+        # Save back to file
+        $savedTemplates | ConvertTo-Json -Depth 4 | Set-Content $templateFile -Encoding UTF8
+
+        [System.Windows.Forms.MessageBox]::Show(
+            "Template saved successfully!`n`n" +
+            "Vendor: $vendor`n" +
+            "Port Type: $portType`n`n" +
+            "Saved to: $templateFile",
+            "Template Saved",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+
+        if ($script:StatusBarPanels) {
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Template saved: $vendor / $portType"
+        }
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Error saving template file:`n`n$($_.Exception.Message)`n`n" +
+            "Template is saved for this session only.",
+            "Save Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+    }
+})
+
+# Load Template Click Handler - loads current template into editor
+$btnLoadTemplate.Add_Click({
+    $vendor = $cboVendor.SelectedItem
+    $portType = $cboPortType.SelectedItem
+
+    if ($script:PortTemplates.ContainsKey($vendor) -and $script:PortTemplates[$vendor].ContainsKey($portType)) {
+        $txtConfigOutput.Text = $script:PortTemplates[$vendor][$portType]
+
+        if ($script:StatusBarPanels) {
+            Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Template loaded: $vendor / $portType"
+        }
+    } else {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No template found for:`n`n" +
+            "Vendor: $vendor`n" +
+            "Port Type: $portType`n`n" +
+            "Paste your config with {{PLACEHOLDERS}} and click 'Save as Template'.",
+            "No Template",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+    }
 })
 
 # ============================================
