@@ -4076,169 +4076,174 @@ $btnExportDiff.Add_Click({
             $extension = [System.IO.Path]::GetExtension($saveDialog.FileName).ToLower()
             switch ($extension) {
                 ".html" {
-                    # === BROWSER-BASED DIFF - JavaScript does the comparison ===
-                    # PowerShell just outputs raw lines as JSON
-                    # Browser's V8/SpiderMonkey engine does the diff (10-100x faster)
+                    # === BROWSER-BASED DIFF - Professional visualization ===
+                    # PowerShell outputs raw lines as JSON, browser does everything else
 
                     $file1Lines = $script:CompareResults.File1Lines
                     $file2Lines = $script:CompareResults.File2Lines
+                    $file1Name = [System.IO.Path]::GetFileName($script:CompareResults.File1Path)
+                    $file2Name = [System.IO.Path]::GetFileName($script:CompareResults.File2Path)
 
                     $writer = [System.IO.StreamWriter]::new($saveDialog.FileName, $false, [System.Text.Encoding]::UTF8)
 
-                    # Minimal HTML header
-                    $writer.WriteLine('<!DOCTYPE html><html><head><meta charset="utf-8"><title>File Comparison</title>')
-                    $writer.WriteLine('<style>')
-                    $writer.WriteLine('*{margin:0;padding:0;box-sizing:border-box}')
-                    $writer.WriteLine('body{font-family:Consolas,monospace;background:#1e1e1e;color:#d4d4d4}')
-                    $writer.WriteLine('.header{background:#0d47a1;color:#fff;padding:15px 20px;position:sticky;top:0;z-index:100}')
-                    $writer.WriteLine('.header h2{margin-bottom:5px}')
-                    $writer.WriteLine('.info{font-size:12px;opacity:0.9}')
-                    $writer.WriteLine('.stats{display:flex;gap:10px;padding:10px 20px;background:#252526;border-bottom:1px solid #3c3c3c}')
-                    $writer.WriteLine('.stat{padding:8px 15px;border-radius:4px;font-size:13px}')
-                    $writer.WriteLine('.stat-add{background:#1b5e20;color:#a5d6a7}')
-                    $writer.WriteLine('.stat-del{background:#b71c1c;color:#ef9a9a}')
-                    $writer.WriteLine('.stat-mod{background:#e65100;color:#ffcc80}')
-                    $writer.WriteLine('.stat-unch{background:#37474f;color:#90a4ae}')
-                    $writer.WriteLine('.stat b{font-size:16px}')
-                    $writer.WriteLine('#progress{padding:20px;text-align:center;font-size:14px}')
-                    $writer.WriteLine('#diff{font-size:13px}')
-                    $writer.WriteLine('.row{display:flex;border-bottom:1px solid #2d2d2d}')
-                    $writer.WriteLine('.ln{width:55px;padding:1px 8px;text-align:right;color:#606060;background:#1a1a1a;flex-shrink:0;user-select:none}')
-                    $writer.WriteLine('.sym{width:20px;padding:1px 4px;text-align:center;font-weight:bold;flex-shrink:0}')
-                    $writer.WriteLine('.content{flex:1;padding:1px 8px;white-space:pre-wrap;word-break:break-all;overflow-wrap:break-word}')
-                    $writer.WriteLine('.add{background:#1b3d1b}.add .sym{color:#4caf50}')
-                    $writer.WriteLine('.del{background:#3d1b1b}.del .sym{color:#f44336}')
-                    $writer.WriteLine('.ctx{background:#252526}')
-                    $writer.WriteLine('.sep{background:#1a1a1a;color:#555;text-align:center;padding:6px;font-style:italic;border:1px dashed #333}')
-                    $writer.WriteLine('</style></head><body>')
-
-                    # Header
-                    $writer.WriteLine('<div class="header">')
-                    $writer.WriteLine('<h2>File Comparison</h2>')
-                    $writer.WriteLine("<div class='info'><b>Original:</b> $($script:CompareResults.File1Path)</div>")
-                    $writer.WriteLine("<div class='info'><b>Modified:</b> $($script:CompareResults.File2Path)</div>")
-                    $writer.WriteLine('</div>')
-                    $writer.WriteLine('<div class="stats" id="stats">Computing diff...</div>')
-                    $writer.WriteLine('<div id="progress">Comparing files...</div>')
-                    $writer.WriteLine('<div id="diff"></div>')
-
-                    # Output file data as JSON
-                    $writer.WriteLine('<script>')
-                    $writer.WriteLine('const file1=' + ($file1Lines | ConvertTo-Json -Compress -Depth 1) + ';')
-                    $writer.WriteLine('const file2=' + ($file2Lines | ConvertTo-Json -Compress -Depth 1) + ';')
-
-                    # JavaScript diff algorithm and renderer
+                    $writer.WriteLine(@"
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>$file1Name ↔ $file2Name</title>
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#c9d1d9;--text2:#8b949e;--add-bg:#12261e;--add-border:#238636;--add-text:#3fb950;--del-bg:#2d1b1b;--del-border:#da3633;--del-text:#f85149;--highlight-add:#033a16;--highlight-del:#67060c}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+.toolbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:20px;position:sticky;top:0;z-index:100}
+.toolbar h1{font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px}
+.toolbar h1 svg{width:20px;height:20px;fill:var(--text)}
+.files{font-size:13px;color:var(--text2);flex:1}
+.files b{color:var(--text);font-weight:500}
+.stats{display:flex;gap:12px;font-size:13px}
+.stat{padding:4px 12px;border-radius:20px;font-weight:500}
+.stat-add{background:var(--add-bg);color:var(--add-text);border:1px solid var(--add-border)}
+.stat-del{background:var(--del-bg);color:var(--del-text);border:1px solid var(--del-border)}
+.stat-eq{background:var(--bg3);color:var(--text2);border:1px solid var(--border)}
+.controls{display:flex;gap:8px;align-items:center}
+.btn{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:4px}
+.btn:hover{background:var(--border)}
+.btn.active{background:#238636;border-color:#238636}
+.nav-info{font-size:12px;color:var(--text2);min-width:80px;text-align:center}
+#progress{padding:40px;text-align:center;color:var(--text2)}
+.spinner{border:3px solid var(--bg3);border-top:3px solid #58a6ff;border-radius:50%;width:30px;height:30px;animation:spin 1s linear infinite;margin:0 auto 15px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#diff{font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px}
+.hunk{border:1px solid var(--border);margin:16px;border-radius:6px;overflow:hidden}
+.hunk-header{background:var(--bg2);padding:8px 16px;color:var(--text2);font-size:12px;border-bottom:1px solid var(--border)}
+.row{display:flex;min-height:20px}
+.ln{width:50px;padding:0 8px;text-align:right;color:var(--text2);background:var(--bg2);flex-shrink:0;user-select:none;border-right:1px solid var(--border);font-size:11px;line-height:20px}
+.code{flex:1;padding:0 12px;white-space:pre-wrap;word-break:break-all;line-height:20px;tab-size:4}
+.row-add{background:var(--add-bg)}.row-add .ln{background:#0d2818;color:var(--add-text)}
+.row-del{background:var(--del-bg)}.row-del .ln{background:#2a1515;color:var(--del-text)}
+.row-ctx{background:var(--bg)}
+.row-add .code::before{content:'+';color:var(--add-text);margin-right:8px;font-weight:bold}
+.row-del .code::before{content:'−';color:var(--del-text);margin-right:8px;font-weight:bold}
+.row-ctx .code::before{content:' ';margin-right:8px}
+.hl-add{background:var(--highlight-add);padding:1px 0;border-radius:2px}
+.hl-del{background:var(--highlight-del);padding:1px 0;border-radius:2px}
+.change-marker{position:absolute;left:0;width:4px;height:100%;background:#58a6ff}
+.side{display:flex;width:100%}
+.side .panel{flex:1;border-right:1px solid var(--border)}
+.side .panel:last-child{border-right:none}
+.side .panel-header{background:var(--bg2);padding:8px 12px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:500}
+.side .row{border-bottom:1px solid var(--border)}
+.side .row:last-child{border-bottom:none}
+.empty-panel{background:var(--bg);min-height:20px}
+.current-change{box-shadow:inset 4px 0 0 #58a6ff}
+</style></head><body>
+<div class="toolbar">
+<h1><svg viewBox="0 0 16 16"><path d="M8.75 1.75V5H12a.75.75 0 010 1.5H8.75v3.25a.75.75 0 01-1.5 0V6.5H4a.75.75 0 010-1.5h3.25V1.75a.75.75 0 011.5 0zM4 13h8a.75.75 0 010 1.5H4a.75.75 0 010-1.5z"/></svg>Diff</h1>
+<div class="files"><b>$file1Name</b> → <b>$file2Name</b></div>
+<div class="stats" id="stats"></div>
+<div class="controls">
+<button class="btn" onclick="prevChange()" title="Previous change (↑)">▲ Prev</button>
+<span class="nav-info" id="navInfo">-/-</span>
+<button class="btn" onclick="nextChange()" title="Next change (↓)">▼ Next</button>
+<button class="btn" id="btnView" onclick="toggleView()">Side-by-Side</button>
+</div>
+</div>
+<div id="progress"><div class="spinner"></div>Computing differences...</div>
+<div id="diff"></div>
+<script>
+const f1=$($file1Lines | ConvertTo-Json -Compress -Depth 1);
+const f2=$($file2Lines | ConvertTo-Json -Compress -Depth 1);
+"@)
                     $writer.WriteLine(@'
-const CTX=5; // context lines
+const CTX=4;
+let diffs=[],hunks=[],curHunk=0,viewMode='unified';
 
-function diff(){
-  const m=file1.length, n=file2.length;
-  const match1=new Array(m).fill(-1); // file1[i] matched to file2[match1[i]]
-  const match2=new Array(n).fill(-1); // file2[j] matched to file1[match2[j]]
-
-  // Pass 1: Match lines at same position (fast path for similar files)
-  const minLen=Math.min(m,n);
-  for(let i=0;i<minLen;i++){
-    if(file1[i]===file2[i]){match1[i]=i;match2[i]=i;}
-  }
-
-  // Pass 2: Hash unmatched file2 lines
-  const hash2={};
-  for(let j=0;j<n;j++){
-    if(match2[j]<0){
-      const h=file2[j];
-      if(!hash2[h])hash2[h]=[];
-      hash2[h].push(j);
-    }
-  }
-
-  // Pass 3: Match remaining file1 lines via hash
-  for(let i=0;i<m;i++){
-    if(match1[i]>=0)continue;
-    const h=file1[i];
-    if(hash2[h]){
-      for(let k=0;k<hash2[h].length;k++){
-        const j=hash2[h][k];
-        if(match2[j]<0){
-          match1[i]=j;match2[j]=i;
-          hash2[h].splice(k,1);
-          break;
-        }
-      }
-    }
-  }
-
-  // Build diff list
-  const diffs=[];
-  let i=0,j=0;
+function computeDiff(){
+  const m=f1.length,n=f2.length;
+  const m1=new Int32Array(m).fill(-1),m2=new Int32Array(n).fill(-1);
+  // Pass 1: same position
+  for(let i=0;i<Math.min(m,n);i++)if(f1[i]===f2[i]){m1[i]=i;m2[i]=i;}
+  // Pass 2: hash remaining
+  const h2=new Map();
+  for(let j=0;j<n;j++)if(m2[j]<0){const k=f2[j];if(!h2.has(k))h2.set(k,[]);h2.get(k).push(j);}
+  for(let i=0;i<m;i++){if(m1[i]>=0)continue;const arr=h2.get(f1[i]);if(arr){for(let k=0;k<arr.length;k++){const j=arr[k];if(m2[j]<0){m1[i]=j;m2[j]=i;arr.splice(k,1);break;}}}}
+  // Build diffs
+  const d=[];let i=0,j=0;
   while(i<m||j<n){
-    if(i<m&&match1[i]>=0&&match1[i]===j){
-      diffs.push({t:'=',i1:i,i2:j});i++;j++;
-    }else if(i<m&&match1[i]<0){
-      diffs.push({t:'-',i1:i,i2:-1});i++;
-    }else if(j<n&&match2[j]<0){
-      diffs.push({t:'+',i1:-1,i2:j});j++;
-    }else{
-      // Both matched but not to each other - output as change
-      if(i<m&&j<n){
-        diffs.push({t:'-',i1:i,i2:-1});i++;
-        diffs.push({t:'+',i1:-1,i2:j});j++;
-      }else if(i<m){i++;}else{j++;}
-    }
+    if(i<m&&m1[i]>=0&&m1[i]===j){d.push({t:'=',i1:i,i2:j});i++;j++;}
+    else if(i<m&&m1[i]<0){d.push({t:'-',i1:i,i2:-1});i++;}
+    else if(j<n&&m2[j]<0){d.push({t:'+',i1:-1,i2:j});j++;}
+    else{if(i<m){d.push({t:'-',i1:i,i2:-1});i++;}if(j<n){d.push({t:'+',i1:-1,i2:j});j++;}}
   }
-  return diffs;
+  return d;
 }
 
-function render(diffs){
-  // Find which indices to show (changes + context)
-  const show=new Set();
-  for(let i=0;i<diffs.length;i++){
-    if(diffs[i].t!=='='){
-      for(let k=Math.max(0,i-CTX);k<=Math.min(diffs.length-1,i+CTX);k++)show.add(k);
-    }
-  }
-
-  // Count stats
-  let added=0,removed=0,unchanged=0;
-  diffs.forEach(d=>{if(d.t==='+')added++;else if(d.t==='-')removed++;else unchanged++;});
-
-  document.getElementById('stats').innerHTML=
-    `<div class="stat stat-add"><b>+${added}</b> Added</div>`+
-    `<div class="stat stat-del"><b>-${removed}</b> Removed</div>`+
-    `<div class="stat stat-unch"><b>${unchanged}</b> Unchanged</div>`;
-
-  // Render rows
-  let html='';
-  let lastShown=-2;
-  for(let i=0;i<diffs.length;i++){
+function buildHunks(d){
+  const h=[];let show=new Set();
+  for(let i=0;i<d.length;i++)if(d[i].t!=='=')for(let k=Math.max(0,i-CTX);k<=Math.min(d.length-1,i+CTX);k++)show.add(k);
+  let hunk=null,lastI=-99;
+  for(let i=0;i<d.length;i++){
     if(!show.has(i))continue;
-    if(lastShown>=0&&i-lastShown>1){
-      html+=`<div class="sep">··· ${i-lastShown-1} unchanged lines ···</div>`;
-    }
-    lastShown=i;
-    const d=diffs[i];
-    const ln1=d.i1>=0?(d.i1+1):'';
-    const ln2=d.i2>=0?(d.i2+1):'';
-    const content=d.t==='+'?esc(file2[d.i2]):d.i1>=0?esc(file1[d.i1]):'';
-    const cls=d.t==='+'?'add':d.t==='-'?'del':'ctx';
-    const sym=d.t==='+'?'+':d.t==='-'?'−':'';
-    html+=`<div class="row ${cls}"><div class="ln">${ln1}</div><div class="ln">${ln2}</div><div class="sym">${sym}</div><div class="content">${content}</div></div>`;
+    if(i-lastI>1&&hunk){h.push(hunk);hunk=null;}
+    if(!hunk)hunk={start:i,lines:[],startLine1:d[i].i1>=0?d[i].i1+1:'?',startLine2:d[i].i2>=0?d[i].i2+1:'?'};
+    hunk.lines.push(d[i]);
+    lastI=i;
   }
-  document.getElementById('diff').innerHTML=html;
-  document.getElementById('progress').style.display='none';
+  if(hunk)h.push(hunk);
+  return h;
 }
 
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-// Run diff after page loads
+function renderUnified(){
+  let html='';
+  hunks.forEach((h,hi)=>{
+    html+=`<div class="hunk" id="hunk${hi}"><div class="hunk-header">@@ Lines ${h.startLine1} / ${h.startLine2} @@</div>`;
+    h.lines.forEach(d=>{
+      const ln1=d.i1>=0?d.i1+1:'',ln2=d.i2>=0?d.i2+1:'';
+      const cls=d.t==='+'?'row-add':d.t==='-'?'row-del':'row-ctx';
+      const txt=d.t==='+'?esc(f2[d.i2]):d.i1>=0?esc(f1[d.i1]):'';
+      html+=`<div class="row ${cls}"><div class="ln">${ln1}</div><div class="ln">${ln2}</div><div class="code">${txt}</div></div>`;
+    });
+    html+='</div>';
+  });
+  document.getElementById('diff').innerHTML=html||'<div style="padding:40px;text-align:center;color:var(--text2)">Files are identical</div>';
+}
+
+function renderSideBySide(){
+  let html='';
+  hunks.forEach((h,hi)=>{
+    html+=`<div class="hunk" id="hunk${hi}"><div class="hunk-header">@@ Lines ${h.startLine1} / ${h.startLine2} @@</div><div class="side"><div class="panel"><div class="panel-header">Original</div>`;
+    // Left panel
+    h.lines.forEach(d=>{
+      if(d.t==='+'){html+=`<div class="row empty-panel"></div>`;}
+      else{const ln=d.i1>=0?d.i1+1:'';const cls=d.t==='-'?'row-del':'row-ctx';html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${esc(f1[d.i1])}</div></div>`;}
+    });
+    html+=`</div><div class="panel"><div class="panel-header">Modified</div>`;
+    // Right panel
+    h.lines.forEach(d=>{
+      if(d.t==='-'){html+=`<div class="row empty-panel"></div>`;}
+      else{const ln=d.i2>=0?d.i2+1:'';const cls=d.t==='+'?'row-add':'row-ctx';html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${esc(f2[d.i2])}</div></div>`;}
+    });
+    html+=`</div></div></div>`;
+  });
+  document.getElementById('diff').innerHTML=html||'<div style="padding:40px;text-align:center;color:var(--text2)">Files are identical</div>';
+}
+
+function render(){viewMode==='unified'?renderUnified():renderSideBySide();updateNav();}
+function toggleView(){viewMode=viewMode==='unified'?'side':'unified';document.getElementById('btnView').textContent=viewMode==='unified'?'Side-by-Side':'Unified';render();}
+function updateNav(){document.getElementById('navInfo').textContent=hunks.length?`${curHunk+1}/${hunks.length}`:'0/0';}
+function goToHunk(i){if(hunks.length===0)return;curHunk=Math.max(0,Math.min(hunks.length-1,i));document.querySelectorAll('.hunk').forEach((e,j)=>e.classList.toggle('current-change',j===curHunk));document.getElementById('hunk'+curHunk)?.scrollIntoView({behavior:'smooth',block:'center'});updateNav();}
+function nextChange(){goToHunk(curHunk+1);}
+function prevChange(){goToHunk(curHunk-1);}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='j'){nextChange();e.preventDefault();}if(e.key==='ArrowUp'||e.key==='k'){prevChange();e.preventDefault();}});
+
 setTimeout(()=>{
-  document.getElementById('progress').textContent='Running diff algorithm...';
-  setTimeout(()=>{
-    const diffs=diff();
-    document.getElementById('progress').textContent='Rendering results...';
-    setTimeout(()=>render(diffs),10);
-  },10);
-},10);
+  diffs=computeDiff();
+  hunks=buildHunks(diffs);
+  let add=0,del=0,eq=0;diffs.forEach(d=>{if(d.t==='+')add++;else if(d.t==='-')del++;else eq++;});
+  document.getElementById('stats').innerHTML=`<span class="stat stat-add">+${add}</span><span class="stat stat-del">−${del}</span><span class="stat stat-eq">${eq} unchanged</span>`;
+  document.getElementById('progress').style.display='none';
+  render();
+  if(hunks.length)goToHunk(0);
+},50);
 </script></body></html>
 '@)
                     $writer.Close()
