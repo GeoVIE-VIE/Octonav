@@ -4159,13 +4159,39 @@ $btnExportDiff.Add_Click({
             switch ($extension) {
                 ".html" {
                     # Generate interactive HTML with JavaScript controls
-                    # Build JavaScript data structure - SKIP UNCHANGED LINES for performance
+                    # Show changes WITH CONTEXT (5 lines before/after each change, like git diff)
                     # Use ArrayList for O(1) append instead of array += O(n)
-                    $jsDataList = New-Object System.Collections.ArrayList
-                    foreach ($diff in $script:CompareResults.Differences) {
-                        # Skip unchanged lines - only include actual changes
-                        if ($diff.Type -eq "Unchanged") { continue }
+                    $contextLines = 5
+                    $totalDiffs = $script:CompareResults.Differences.Count
 
+                    # First pass: mark which indices should be included (changes + context)
+                    $includeIndex = New-Object System.Collections.Generic.HashSet[int]
+                    for ($i = 0; $i -lt $totalDiffs; $i++) {
+                        if ($script:CompareResults.Differences[$i].Type -ne "Unchanged") {
+                            # Include this change and surrounding context
+                            $start = [Math]::Max(0, $i - $contextLines)
+                            $end = [Math]::Min($totalDiffs - 1, $i + $contextLines)
+                            for ($j = $start; $j -le $end; $j++) {
+                                [void]$includeIndex.Add($j)
+                            }
+                        }
+                    }
+
+                    # Second pass: build JSON with context, adding separators for gaps
+                    $jsDataList = New-Object System.Collections.ArrayList
+                    $lastIncludedIndex = -2
+
+                    for ($i = 0; $i -lt $totalDiffs; $i++) {
+                        if (-not $includeIndex.Contains($i)) { continue }
+
+                        # Add separator if there's a gap (skipped lines)
+                        if ($lastIncludedIndex -ge 0 -and ($i - $lastIncludedIndex) -gt 1) {
+                            $skipped = $i - $lastIncludedIndex - 1
+                            [void]$jsDataList.Add("{Type:'Separator',LeftLineNum:'',RightLineNum:'',LeftContent:'... $skipped lines hidden ...',RightContent:'... $skipped lines hidden ...',LeftInline:'',RightInline:''}")
+                        }
+                        $lastIncludedIndex = $i
+
+                        $diff = $script:CompareResults.Differences[$i]
                         $leftLineNum = if ($diff.Line1) { $diff.Line1.ToString().PadLeft(5) } else { "     " }
                         $rightLineNum = if ($diff.Line2) { $diff.Line2.ToString().PadLeft(5) } else { "     " }
                         $leftContent = (ConvertTo-HtmlEncoded -Text $diff.Content1) -replace "'", "\\'" -replace "`n", "\\n" -replace "`r", ""
@@ -4239,6 +4265,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("        .sidebyside-table td { padding: 2px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; width: 50%; }")
                     [void]$htmlFile.AppendLine("        .sidebyside-table thead th { background: #4682B4; color: white; padding: 10px; text-align: left; }")
                     [void]$htmlFile.AppendLine("        .sidebyside-table thead th:last-child { background: #2E8B57; }")
+                    [void]$htmlFile.AppendLine("        .separator { background: #e9ecef; color: #6c757d; text-align: center; font-style: italic; border-top: 2px dashed #adb5bd; border-bottom: 2px dashed #adb5bd; }")
                     [void]$htmlFile.AppendLine("    </style>")
                     [void]$htmlFile.AppendLine("</head>")
                     [void]$htmlFile.AppendLine("<body>")
@@ -4260,7 +4287,7 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("        <label for=`"viewUnified`">Unified</label>")
                     [void]$htmlFile.AppendLine("        <input type=`"radio`" id=`"viewSideBySide`" name=`"viewMode`" value=`"sidebyside`">")
                     [void]$htmlFile.AppendLine("        <label for=`"viewSideBySide`">Side-by-Side</label>")
-                    [void]$htmlFile.AppendLine("        <span style=`"margin-left: 30px; color: #666;`">(Showing changes only)</span>")
+                    [void]$htmlFile.AppendLine("        <span style=`"margin-left: 30px; color: #666;`">(Changes with 5 lines of context)</span>")
                     [void]$htmlFile.AppendLine("    </div>")
                     [void]$htmlFile.AppendLine("    <div class=`"diff-container`">")
                     [void]$htmlFile.AppendLine("        <div class=`"diff-header`">Comparison Details</div>")
@@ -4277,7 +4304,12 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("        function renderUnified(container) {")
                     [void]$htmlFile.AppendLine("            const div = document.createElement('div');")
                     [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
-                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Modified') {")
+                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Separator') {")
+                    [void]$htmlFile.AppendLine("                    const sepDiv = document.createElement('div');")
+                    [void]$htmlFile.AppendLine("                    sepDiv.className = 'diff-line separator';")
+                    [void]$htmlFile.AppendLine('                    sepDiv.innerHTML = diff.LeftContent;')
+                    [void]$htmlFile.AppendLine("                    div.appendChild(sepDiv);")
+                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Modified') {")
                     [void]$htmlFile.AppendLine("                    const oldDiv = document.createElement('div');")
                     [void]$htmlFile.AppendLine("                    oldDiv.className = 'diff-line modified';")
                     [void]$htmlFile.AppendLine("                    const oldContent = diff.LeftInline || diff.LeftContent;")
@@ -4312,7 +4344,9 @@ $btnExportDiff.Add_Click({
                     [void]$htmlFile.AppendLine("            const tbody = document.createElement('tbody');")
                     [void]$htmlFile.AppendLine("            diffData.forEach(diff => {")
                     [void]$htmlFile.AppendLine("                const row = document.createElement('tr');")
-                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Added') {")
+                    [void]$htmlFile.AppendLine("                if (diff.Type === 'Separator') {")
+                    [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td colspan="2" class="diff-line separator">'' + diff.LeftContent + ''</td>'';')
+                    [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Added') {")
                     [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line added-light"><span class="line-num">     </span><span class="line-content">  </span></td><td class="diff-line added"><span class="line-num">'' + diff.RightLineNum + ''</span><span class="line-content">+ '' + diff.RightContent + ''</span></td>'';')
                     [void]$htmlFile.AppendLine("                } else if (diff.Type === 'Removed') {")
                     [void]$htmlFile.AppendLine('                    row.innerHTML = ''<td class="diff-line removed"><span class="line-num">'' + diff.LeftLineNum + ''</span><span class="line-content">- '' + diff.LeftContent + ''</span></td><td class="diff-line removed-light"><span class="line-num">     </span><span class="line-content">  </span></td>'';')
