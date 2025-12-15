@@ -735,6 +735,184 @@ $script:EmbeddedResources = @{
     # Example: 'template.rdox' = 'base64encodedcontent...'
 }
 
+# ============================================
+# PORT CONFIGURATION TEMPLATES
+# ============================================
+# Placeholders: {{INTERFACE}}, {{DESCRIPTION}}, {{VLAN}}, {{OLD_VLAN}}, {{VOICE_VLAN}}, {{STATUS}}
+# {{STATUS}} = "no shutdown" or "shutdown" based on Enable checkbox
+# {{OLD_VLAN}} only used by Vendor X
+
+$script:PortTemplates = @{
+    "X" = @{
+        "Type1" = @"
+! ========================================
+! Vendor X - Type1 Configuration
+! Edit this template with your 60 lines
+! ========================================
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport mode access
+ switchport access vlan {{VLAN}}
+ switchport voice vlan {{VOICE_VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type2" = @"
+! Vendor X - Type2 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ switchport voice vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type3" = @"
+! Vendor X - Type3 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type4" = @"
+! Vendor X - Type4 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type5" = @"
+! Vendor X - Type5 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ switchport voice vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type6" = @"
+! Vendor X - Type6 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+    }
+    "Y" = @{
+        "Type1" = @"
+! ========================================
+! Vendor Y - Type1 Configuration
+! Edit this template with your 60 lines
+! ========================================
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ voice-vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type2" = @"
+! Vendor Y - Type2 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type3" = @"
+! Vendor Y - Type3 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type4" = @"
+! Vendor Y - Type4 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type5" = @"
+! Vendor Y - Type5 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ voice-vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type6" = @"
+! Vendor Y - Type6 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+    }
+    "Z" = @{
+        "Type1" = @"
+! ========================================
+! Vendor Z - Type1 Configuration
+! Edit this template with your 60 lines
+! ========================================
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+set voice-vlan {{VOICE_VLAN}}
+{{STATUS}}
+!
+"@
+        "Type2" = @"
+! Vendor Z - Type2 Configuration
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+{{STATUS}}
+!
+"@
+        "Type3" = @"
+! Vendor Z - Type3 Configuration
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+{{STATUS}}
+!
+"@
+        "Type4" = @"
+! Vendor Z - Type4 Configuration
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+{{STATUS}}
+!
+"@
+        "Type5" = @"
+! Vendor Z - Type5 Configuration
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+set voice-vlan {{VOICE_VLAN}}
+{{STATUS}}
+!
+"@
+        "Type6" = @"
+! Vendor Z - Type6 Configuration
+set interface {{INTERFACE}}
+set description "{{DESCRIPTION}}"
+set vlan {{VLAN}}
+{{STATUS}}
+!
+"@
+    }
+}
+
 function Get-EmbeddedResourceList {
     <#
     .SYNOPSIS
@@ -3442,6 +3620,256 @@ setTimeout(()=>{
             $btnExportDiff.Text = "Compare && Export HTML"
         }
     }
+})
+
+# ============================================
+# TAB 5: PORT CONFIGURATION
+# ============================================
+
+$tab5 = New-Object System.Windows.Forms.TabPage
+$tab5.Text = "Port Config"
+$tab5.BackColor = [System.Drawing.Color]::White
+$tab5.Padding = New-Object System.Windows.Forms.Padding(10)
+$tabControl.Controls.Add($tab5)
+
+# Main panel for Port Config
+$portConfigPanel = New-Object System.Windows.Forms.Panel
+$portConfigPanel.Dock = "Fill"
+$tab5.Controls.Add($portConfigPanel)
+
+# Input GroupBox
+$portInputGroup = New-Object System.Windows.Forms.GroupBox
+$portInputGroup.Text = "Configuration Parameters"
+$portInputGroup.Location = New-Object System.Drawing.Point(10, 10)
+$portInputGroup.Size = New-Object System.Drawing.Size(400, 280)
+$portInputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$portConfigPanel.Controls.Add($portInputGroup)
+
+# Vendor Label & ComboBox
+$lblVendor = New-Object System.Windows.Forms.Label
+$lblVendor.Text = "Vendor:"
+$lblVendor.Location = New-Object System.Drawing.Point(15, 30)
+$lblVendor.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblVendor)
+
+$cboVendor = New-Object System.Windows.Forms.ComboBox
+$cboVendor.Location = New-Object System.Drawing.Point(120, 27)
+$cboVendor.Size = New-Object System.Drawing.Size(250, 25)
+$cboVendor.DropDownStyle = "DropDownList"
+$cboVendor.Items.AddRange(@("X", "Y", "Z"))
+$cboVendor.SelectedIndex = 0
+$portInputGroup.Controls.Add($cboVendor)
+
+# Port Type Label & ComboBox
+$lblPortType = New-Object System.Windows.Forms.Label
+$lblPortType.Text = "Port Type:"
+$lblPortType.Location = New-Object System.Drawing.Point(15, 60)
+$lblPortType.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblPortType)
+
+$cboPortType = New-Object System.Windows.Forms.ComboBox
+$cboPortType.Location = New-Object System.Drawing.Point(120, 57)
+$cboPortType.Size = New-Object System.Drawing.Size(250, 25)
+$cboPortType.DropDownStyle = "DropDownList"
+$cboPortType.Items.AddRange(@("Type1", "Type2", "Type3", "Type4", "Type5", "Type6"))
+$cboPortType.SelectedIndex = 0
+$portInputGroup.Controls.Add($cboPortType)
+
+# Interface Label & TextBox
+$lblInterface = New-Object System.Windows.Forms.Label
+$lblInterface.Text = "Interface:"
+$lblInterface.Location = New-Object System.Drawing.Point(15, 90)
+$lblInterface.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblInterface)
+
+$txtInterface = New-Object System.Windows.Forms.TextBox
+$txtInterface.Location = New-Object System.Drawing.Point(120, 87)
+$txtInterface.Size = New-Object System.Drawing.Size(250, 25)
+$txtInterface.Text = "Gi1/0/1"
+$portInputGroup.Controls.Add($txtInterface)
+
+# Description Label & TextBox
+$lblPortDesc = New-Object System.Windows.Forms.Label
+$lblPortDesc.Text = "Description:"
+$lblPortDesc.Location = New-Object System.Drawing.Point(15, 120)
+$lblPortDesc.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblPortDesc)
+
+$txtPortDesc = New-Object System.Windows.Forms.TextBox
+$txtPortDesc.Location = New-Object System.Drawing.Point(120, 117)
+$txtPortDesc.Size = New-Object System.Drawing.Size(250, 25)
+$txtPortDesc.Text = "User PC"
+$portInputGroup.Controls.Add($txtPortDesc)
+
+# VLAN Label & TextBox
+$lblVlan = New-Object System.Windows.Forms.Label
+$lblVlan.Text = "VLAN:"
+$lblVlan.Location = New-Object System.Drawing.Point(15, 150)
+$lblVlan.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblVlan)
+
+$txtVlan = New-Object System.Windows.Forms.TextBox
+$txtVlan.Location = New-Object System.Drawing.Point(120, 147)
+$txtVlan.Size = New-Object System.Drawing.Size(250, 25)
+$txtVlan.Text = "100"
+$portInputGroup.Controls.Add($txtVlan)
+
+# Old VLAN Label & TextBox (for Vendor X only)
+$lblOldVlan = New-Object System.Windows.Forms.Label
+$lblOldVlan.Text = "Old VLAN:"
+$lblOldVlan.Location = New-Object System.Drawing.Point(15, 180)
+$lblOldVlan.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblOldVlan)
+
+$txtOldVlan = New-Object System.Windows.Forms.TextBox
+$txtOldVlan.Location = New-Object System.Drawing.Point(120, 177)
+$txtOldVlan.Size = New-Object System.Drawing.Size(250, 25)
+$txtOldVlan.Text = ""
+$portInputGroup.Controls.Add($txtOldVlan)
+
+# Voice VLAN Label & TextBox
+$lblVoiceVlan = New-Object System.Windows.Forms.Label
+$lblVoiceVlan.Text = "Voice VLAN:"
+$lblVoiceVlan.Location = New-Object System.Drawing.Point(15, 210)
+$lblVoiceVlan.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblVoiceVlan)
+
+$txtVoiceVlan = New-Object System.Windows.Forms.TextBox
+$txtVoiceVlan.Location = New-Object System.Drawing.Point(120, 207)
+$txtVoiceVlan.Size = New-Object System.Drawing.Size(250, 25)
+$txtVoiceVlan.Text = "200"
+$portInputGroup.Controls.Add($txtVoiceVlan)
+
+# Enable Port Checkbox
+$chkEnablePort = New-Object System.Windows.Forms.CheckBox
+$chkEnablePort.Text = "Enable Port (no shutdown)"
+$chkEnablePort.Location = New-Object System.Drawing.Point(120, 240)
+$chkEnablePort.Size = New-Object System.Drawing.Size(200, 25)
+$chkEnablePort.Checked = $true
+$portInputGroup.Controls.Add($chkEnablePort)
+
+# Show/Hide Old VLAN based on vendor selection
+$cboVendor.Add_SelectedIndexChanged({
+    $isVendorX = $cboVendor.SelectedItem -eq "X"
+    $lblOldVlan.Visible = $isVendorX
+    $txtOldVlan.Visible = $isVendorX
+})
+
+# Generate Button
+$btnGenerateConfig = New-Object System.Windows.Forms.Button
+$btnGenerateConfig.Text = "Generate Config"
+$btnGenerateConfig.Location = New-Object System.Drawing.Point(10, 300)
+$btnGenerateConfig.Size = New-Object System.Drawing.Size(130, 35)
+$btnGenerateConfig.FlatStyle = "Flat"
+$btnGenerateConfig.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$btnGenerateConfig.ForeColor = [System.Drawing.Color]::White
+$btnGenerateConfig.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnGenerateConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
+$portConfigPanel.Controls.Add($btnGenerateConfig)
+
+# Copy Button
+$btnCopyConfig = New-Object System.Windows.Forms.Button
+$btnCopyConfig.Text = "Copy to Clipboard"
+$btnCopyConfig.Location = New-Object System.Drawing.Point(150, 300)
+$btnCopyConfig.Size = New-Object System.Drawing.Size(130, 35)
+$btnCopyConfig.FlatStyle = "Flat"
+$btnCopyConfig.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
+$btnCopyConfig.ForeColor = [System.Drawing.Color]::White
+$btnCopyConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnCopyConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
+$portConfigPanel.Controls.Add($btnCopyConfig)
+
+# Clear Button
+$btnClearConfig = New-Object System.Windows.Forms.Button
+$btnClearConfig.Text = "Clear"
+$btnClearConfig.Location = New-Object System.Drawing.Point(290, 300)
+$btnClearConfig.Size = New-Object System.Drawing.Size(80, 35)
+$btnClearConfig.FlatStyle = "Flat"
+$btnClearConfig.BackColor = [System.Drawing.Color]::FromArgb(178, 34, 34)
+$btnClearConfig.ForeColor = [System.Drawing.Color]::White
+$btnClearConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnClearConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
+$portConfigPanel.Controls.Add($btnClearConfig)
+
+# Output GroupBox
+$portOutputGroup = New-Object System.Windows.Forms.GroupBox
+$portOutputGroup.Text = "Generated Configuration"
+$portOutputGroup.Location = New-Object System.Drawing.Point(420, 10)
+$portOutputGroup.Size = New-Object System.Drawing.Size(500, 600)
+$portOutputGroup.Anchor = "Top,Bottom,Left,Right"
+$portOutputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$portConfigPanel.Controls.Add($portOutputGroup)
+
+# Output TextBox
+$txtConfigOutput = New-Object System.Windows.Forms.TextBox
+$txtConfigOutput.Location = New-Object System.Drawing.Point(10, 25)
+$txtConfigOutput.Size = New-Object System.Drawing.Size(480, 565)
+$txtConfigOutput.Multiline = $true
+$txtConfigOutput.ScrollBars = "Both"
+$txtConfigOutput.WordWrap = $false
+$txtConfigOutput.Font = New-Object System.Drawing.Font("Consolas", 10)
+$txtConfigOutput.Anchor = "Top,Bottom,Left,Right"
+$portOutputGroup.Controls.Add($txtConfigOutput)
+
+# Generate Config Click Handler
+$btnGenerateConfig.Add_Click({
+    $vendor = $cboVendor.SelectedItem
+    $portType = $cboPortType.SelectedItem
+
+    if (-not $script:PortTemplates.ContainsKey($vendor)) {
+        [System.Windows.Forms.MessageBox]::Show("Vendor '$vendor' not found in templates.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    if (-not $script:PortTemplates[$vendor].ContainsKey($portType)) {
+        [System.Windows.Forms.MessageBox]::Show("Port type '$portType' not found for vendor '$vendor'.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    $template = $script:PortTemplates[$vendor][$portType]
+    $status = if ($chkEnablePort.Checked) { "no shutdown" } else { "shutdown" }
+
+    # Replace placeholders
+    $config = $template
+    $config = $config -replace '\{\{INTERFACE\}\}', $txtInterface.Text
+    $config = $config -replace '\{\{DESCRIPTION\}\}', $txtPortDesc.Text
+    $config = $config -replace '\{\{VLAN\}\}', $txtVlan.Text
+    $config = $config -replace '\{\{OLD_VLAN\}\}', $txtOldVlan.Text
+    $config = $config -replace '\{\{VOICE_VLAN\}\}', $txtVoiceVlan.Text
+    $config = $config -replace '\{\{STATUS\}\}', $status
+
+    $txtConfigOutput.Text = $config
+
+    if ($script:StatusBarPanels) {
+        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Config generated for $vendor - $portType"
+    }
+})
+
+# Copy to Clipboard Click Handler
+$btnCopyConfig.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtConfigOutput.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("No configuration to copy. Generate a config first.", "Nothing to Copy", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+
+    [System.Windows.Forms.Clipboard]::SetText($txtConfigOutput.Text)
+
+    if ($script:StatusBarPanels) {
+        Set-StatusMessage -StatusBar $script:StatusBarPanels -Message "Configuration copied to clipboard"
+    }
+
+    [System.Windows.Forms.MessageBox]::Show("Configuration copied to clipboard!", "Copied", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+})
+
+# Clear Click Handler
+$btnClearConfig.Add_Click({
+    $txtInterface.Text = "Gi1/0/1"
+    $txtPortDesc.Text = "User PC"
+    $txtVlan.Text = "100"
+    $txtOldVlan.Text = ""
+    $txtVoiceVlan.Text = "200"
+    $chkEnablePort.Checked = $true
+    $txtConfigOutput.Text = ""
 })
 
 # ============================================
