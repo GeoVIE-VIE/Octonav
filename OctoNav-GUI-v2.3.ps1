@@ -3454,6 +3454,442 @@ function Compare-FilesContent {
     }
 }
 
+function New-HtmlDiffReport {
+    <#
+    .SYNOPSIS
+        Generates a professional HTML diff report and opens it in the default browser
+    #>
+    param(
+        [hashtable]$Results,
+        [switch]$OpenInBrowser = $true
+    )
+
+    $file1Name = [System.IO.Path]::GetFileName($Results.File1Path)
+    $file2Name = [System.IO.Path]::GetFileName($Results.File2Path)
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+    # Build the diff rows for side-by-side view
+    $diffRowsHtml = ""
+    foreach ($diff in $Results.Differences) {
+        $leftLineNum = if ($diff.Line1) { $diff.Line1 } else { "" }
+        $rightLineNum = if ($diff.Line2) { $diff.Line2 } else { "" }
+        $leftContent = [System.Web.HttpUtility]::HtmlEncode($diff.Content1)
+        $rightContent = [System.Web.HttpUtility]::HtmlEncode($diff.Content2)
+
+        switch ($diff.Type) {
+            "Added" {
+                $diffRowsHtml += @"
+                <tr class="diff-row added">
+                    <td class="line-num empty"></td>
+                    <td class="line-content empty"></td>
+                    <td class="gutter">+</td>
+                    <td class="line-num">$rightLineNum</td>
+                    <td class="line-content added">$rightContent</td>
+                </tr>
+"@
+            }
+            "Removed" {
+                $diffRowsHtml += @"
+                <tr class="diff-row removed">
+                    <td class="line-num">$leftLineNum</td>
+                    <td class="line-content removed">$leftContent</td>
+                    <td class="gutter">-</td>
+                    <td class="line-num empty"></td>
+                    <td class="line-content empty"></td>
+                </tr>
+"@
+            }
+            "Unchanged" {
+                $diffRowsHtml += @"
+                <tr class="diff-row unchanged">
+                    <td class="line-num">$leftLineNum</td>
+                    <td class="line-content">$leftContent</td>
+                    <td class="gutter">&nbsp;</td>
+                    <td class="line-num">$rightLineNum</td>
+                    <td class="line-content">$rightContent</td>
+                </tr>
+"@
+            }
+        }
+    }
+
+    # Build unified view rows
+    $unifiedRowsHtml = ""
+    foreach ($diff in $Results.Differences) {
+        $lineNum = if ($diff.Line1) { $diff.Line1 } elseif ($diff.Line2) { $diff.Line2 } else { "" }
+        $content = if ($diff.Type -eq "Added") {
+            [System.Web.HttpUtility]::HtmlEncode($diff.Content2)
+        } else {
+            [System.Web.HttpUtility]::HtmlEncode($diff.Content1)
+        }
+
+        $prefix = switch ($diff.Type) { "Added" { "+" } "Removed" { "-" } default { " " } }
+        $rowClass = $diff.Type.ToLower()
+
+        $unifiedRowsHtml += @"
+                <tr class="diff-row $rowClass">
+                    <td class="line-num">$lineNum</td>
+                    <td class="gutter">$prefix</td>
+                    <td class="line-content $rowClass">$content</td>
+                </tr>
+"@
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Comparison - $file1Name vs $file2Name</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
+            border-radius: 12px;
+            padding: 25px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: 1px solid #2a2a4a;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #00d4ff;
+        }
+        .file-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+        .file-box {
+            background: rgba(255,255,255,0.05);
+            padding: 12px 15px;
+            border-radius: 8px;
+            border-left: 4px solid;
+        }
+        .file-box.original { border-color: #ff6b6b; }
+        .file-box.modified { border-color: #51cf66; }
+        .file-box label { font-size: 11px; text-transform: uppercase; color: #888; display: block; margin-bottom: 4px; }
+        .file-box span { font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; word-break: break-all; }
+        .timestamp { font-size: 12px; color: #666; }
+
+        /* Stats */
+        .stats {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            padding: 15px 25px;
+            text-align: center;
+            min-width: 120px;
+            border: 1px solid transparent;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .stat-card.added { border-color: #51cf66; background: rgba(81, 207, 102, 0.1); }
+        .stat-card.removed { border-color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
+        .stat-card.unchanged { border-color: #868e96; background: rgba(134, 142, 150, 0.1); }
+        .stat-card.total { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
+        .stat-number { font-size: 28px; font-weight: 700; }
+        .stat-card.added .stat-number { color: #51cf66; }
+        .stat-card.removed .stat-number { color: #ff6b6b; }
+        .stat-card.unchanged .stat-number { color: #868e96; }
+        .stat-card.total .stat-number { color: #00d4ff; }
+        .stat-label { font-size: 12px; color: #888; margin-top: 5px; text-transform: uppercase; }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary { background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; }
+        .btn-primary:hover { background: #00d4ff; color: #0f3460; }
+        .btn-primary.active { background: #00d4ff; color: #0f3460; }
+        .btn-secondary { background: rgba(255,255,255,0.1); color: #ccc; border: 1px solid #444; }
+        .btn-secondary:hover { background: rgba(255,255,255,0.15); }
+        .btn-secondary.active { background: #51cf66; color: #1a1a2e; border-color: #51cf66; }
+        .spacer { flex: 1; }
+        .filter-label { color: #888; font-size: 13px; }
+
+        /* Diff Table */
+        .diff-container {
+            background: #1e1e2e;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: 1px solid #2a2a4a;
+        }
+        .diff-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .diff-table th {
+            background: #0f3460;
+            color: #00d4ff;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .diff-row { border-bottom: 1px solid #2a2a4a; }
+        .diff-row:hover { background: rgba(255,255,255,0.03); }
+        .diff-row.added { background: rgba(81, 207, 102, 0.08); }
+        .diff-row.removed { background: rgba(255, 107, 107, 0.08); }
+        .diff-row.added:hover { background: rgba(81, 207, 102, 0.15); }
+        .diff-row.removed:hover { background: rgba(255, 107, 107, 0.15); }
+
+        .line-num {
+            width: 50px;
+            min-width: 50px;
+            padding: 4px 10px;
+            text-align: right;
+            color: #555;
+            background: rgba(0,0,0,0.2);
+            user-select: none;
+            font-size: 12px;
+        }
+        .line-num.empty { background: rgba(0,0,0,0.1); }
+        .gutter {
+            width: 30px;
+            min-width: 30px;
+            text-align: center;
+            font-weight: bold;
+            background: rgba(0,0,0,0.15);
+            color: #666;
+        }
+        .diff-row.added .gutter { color: #51cf66; }
+        .diff-row.removed .gutter { color: #ff6b6b; }
+
+        .line-content {
+            padding: 4px 15px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .line-content.added { color: #51cf66; }
+        .line-content.removed { color: #ff6b6b; text-decoration: line-through; text-decoration-color: rgba(255,107,107,0.4); }
+        .line-content.empty { background: rgba(0,0,0,0.1); }
+
+        /* Side-by-side specific */
+        #sideBySide .line-content { width: 50%; }
+        #sideBySide th.left-header { border-right: 2px solid #ff6b6b; }
+        #sideBySide th.right-header { border-left: 2px solid #51cf66; }
+
+        /* Unified specific */
+        #unified { display: none; }
+        #unified .line-content { width: auto; }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .file-info { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 768px) {
+            .stats { justify-content: center; }
+            .controls { justify-content: center; }
+        }
+
+        /* Scrollable diff area */
+        .diff-scroll {
+            max-height: calc(100vh - 350px);
+            overflow: auto;
+        }
+        .diff-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+        .diff-scroll::-webkit-scrollbar-track { background: #1a1a2e; }
+        .diff-scroll::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 5px; }
+        .diff-scroll::-webkit-scrollbar-thumb:hover { background: #4a4a6a; }
+
+        /* Print styles */
+        @media print {
+            body { background: white; color: black; }
+            .header { background: #f0f0f0; color: black; border: 1px solid #ccc; }
+            .header h1 { color: #333; }
+            .btn { display: none; }
+            .controls { display: none; }
+            .diff-container { border: 1px solid #ccc; }
+            .diff-row.added { background: #e6ffe6; }
+            .diff-row.removed { background: #ffe6e6; }
+            .line-content.added { color: #006600; }
+            .line-content.removed { color: #cc0000; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>File Comparison Report</h1>
+            <div class="file-info">
+                <div class="file-box original">
+                    <label>Original File</label>
+                    <span>$($Results.File1Path)</span>
+                </div>
+                <div class="file-box modified">
+                    <label>Modified File</label>
+                    <span>$($Results.File2Path)</span>
+                </div>
+            </div>
+            <div class="timestamp">Generated: $timestamp | OctoNav File Comparison Tool</div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card added">
+                <div class="stat-number">+$($Results.Added)</div>
+                <div class="stat-label">Added</div>
+            </div>
+            <div class="stat-card removed">
+                <div class="stat-number">-$($Results.Removed)</div>
+                <div class="stat-label">Removed</div>
+            </div>
+            <div class="stat-card unchanged">
+                <div class="stat-number">$($Results.Unchanged)</div>
+                <div class="stat-label">Unchanged</div>
+            </div>
+            <div class="stat-card total">
+                <div class="stat-number">$($Results.Differences.Count)</div>
+                <div class="stat-label">Total Lines</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-primary active" id="btnSideBySide" onclick="showSideBySide()">Side by Side</button>
+            <button class="btn btn-primary" id="btnUnified" onclick="showUnified()">Unified View</button>
+            <div class="spacer"></div>
+            <span class="filter-label">Show:</span>
+            <button class="btn btn-secondary active" id="btnAll" onclick="filterRows('all')">All</button>
+            <button class="btn btn-secondary" id="btnChanges" onclick="filterRows('changes')">Changes Only</button>
+            <button class="btn btn-secondary" id="btnAdded" onclick="filterRows('added')">Added</button>
+            <button class="btn btn-secondary" id="btnRemoved" onclick="filterRows('removed')">Removed</button>
+        </div>
+
+        <div class="diff-container">
+            <div class="diff-scroll">
+                <!-- Side by Side View -->
+                <table class="diff-table" id="sideBySide">
+                    <thead>
+                        <tr>
+                            <th class="left-header" colspan="2">$file1Name (Original)</th>
+                            <th></th>
+                            <th class="right-header" colspan="2">$file2Name (Modified)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+$diffRowsHtml
+                    </tbody>
+                </table>
+
+                <!-- Unified View -->
+                <table class="diff-table" id="unified">
+                    <thead>
+                        <tr>
+                            <th style="width:50px">Line</th>
+                            <th style="width:30px"></th>
+                            <th>Content</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+$unifiedRowsHtml
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showSideBySide() {
+            document.getElementById('sideBySide').style.display = 'table';
+            document.getElementById('unified').style.display = 'none';
+            document.getElementById('btnSideBySide').classList.add('active');
+            document.getElementById('btnUnified').classList.remove('active');
+        }
+
+        function showUnified() {
+            document.getElementById('sideBySide').style.display = 'none';
+            document.getElementById('unified').style.display = 'table';
+            document.getElementById('btnSideBySide').classList.remove('active');
+            document.getElementById('btnUnified').classList.add('active');
+        }
+
+        function filterRows(filter) {
+            // Update button states
+            document.querySelectorAll('.controls .btn-secondary').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('btn' + filter.charAt(0).toUpperCase() + filter.slice(1)).classList.add('active');
+
+            // Filter both tables
+            const tables = ['sideBySide', 'unified'];
+            tables.forEach(tableId => {
+                const rows = document.querySelectorAll('#' + tableId + ' tbody tr');
+                rows.forEach(row => {
+                    const isAdded = row.classList.contains('added');
+                    const isRemoved = row.classList.contains('removed');
+                    const isUnchanged = row.classList.contains('unchanged');
+
+                    let show = false;
+                    switch(filter) {
+                        case 'all': show = true; break;
+                        case 'changes': show = isAdded || isRemoved; break;
+                        case 'added': show = isAdded; break;
+                        case 'removed': show = isRemoved; break;
+                    }
+                    row.style.display = show ? '' : 'none';
+                });
+            });
+        }
+    </script>
+</body>
+</html>
+"@
+
+    # Save to temp file
+    $tempFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "OctoNav_Diff_$(Get-Date -Format 'yyyyMMdd_HHmmss').html")
+    $html | Out-File -FilePath $tempFile -Encoding UTF8
+
+    if ($OpenInBrowser) {
+        Start-Process $tempFile
+    }
+
+    return $tempFile
+}
+
 function Show-ComparisonResults {
     <#
     .SYNOPSIS
