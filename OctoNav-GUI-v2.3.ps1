@@ -3649,11 +3649,13 @@ $tab5 = New-Object System.Windows.Forms.TabPage
 $tab5.Text = "Port Config"
 $tab5.BackColor = [System.Drawing.Color]::White
 $tab5.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab5.AutoScroll = $true
 $tabControl.Controls.Add($tab5)
 
 # Main panel for Port Config
 $portConfigPanel = New-Object System.Windows.Forms.Panel
 $portConfigPanel.Dock = "Fill"
+$portConfigPanel.AutoScroll = $true
 $tab5.Controls.Add($portConfigPanel)
 
 # Input GroupBox
