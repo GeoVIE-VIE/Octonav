@@ -3823,13 +3823,44 @@ $txtVoiceVlan.Size = New-Object System.Drawing.Size(250, 25)
 $txtVoiceVlan.Text = "200"
 $portInputGroup.Controls.Add($txtVoiceVlan)
 
-# Enable Port Checkbox
-$chkEnablePort = New-Object System.Windows.Forms.CheckBox
-$chkEnablePort.Text = "Enable Port (no shutdown)"
-$chkEnablePort.Location = New-Object System.Drawing.Point(120, 240)
-$chkEnablePort.Size = New-Object System.Drawing.Size(200, 25)
-$chkEnablePort.Checked = $true
-$portInputGroup.Controls.Add($chkEnablePort)
+# Port Status Configuration
+$lblPortStatus = New-Object System.Windows.Forms.Label
+$lblPortStatus.Text = "Port Status:"
+$lblPortStatus.Location = New-Object System.Drawing.Point(15, 243)
+$lblPortStatus.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblPortStatus)
+
+$cboPortStatus = New-Object System.Windows.Forms.ComboBox
+$cboPortStatus.Location = New-Object System.Drawing.Point(120, 240)
+$cboPortStatus.Size = New-Object System.Drawing.Size(250, 25)
+$cboPortStatus.DropDownStyle = "DropDownList"
+$cboPortStatus.Items.AddRange(@("Enabled", "Disabled"))
+$cboPortStatus.SelectedIndex = 0
+$portInputGroup.Controls.Add($cboPortStatus)
+
+$lblEnabledCmd = New-Object System.Windows.Forms.Label
+$lblEnabledCmd.Text = "Enabled Cmd:"
+$lblEnabledCmd.Location = New-Object System.Drawing.Point(15, 273)
+$lblEnabledCmd.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblEnabledCmd)
+
+$txtEnabledCmd = New-Object System.Windows.Forms.TextBox
+$txtEnabledCmd.Location = New-Object System.Drawing.Point(120, 270)
+$txtEnabledCmd.Size = New-Object System.Drawing.Size(250, 25)
+$txtEnabledCmd.Text = "no shutdown"
+$portInputGroup.Controls.Add($txtEnabledCmd)
+
+$lblDisabledCmd = New-Object System.Windows.Forms.Label
+$lblDisabledCmd.Text = "Disabled Cmd:"
+$lblDisabledCmd.Location = New-Object System.Drawing.Point(15, 303)
+$lblDisabledCmd.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblDisabledCmd)
+
+$txtDisabledCmd = New-Object System.Windows.Forms.TextBox
+$txtDisabledCmd.Location = New-Object System.Drawing.Point(120, 300)
+$txtDisabledCmd.Size = New-Object System.Drawing.Size(250, 25)
+$txtDisabledCmd.Text = "shutdown"
+$portInputGroup.Controls.Add($txtDisabledCmd)
 
 # Update Port Type dropdown and Old VLAN visibility when vendor changes
 $cboVendor.Add_SelectedIndexChanged({
@@ -3959,7 +3990,7 @@ $btnGenerateConfig.Add_Click({
     }
 
     $template = $script:PortTemplates[$vendor][$portType]
-    $status = if ($chkEnablePort.Checked) { "no shutdown" } else { "shutdown" }
+    $status = if ($cboPortStatus.SelectedItem -eq "Enabled") { $txtEnabledCmd.Text } else { $txtDisabledCmd.Text }
 
     # Replace placeholders
     $config = $template
@@ -4000,7 +4031,9 @@ $btnClearConfig.Add_Click({
     $txtVlan.Text = "100"
     $txtOldVlan.Text = ""
     $txtVoiceVlan.Text = "200"
-    $chkEnablePort.Checked = $true
+    $cboPortStatus.SelectedIndex = 0
+    $txtEnabledCmd.Text = "no shutdown"
+    $txtDisabledCmd.Text = "shutdown"
     $txtConfigOutput.Text = ""
 })
 
