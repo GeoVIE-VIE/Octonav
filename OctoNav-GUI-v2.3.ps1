@@ -3681,17 +3681,9 @@ setTimeout(()=>{
 $tab5 = New-Object System.Windows.Forms.TabPage
 $tab5.Text = "Port Config"
 $tab5.BackColor = [System.Drawing.Color]::White
-$tab5.Padding = New-Object System.Windows.Forms.Padding(5)
+$tab5.AutoScroll = $true
+$tab5.AutoScrollMinSize = New-Object System.Drawing.Size(950, 650)
 $tabControl.Controls.Add($tab5)
-
-# Main panel for Port Config
-$portConfigPanel = New-Object System.Windows.Forms.Panel
-$portConfigPanel.Location = New-Object System.Drawing.Point(0, 0)
-$portConfigPanel.Size = New-Object System.Drawing.Size(1200, 800)
-$portConfigPanel.Anchor = "Top,Bottom,Left,Right"
-$portConfigPanel.AutoScroll = $true
-$portConfigPanel.AutoScrollMinSize = New-Object System.Drawing.Size(950, 650)
-$tab5.Controls.Add($portConfigPanel)
 
 # Input GroupBox
 $portInputGroup = New-Object System.Windows.Forms.GroupBox
@@ -3699,7 +3691,7 @@ $portInputGroup.Text = "Configuration Parameters"
 $portInputGroup.Location = New-Object System.Drawing.Point(10, 10)
 $portInputGroup.Size = New-Object System.Drawing.Size(400, 280)
 $portInputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$portConfigPanel.Controls.Add($portInputGroup)
+$tab5.Controls.Add($portInputGroup)
 
 # Vendor Label & ComboBox
 $lblVendor = New-Object System.Windows.Forms.Label
@@ -3821,7 +3813,7 @@ $btnGenerateConfig.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
 $btnGenerateConfig.ForeColor = [System.Drawing.Color]::White
 $btnGenerateConfig.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $btnGenerateConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
-$portConfigPanel.Controls.Add($btnGenerateConfig)
+$tab5.Controls.Add($btnGenerateConfig)
 
 # Copy Button
 $btnCopyConfig = New-Object System.Windows.Forms.Button
@@ -3833,7 +3825,7 @@ $btnCopyConfig.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
 $btnCopyConfig.ForeColor = [System.Drawing.Color]::White
 $btnCopyConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnCopyConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
-$portConfigPanel.Controls.Add($btnCopyConfig)
+$tab5.Controls.Add($btnCopyConfig)
 
 # Clear Button
 $btnClearConfig = New-Object System.Windows.Forms.Button
@@ -3845,7 +3837,7 @@ $btnClearConfig.BackColor = [System.Drawing.Color]::FromArgb(178, 34, 34)
 $btnClearConfig.ForeColor = [System.Drawing.Color]::White
 $btnClearConfig.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnClearConfig.Cursor = [System.Windows.Forms.Cursors]::Hand
-$portConfigPanel.Controls.Add($btnClearConfig)
+$tab5.Controls.Add($btnClearConfig)
 
 # Save Template Button
 $btnSaveTemplate = New-Object System.Windows.Forms.Button
@@ -3857,7 +3849,7 @@ $btnSaveTemplate.BackColor = [System.Drawing.Color]::FromArgb(128, 0, 128)
 $btnSaveTemplate.ForeColor = [System.Drawing.Color]::White
 $btnSaveTemplate.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnSaveTemplate.Cursor = [System.Windows.Forms.Cursors]::Hand
-$portConfigPanel.Controls.Add($btnSaveTemplate)
+$tab5.Controls.Add($btnSaveTemplate)
 
 # Load Template Button
 $btnLoadTemplate = New-Object System.Windows.Forms.Button
@@ -3869,7 +3861,7 @@ $btnLoadTemplate.BackColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
 $btnLoadTemplate.ForeColor = [System.Drawing.Color]::White
 $btnLoadTemplate.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $btnLoadTemplate.Cursor = [System.Windows.Forms.Cursors]::Hand
-$portConfigPanel.Controls.Add($btnLoadTemplate)
+$tab5.Controls.Add($btnLoadTemplate)
 
 # Placeholder help label
 $lblPlaceholderHelp = New-Object System.Windows.Forms.Label
@@ -3878,17 +3870,16 @@ $lblPlaceholderHelp.Location = New-Object System.Drawing.Point(10, 390)
 $lblPlaceholderHelp.Size = New-Object System.Drawing.Size(400, 20)
 $lblPlaceholderHelp.Font = New-Object System.Drawing.Font("Consolas", 8)
 $lblPlaceholderHelp.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
-$portConfigPanel.Controls.Add($lblPlaceholderHelp)
+$tab5.Controls.Add($lblPlaceholderHelp)
 
 # Output GroupBox - now for both output AND template editing
 $portOutputGroup = New-Object System.Windows.Forms.GroupBox
 $portOutputGroup.Text = "Generated Configuration / Template Editor (paste template with {{PLACEHOLDERS}})"
 $portOutputGroup.Location = New-Object System.Drawing.Point(420, 10)
 $portOutputGroup.Size = New-Object System.Drawing.Size(500, 600)
-$portOutputGroup.Anchor = "Top,Bottom,Left,Right"
 $portOutputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $portOutputGroup.Padding = New-Object System.Windows.Forms.Padding(5, 20, 5, 5)
-$portConfigPanel.Controls.Add($portOutputGroup)
+$tab5.Controls.Add($portOutputGroup)
 
 # Output TextBox - Use Dock=Fill for proper scrolling
 $txtConfigOutput = New-Object System.Windows.Forms.TextBox
