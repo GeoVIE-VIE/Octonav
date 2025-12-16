@@ -3823,13 +3823,18 @@ $txtVoiceVlan.Size = New-Object System.Drawing.Size(250, 25)
 $txtVoiceVlan.Text = "200"
 $portInputGroup.Controls.Add($txtVoiceVlan)
 
-# Enable Port Checkbox
-$chkEnablePort = New-Object System.Windows.Forms.CheckBox
-$chkEnablePort.Text = "Enable Port (no shutdown)"
-$chkEnablePort.Location = New-Object System.Drawing.Point(120, 240)
-$chkEnablePort.Size = New-Object System.Drawing.Size(200, 25)
-$chkEnablePort.Checked = $true
-$portInputGroup.Controls.Add($chkEnablePort)
+# Status Label & TextBox
+$lblStatus = New-Object System.Windows.Forms.Label
+$lblStatus.Text = "Status:"
+$lblStatus.Location = New-Object System.Drawing.Point(15, 243)
+$lblStatus.Size = New-Object System.Drawing.Size(100, 20)
+$portInputGroup.Controls.Add($lblStatus)
+
+$txtStatus = New-Object System.Windows.Forms.TextBox
+$txtStatus.Location = New-Object System.Drawing.Point(120, 240)
+$txtStatus.Size = New-Object System.Drawing.Size(250, 25)
+$txtStatus.Text = "no shutdown"
+$portInputGroup.Controls.Add($txtStatus)
 
 # Update Port Type dropdown and Old VLAN visibility when vendor changes
 $cboVendor.Add_SelectedIndexChanged({
@@ -3959,7 +3964,6 @@ $btnGenerateConfig.Add_Click({
     }
 
     $template = $script:PortTemplates[$vendor][$portType]
-    $status = if ($chkEnablePort.Checked) { "no shutdown" } else { "shutdown" }
 
     # Replace placeholders
     $config = $template
@@ -3968,7 +3972,7 @@ $btnGenerateConfig.Add_Click({
     $config = $config -replace '\{\{VLAN\}\}', $txtVlan.Text
     $config = $config -replace '\{\{OLD_VLAN\}\}', $txtOldVlan.Text
     $config = $config -replace '\{\{VOICE_VLAN\}\}', $txtVoiceVlan.Text
-    $config = $config -replace '\{\{STATUS\}\}', $status
+    $config = $config -replace '\{\{STATUS\}\}', $txtStatus.Text
 
     $txtConfigOutput.Text = $config
 
@@ -4000,7 +4004,7 @@ $btnClearConfig.Add_Click({
     $txtVlan.Text = "100"
     $txtOldVlan.Text = ""
     $txtVoiceVlan.Text = "200"
-    $chkEnablePort.Checked = $true
+    $txtStatus.Text = "no shutdown"
     $txtConfigOutput.Text = ""
 })
 
