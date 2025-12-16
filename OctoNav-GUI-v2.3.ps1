@@ -4163,6 +4163,186 @@ $btnLoadTemplate.Add_Click({
 })
 
 # ============================================
+# TAB 6: HELP GUIDE
+# ============================================
+
+$tab6 = New-Object System.Windows.Forms.TabPage
+$tab6.Text = "Help Guide"
+$tab6.BackColor = [System.Drawing.Color]::White
+$tab6.AutoScroll = $true
+$tabControl.Controls.Add($tab6)
+
+# Help content panel
+$helpPanel = New-Object System.Windows.Forms.Panel
+$helpPanel.Location = New-Object System.Drawing.Point(10, 10)
+$helpPanel.Size = New-Object System.Drawing.Size(950, 600)
+$helpPanel.AutoScroll = $true
+$tab6.Controls.Add($helpPanel)
+
+# Title
+$helpTitle = New-Object System.Windows.Forms.Label
+$helpTitle.Text = "HOW TO USE PORT CONFIG"
+$helpTitle.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+$helpTitle.Location = New-Object System.Drawing.Point(10, 10)
+$helpTitle.Size = New-Object System.Drawing.Size(900, 40)
+$helpTitle.ForeColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$helpPanel.Controls.Add($helpTitle)
+
+# Help RichTextBox
+$helpText = New-Object System.Windows.Forms.RichTextBox
+$helpText.Location = New-Object System.Drawing.Point(10, 60)
+$helpText.Size = New-Object System.Drawing.Size(910, 520)
+$helpText.ReadOnly = $true
+$helpText.BorderStyle = "None"
+$helpText.BackColor = [System.Drawing.Color]::White
+$helpText.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+$helpPanel.Controls.Add($helpText)
+
+# Build help content
+$helpContent = @"
+QUICK START - GENERATING A PORT CONFIG
+=====================================
+
+Follow these 4 simple steps:
+
+STEP 1: Pick your switch type
+   • Cisco = Regular Cisco switches (uses 'switchport' commands)
+   • ICX/FCX 8030 = Brocade ICX or FCX 8030 switches
+   • FCX 7.3 = Older FCX switches running 7.3 firmware (has Old VLAN field)
+
+STEP 2: Pick a Port Type
+   • Type1 through Type6 are different template styles
+   • Each type has slightly different commands
+   • Pick whichever matches what you need
+
+STEP 3: Fill in the boxes
+   • Interface: The port name (example: Gi1/0/1 or e1/1/1)
+   • Description: What's plugged into this port (example: "John's PC")
+   • VLAN: The data VLAN number (example: 100)
+   • Voice VLAN: The voice VLAN for phones (example: 200)
+   • Old VLAN: Only shows for FCX 7.3 - the previous VLAN before migration
+   • Status: Type "no shutdown" to enable, or "shutdown" to disable
+
+STEP 4: Click "Generate Config"
+   • Your config appears in the big text box on the right
+   • Click "Copy to Clipboard" to copy it
+   • Paste it into your switch!
+
+
+WHAT ARE PLACEHOLDERS?
+======================
+
+Templates use {{PLACEHOLDERS}} that get replaced with your values:
+
+   {{INTERFACE}}    →  Gets replaced with what you type in "Interface"
+   {{DESCRIPTION}}  →  Gets replaced with what you type in "Description"
+   {{VLAN}}         →  Gets replaced with the VLAN number
+   {{VOICE_VLAN}}   →  Gets replaced with the Voice VLAN number
+   {{OLD_VLAN}}     →  Gets replaced with the Old VLAN (FCX 7.3 only)
+   {{STATUS}}       →  Gets replaced with "no shutdown" or "shutdown"
+
+
+SAVING YOUR OWN TEMPLATES
+=========================
+
+Want to save a custom template? Here's how:
+
+1. Paste your config into the output text box (the big box on the right)
+
+2. Replace the actual values with placeholders:
+   BEFORE: interface Gi1/0/5
+   AFTER:  interface {{INTERFACE}}
+
+3. Select the Vendor and Port Type you want to save it as
+
+4. Click "Save as Template"
+
+Your template is now saved! It will load automatically next time.
+
+
+LOADING A TEMPLATE
+==================
+
+Click "Load Template" to see the raw template with {{PLACEHOLDERS}}.
+This is useful if you want to edit an existing template.
+
+
+EXAMPLE: CONFIGURING A USER PORT
+================================
+
+Let's say John needs his PC connected to VLAN 100 with a phone on VLAN 200:
+
+   Vendor:       Cisco
+   Port Type:    Type1
+   Interface:    Gi1/0/15
+   Description:  John Smith - IT Dept
+   VLAN:         100
+   Voice VLAN:   200
+   Status:       no shutdown
+
+Click "Generate Config" and you get:
+
+   interface Gi1/0/15
+    description John Smith - IT Dept
+    switchport mode access
+    switchport access vlan 100
+    switchport voice vlan 200
+    no shutdown
+
+
+TROUBLESHOOTING
+===============
+
+"Port Type dropdown is empty"
+   → The templates for that vendor aren't loaded. Check if PortTemplates.json
+     exists in the same folder as the script.
+
+"Generate Config does nothing"
+   → Make sure you selected both a Vendor AND a Port Type.
+
+"My custom template disappeared"
+   → Templates are saved to PortTemplates.json. Make sure the script has
+     permission to write to that folder.
+
+"I see {{PLACEHOLDER}} in my output"
+   → You have a typo in your template. Placeholders must be spelled exactly:
+     {{INTERFACE}}, {{DESCRIPTION}}, {{VLAN}}, {{VOICE_VLAN}}, {{OLD_VLAN}}, {{STATUS}}
+
+
+VENDOR DIFFERENCES
+==================
+
+CISCO:
+   • Uses: switchport access vlan, switchport voice vlan
+   • Interface format: Gi1/0/1, Fa0/1, Te1/1/1
+
+ICX/FCX 8030:
+   • Uses: untagged vlan, dual-mode (for voice)
+   • Interface format: e1/1/1, e1/1/2
+
+FCX 7.3:
+   • Same as ICX/FCX 8030 but has OLD_VLAN field
+   • Old VLAN is used for migration notes/comments
+
+
+TIPS
+====
+
+• You can create as many Port Types as you want - just pick an unused
+  Type number or create a new name when saving.
+
+• The "Clear" button resets all fields to defaults.
+
+• Templates are stored in PortTemplates.json - you can edit this file
+  directly if you're comfortable with JSON.
+
+• Each vendor can have completely different templates - customize them
+  to match your network standards!
+"@
+
+$helpText.Text = $helpContent
+
+# ============================================
 # CREATE TAB CONTROL
 # ============================================
 
