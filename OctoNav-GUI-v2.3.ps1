@@ -500,6 +500,7 @@ $script:dhcpPowerShell = $null
 $script:dhcpAsyncResult = $null
 $script:dhcpTimer = $null
 $script:dhcpLogsDisplayed = 0
+$script:selectedScopeNames = @{}  # Track selected scope names across filter changes
 
 # Initialize global variables for Network Configuration
 $script:TargetAdapter = $null
@@ -2284,6 +2285,10 @@ $script:btnRefreshScopeCache.Add_Click({
         # Store all scopes for filtering
         $script:allDHCPScopes = $scopes
 
+        # Clear previous selections and filter when refreshing cache
+        $script:selectedScopeNames.Clear()
+        $script:txtScopeListFilter.Text = ""
+
         # Populate list with display names
         $script:lstDHCPScopes.Items.Clear()
         foreach ($scope in $scopes) {
@@ -2306,10 +2311,23 @@ $script:btnRefreshScopeCache.Add_Click({
     }
 })
 
-# Event Handler: Scope List Filter (real-time filtering)
+# Event Handler: Scope List Filter (real-time filtering with selection persistence)
 $script:txtScopeListFilter.Add_TextChanged({
     if (-not $script:allDHCPScopes) {
         return
+    }
+
+    # Save currently checked items before clearing
+    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+        $itemName = $script:lstDHCPScopes.Items[$i].ToString()
+        if ($script:lstDHCPScopes.GetItemChecked($i)) {
+            $script:selectedScopeNames[$itemName] = $true
+        } else {
+            # Only remove if unchecked while visible (user explicitly unchecked it)
+            if ($script:selectedScopeNames.ContainsKey($itemName)) {
+                $script:selectedScopeNames.Remove($itemName)
+            }
+        }
     }
 
     $filterText = $script:txtScopeListFilter.Text.Trim()
@@ -2330,22 +2348,44 @@ $script:txtScopeListFilter.Add_TextChanged({
         }
     }
 
-    # Update visible count label
-    $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
-})
-
-# Event Handler: Select All Scopes
-$btnSelectAllScopes.Add_Click({
+    # Restore checked state for items that were previously selected
     for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-        $script:lstDHCPScopes.SetItemChecked($i, $true)
+        $itemName = $script:lstDHCPScopes.Items[$i].ToString()
+        if ($script:selectedScopeNames.ContainsKey($itemName)) {
+            $script:lstDHCPScopes.SetItemChecked($i, $true)
+        }
+    }
+
+    # Update visible count label and show selected count
+    $selectedCount = $script:selectedScopeNames.Count
+    if ($selectedCount -gt 0) {
+        $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible, $selectedCount selected)"
+    } else {
+        $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
     }
 })
 
-# Event Handler: Select None Scopes
+# Event Handler: Select All Scopes (visible items only)
+$btnSelectAllScopes.Add_Click({
+    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+        $script:lstDHCPScopes.SetItemChecked($i, $true)
+        # Track in backing variable
+        $itemName = $script:lstDHCPScopes.Items[$i].ToString()
+        $script:selectedScopeNames[$itemName] = $true
+    }
+    # Update label
+    $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible, $($script:selectedScopeNames.Count) selected)"
+})
+
+# Event Handler: Select None Scopes (clears ALL selections, not just visible)
 $btnSelectNoneScopes.Add_Click({
     for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
         $script:lstDHCPScopes.SetItemChecked($i, $false)
     }
+    # Clear ALL tracked selections
+    $script:selectedScopeNames.Clear()
+    # Update label
+    $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
 })
 
 # Event Handler: Auto-match Scope IDs when checking a scope
