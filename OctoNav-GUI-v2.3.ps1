@@ -4200,144 +4200,276 @@ $helpPanel.Controls.Add($helpText)
 
 # Build help content
 $helpContent = @"
-QUICK START - GENERATING A PORT CONFIG
-=====================================
-
-Follow these 4 simple steps:
-
-STEP 1: Pick your switch type
-   • Cisco = Regular Cisco switches (uses 'switchport' commands)
-   • ICX/FCX 8030 = Brocade ICX or FCX 8030 switches
-   • FCX 7.3 = Older FCX switches running 7.3 firmware (has Old VLAN field)
-
-STEP 2: Pick a Port Type
-   • Type1 through Type6 are different template styles
-   • Each type has slightly different commands
-   • Pick whichever matches what you need
-
-STEP 3: Fill in the boxes
-   • Interface: The port name (example: Gi1/0/1 or e1/1/1)
-   • Description: What's plugged into this port (example: "John's PC")
-   • VLAN: The data VLAN number (example: 100)
-   • Voice VLAN: The voice VLAN for phones (example: 200)
-   • Old VLAN: Only shows for FCX 7.3 - the previous VLAN before migration
-   • Status: Type "no shutdown" to enable, or "shutdown" to disable
-
-STEP 4: Click "Generate Config"
-   • Your config appears in the big text box on the right
-   • Click "Copy to Clipboard" to copy it
-   • Paste it into your switch!
+═══════════════════════════════════════════════════════════════════════════════
+                              OCTONAV HELP GUIDE
+═══════════════════════════════════════════════════════════════════════════════
 
 
-WHAT ARE PLACEHOLDERS?
-======================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 1: NETWORK CONFIGURATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Templates use {{PLACEHOLDERS}} that get replaced with your values:
+WHAT IT DOES:
+   Changes your computer's IP address. Useful when you need to connect
+   directly to a switch or router for configuration.
 
-   {{INTERFACE}}    →  Gets replaced with what you type in "Interface"
-   {{DESCRIPTION}}  →  Gets replaced with what you type in "Description"
-   {{VLAN}}         →  Gets replaced with the VLAN number
-   {{VOICE_VLAN}}   →  Gets replaced with the Voice VLAN number
-   {{OLD_VLAN}}     →  Gets replaced with the Old VLAN (FCX 7.3 only)
-   {{STATUS}}       →  Gets replaced with "no shutdown" or "shutdown"
-
-
-SAVING YOUR OWN TEMPLATES
-=========================
-
-Want to save a custom template? Here's how:
-
-1. Paste your config into the output text box (the big box on the right)
-
-2. Replace the actual values with placeholders:
-   BEFORE: interface Gi1/0/5
-   AFTER:  interface {{INTERFACE}}
-
-3. Select the Vendor and Port Type you want to save it as
-
-4. Click "Save as Template"
-
-Your template is now saved! It will load automatically next time.
+⚠️  IMPORTANT: You must run OctoNav as Administrator for this tab to work!
+   (Right-click the script → "Run as Administrator")
 
 
-LOADING A TEMPLATE
-==================
+HOW TO USE IT:
 
-Click "Load Template" to see the raw template with {{PLACEHOLDERS}}.
-This is useful if you want to edit an existing template.
+   STEP 1: Click "Find Unidentified Network"
+      • This finds network adapters that aren't connected to your normal network
+      • Usually this is the port you plugged into a switch
 
+   STEP 2: Fill in the IP settings
+      • New IP Address: The IP you want (example: 192.168.1.101)
+      • Gateway: Usually the switch's IP (example: 192.168.1.1)
+      • Prefix Length: Usually 24 (same as subnet mask 255.255.255.0)
 
-EXAMPLE: CONFIGURING A USER PORT
-================================
+   STEP 3: Click "Apply Configuration"
+      • Your network adapter now has the new IP address
+      • You can now access the switch/router at the gateway address
 
-Let's say John needs his PC connected to VLAN 100 with a phone on VLAN 200:
-
-   Vendor:       Cisco
-   Port Type:    Type1
-   Interface:    Gi1/0/15
-   Description:  John Smith - IT Dept
-   VLAN:         100
-   Voice VLAN:   200
-   Status:       no shutdown
-
-Click "Generate Config" and you get:
-
-   interface Gi1/0/15
-    description John Smith - IT Dept
-    switchport mode access
-    switchport access vlan 100
-    switchport voice vlan 200
-    no shutdown
+   STEP 4: When done, click "Restore Defaults"
+      • This sets your adapter back to DHCP (automatic IP)
+      • Your normal network connection will work again
 
 
-TROUBLESHOOTING
-===============
+COMMON SCENARIOS:
 
-"Port Type dropdown is empty"
-   → The templates for that vendor aren't loaded. Check if PortTemplates.json
-     exists in the same folder as the script.
+   "I need to configure a new switch out of the box"
+      1. Plug your laptop into the switch
+      2. Find Unidentified Network
+      3. Set IP to same subnet as switch (check switch manual for default IP)
+      4. Apply Configuration
+      5. Open browser, go to switch IP
+      6. When done, Restore Defaults
 
-"Generate Config does nothing"
-   → Make sure you selected both a Vendor AND a Port Type.
-
-"My custom template disappeared"
-   → Templates are saved to PortTemplates.json. Make sure the script has
-     permission to write to that folder.
-
-"I see {{PLACEHOLDER}} in my output"
-   → You have a typo in your template. Placeholders must be spelled exactly:
-     {{INTERFACE}}, {{DESCRIPTION}}, {{VLAN}}, {{VOICE_VLAN}}, {{OLD_VLAN}}, {{STATUS}}
+   "What IP should I use?"
+      • If switch is 192.168.1.1 → use 192.168.1.100 (same first 3 numbers)
+      • If switch is 10.0.0.1 → use 10.0.0.100
+      • The last number just needs to be different from the switch
 
 
-VENDOR DIFFERENCES
-==================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 2: DHCP STATISTICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CISCO:
-   • Uses: switchport access vlan, switchport voice vlan
-   • Interface format: Gi1/0/1, Fa0/1, Te1/1/1
-
-ICX/FCX 8030:
-   • Uses: untagged vlan, dual-mode (for voice)
-   • Interface format: e1/1/1, e1/1/2
-
-FCX 7.3:
-   • Same as ICX/FCX 8030 but has OLD_VLAN field
-   • Old VLAN is used for migration notes/comments
+WHAT IT DOES:
+   Collects information about DHCP scopes from your Windows DHCP servers.
+   Shows you how full each scope is, what options are set, etc.
 
 
-TIPS
-====
+HOW TO USE IT:
 
-• You can create as many Port Types as you want - just pick an unused
-  Type number or create a new name when saving.
+   STEP 1: Select your DHCP servers
+      • Click "Refresh Server List" to get servers from Active Directory
+      • Check the boxes next to servers you want to query
+      • OR type server names manually (comma-separated)
 
-• The "Clear" button resets all fields to defaults.
+   STEP 2: (Optional) Select specific scopes
+      • Click "Refresh Cache" to load all scopes from selected servers
+      • Use the filter box to find specific scopes
+      • Check the scopes you want, or leave empty for ALL scopes
 
-• Templates are stored in PortTemplates.json - you can edit this file
-  directly if you're comfortable with JSON.
+   STEP 3: Choose what info to collect
+      • Include DNS (Option 6) - shows DNS servers in each scope
+      • Include Option 60 - shows vendor class info
+      • Include Option 43 - shows vendor-specific info
 
-• Each vendor can have completely different templates - customize them
-  to match your network standards!
+   STEP 4: Click "Collect DHCP Statistics"
+      • Wait for it to gather data from all servers
+      • Results appear in a table below
+
+
+WHAT THE RESULTS SHOW:
+   • Scope name and IP range
+   • How many IPs are used vs available
+   • Percentage full (watch for scopes over 80%!)
+   • DNS servers assigned to that scope
+   • Any special options configured
+
+
+TIPS:
+   • If no servers are selected, it queries ALL domain DHCP servers
+   • Use the filter to quickly find scopes by name or IP
+   • Export results to CSV for reporting
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 3: DNA CENTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Connects to Cisco DNA Center to manage network devices.
+   You can view devices, run commands, and perform bulk operations.
+
+
+HOW TO USE IT:
+
+   STEP 1: Connect to DNA Center
+      • Select your DNA Center server from the dropdown
+      • Enter your username and password
+      • Click "Connect"
+      • Wait for "Connected" status
+
+   STEP 2: Load devices
+      • Click "Load Devices"
+      • Wait for the device list to populate
+
+   STEP 3: Filter devices (optional)
+      • Hostname Search: Type part of a hostname to filter
+      • Family: Filter by device type (switches, routers, etc.)
+      • Role: Filter by network role (access, distribution, core)
+      • IP Address: Filter by specific IP or subnet
+
+   STEP 4: Select devices
+      • Check the boxes next to devices you want to work with
+      • Use "Select All (Current Filter)" to check all visible devices
+      • The status bar shows how many are selected
+
+   STEP 5: Run a function
+      • Double-click a function in the TreeView on the left
+      • The function runs on all selected devices
+      • Results appear in the output area
+
+
+AVAILABLE FUNCTIONS:
+   • Get Device Info - basic device details
+   • Get Interfaces - show all interfaces
+   • Get Config - retrieve running config
+   • Command Runner - run CLI commands
+   • And more in the TreeView...
+
+
+TIPS:
+   • Filter first, then Select All - much faster than checking one by one
+   • Use "Reset All" to clear filters and start over
+   • Check the status bar to confirm how many devices are selected
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 4: FILE COMPARE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Compares two text files and shows you what changed.
+   Perfect for comparing switch configs before/after changes.
+
+
+HOW TO USE IT:
+
+   STEP 1: Select the ORIGINAL file
+      • Click "Browse..." next to "Original File"
+      • Pick the BEFORE version (the old config)
+
+   STEP 2: Select the MODIFIED file
+      • Click "Browse..." next to "Modified File"
+      • Pick the AFTER version (the new config)
+
+   STEP 3: Click "Compare & Export HTML"
+      • An HTML file is created and opens in your browser
+      • Green = lines that were ADDED
+      • Red = lines that were REMOVED
+      • Gray = lines that stayed the same
+
+
+BROWSER FEATURES:
+   • Prev/Next buttons - jump between changes
+   • Unified view - see changes inline
+   • Side-by-Side view - see old and new next to each other
+   • Keyboard shortcuts: j/k or arrow keys to navigate
+   • Statistics show total additions, deletions, unchanged
+
+
+OTHER BUTTONS:
+   • Swap Files - switches Original and Modified
+   • Clear - clears both file selections
+
+
+EXAMPLE: COMPARING SWITCH CONFIGS
+
+   1. Before making changes, copy the switch config to "config_before.txt"
+   2. Make your changes on the switch
+   3. Copy the new config to "config_after.txt"
+   4. Use File Compare to see exactly what changed
+   5. Save the HTML for your change documentation!
+
+
+EMBEDDED RESOURCES:
+   At the bottom of this tab, you can export .RDOX files that are
+   packaged with OctoNav. Click "Export to Working Directory" to
+   extract them.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 5: PORT CONFIG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Generates switch port configurations from templates.
+   Fill in the blanks, click Generate, copy to your switch.
+
+
+HOW TO USE IT:
+
+   STEP 1: Pick your switch type
+      • Cisco = Regular Cisco switches (uses 'switchport' commands)
+      • ICX/FCX 8030 = Brocade ICX or FCX 8030 switches
+      • FCX 7.3 = Older FCX switches running 7.3 firmware
+
+   STEP 2: Pick a Port Type
+      • Type1 through Type6 are different template styles
+      • Each type has slightly different commands
+
+   STEP 3: Fill in the boxes
+      • Interface: The port name (example: Gi1/0/1)
+      • Description: What's plugged in (example: "John's PC")
+      • VLAN: The data VLAN number (example: 100)
+      • Voice VLAN: For phones (example: 200)
+      • Status: "no shutdown" to enable, "shutdown" to disable
+
+   STEP 4: Click "Generate Config"
+      • Config appears in the text box on the right
+      • Click "Copy to Clipboard"
+      • Paste into your switch!
+
+
+SAVING CUSTOM TEMPLATES:
+
+   1. Paste your config into the output text box
+   2. Replace values with placeholders:
+      interface Gi1/0/5  →  interface {{INTERFACE}}
+      vlan 100           →  vlan {{VLAN}}
+   3. Select Vendor and Port Type
+   4. Click "Save as Template"
+
+
+PLACEHOLDERS:
+   {{INTERFACE}}    = Port name
+   {{DESCRIPTION}}  = Port description
+   {{VLAN}}         = Data VLAN
+   {{VOICE_VLAN}}   = Voice VLAN
+   {{OLD_VLAN}}     = Old VLAN (FCX 7.3 only)
+   {{STATUS}}       = no shutdown / shutdown
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GENERAL TIPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Run as Administrator for Network Configuration tab to work
+
+• Most tabs have a log/output area at the bottom - check there for errors
+
+• Use the View menu to switch between Light and Dark themes
+
+• Settings are saved automatically when you close the app
+
+• If something isn't working, check the log area for error messages
+
 "@
 
 $helpText.Text = $helpContent
