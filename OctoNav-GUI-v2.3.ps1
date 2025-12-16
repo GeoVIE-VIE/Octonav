@@ -740,13 +740,13 @@ $script:EmbeddedResources = @{
 # ============================================
 # Placeholders: {{INTERFACE}}, {{DESCRIPTION}}, {{VLAN}}, {{OLD_VLAN}}, {{VOICE_VLAN}}, {{STATUS}}
 # {{STATUS}} = "no shutdown" or "shutdown" based on Enable checkbox
-# {{OLD_VLAN}} only used by Vendor X
+# {{OLD_VLAN}} only used by FCX 7.3
 
 $script:PortTemplates = @{
-    "X" = @{
+    "Cisco" = @{
         "Type1" = @"
 ! ========================================
-! Vendor X - Type1 Configuration
+! Cisco - Type1 Configuration
 ! Edit this template with your 60 lines
 ! ========================================
 interface {{INTERFACE}}
@@ -754,160 +754,165 @@ interface {{INTERFACE}}
  switchport mode access
  switchport access vlan {{VLAN}}
  switchport voice vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type2" = @"
+! Cisco - Type2 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ switchport voice vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type3" = @"
+! Cisco - Type3 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type4" = @"
+! Cisco - Type4 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type5" = @"
+! Cisco - Type5 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ switchport voice vlan {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type6" = @"
+! Cisco - Type6 Configuration
+interface {{INTERFACE}}
+ description {{DESCRIPTION}}
+ switchport access vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+    }
+    "ICX/FCX 8030" = @{
+        "Type1" = @"
+! ========================================
+! ICX/FCX 8030 - Type1 Configuration
+! Edit this template with your 60 lines
+! ========================================
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ dual-mode {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type2" = @"
+! ICX/FCX 8030 - Type2 Configuration
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type3" = @"
+! ICX/FCX 8030 - Type3 Configuration
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type4" = @"
+! ICX/FCX 8030 - Type4 Configuration
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type5" = @"
+! ICX/FCX 8030 - Type5 Configuration
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ dual-mode {{VOICE_VLAN}}
+ {{STATUS}}
+!
+"@
+        "Type6" = @"
+! ICX/FCX 8030 - Type6 Configuration
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ {{STATUS}}
+!
+"@
+    }
+    "FCX 7.3" = @{
+        "Type1" = @"
+! ========================================
+! FCX 7.3 - Type1 Configuration
+! Edit this template with your 60 lines
+! ========================================
+interface {{INTERFACE}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ dual-mode {{VOICE_VLAN}}
  ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
 !
 "@
         "Type2" = @"
-! Vendor X - Type2 Configuration
+! FCX 7.3 - Type2 Configuration
 interface {{INTERFACE}}
- description {{DESCRIPTION}}
- switchport access vlan {{VLAN}}
- switchport voice vlan {{VOICE_VLAN}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
 !
 "@
         "Type3" = @"
-! Vendor X - Type3 Configuration
+! FCX 7.3 - Type3 Configuration
 interface {{INTERFACE}}
- description {{DESCRIPTION}}
- switchport access vlan {{VLAN}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
 !
 "@
         "Type4" = @"
-! Vendor X - Type4 Configuration
+! FCX 7.3 - Type4 Configuration
 interface {{INTERFACE}}
- description {{DESCRIPTION}}
- switchport access vlan {{VLAN}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
 !
 "@
         "Type5" = @"
-! Vendor X - Type5 Configuration
+! FCX 7.3 - Type5 Configuration
 interface {{INTERFACE}}
- description {{DESCRIPTION}}
- switchport access vlan {{VLAN}}
- switchport voice vlan {{VOICE_VLAN}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ dual-mode {{VOICE_VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
 !
 "@
         "Type6" = @"
-! Vendor X - Type6 Configuration
+! FCX 7.3 - Type6 Configuration
 interface {{INTERFACE}}
- description {{DESCRIPTION}}
- switchport access vlan {{VLAN}}
+ port-name {{DESCRIPTION}}
+ untagged vlan {{VLAN}}
+ ! Old VLAN was: {{OLD_VLAN}}
  {{STATUS}}
-!
-"@
-    }
-    "Y" = @{
-        "Type1" = @"
-! ========================================
-! Vendor Y - Type1 Configuration
-! Edit this template with your 60 lines
-! ========================================
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- voice-vlan {{VOICE_VLAN}}
- {{STATUS}}
-!
-"@
-        "Type2" = @"
-! Vendor Y - Type2 Configuration
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- {{STATUS}}
-!
-"@
-        "Type3" = @"
-! Vendor Y - Type3 Configuration
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- {{STATUS}}
-!
-"@
-        "Type4" = @"
-! Vendor Y - Type4 Configuration
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- {{STATUS}}
-!
-"@
-        "Type5" = @"
-! Vendor Y - Type5 Configuration
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- voice-vlan {{VOICE_VLAN}}
- {{STATUS}}
-!
-"@
-        "Type6" = @"
-! Vendor Y - Type6 Configuration
-interface {{INTERFACE}}
- description {{DESCRIPTION}}
- vlan {{VLAN}}
- {{STATUS}}
-!
-"@
-    }
-    "Z" = @{
-        "Type1" = @"
-! ========================================
-! Vendor Z - Type1 Configuration
-! Edit this template with your 60 lines
-! ========================================
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-set voice-vlan {{VOICE_VLAN}}
-{{STATUS}}
-!
-"@
-        "Type2" = @"
-! Vendor Z - Type2 Configuration
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-{{STATUS}}
-!
-"@
-        "Type3" = @"
-! Vendor Z - Type3 Configuration
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-{{STATUS}}
-!
-"@
-        "Type4" = @"
-! Vendor Z - Type4 Configuration
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-{{STATUS}}
-!
-"@
-        "Type5" = @"
-! Vendor Z - Type5 Configuration
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-set voice-vlan {{VOICE_VLAN}}
-{{STATUS}}
-!
-"@
-        "Type6" = @"
-! Vendor Z - Type6 Configuration
-set interface {{INTERFACE}}
-set description "{{DESCRIPTION}}"
-set vlan {{VLAN}}
-{{STATUS}}
 !
 "@
     }
@@ -3858,7 +3863,19 @@ $cboVendor.Add_SelectedIndexChanged({
 })
 
 # Initialize Port Type dropdown with first vendor's templates
-$cboVendor.SelectedIndex = 0
+# Manually populate since setting SelectedIndex to 0 when already 0 won't trigger the event
+$initialVendor = $cboVendor.Items[0]
+if ($script:PortTemplates.ContainsKey($initialVendor)) {
+    foreach ($portType in $script:PortTemplates[$initialVendor].Keys) {
+        $cboPortType.Items.Add($portType) | Out-Null
+    }
+    if ($cboPortType.Items.Count -gt 0) {
+        $cboPortType.SelectedIndex = 0
+    }
+}
+# Also set Old VLAN visibility based on initial vendor
+$lblOldVlan.Visible = ($initialVendor -eq "FCX 7.3")
+$txtOldVlan.Visible = ($initialVendor -eq "FCX 7.3")
 
 # Generate Button
 $btnGenerateConfig = New-Object System.Windows.Forms.Button
@@ -3953,6 +3970,17 @@ $btnGenerateConfig.Add_Click({
     $vendor = $cboVendor.SelectedItem
     $portType = $cboPortType.SelectedItem
 
+    # Validate selections are not null
+    if ($null -eq $vendor -or [string]::IsNullOrWhiteSpace($vendor)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a vendor.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    if ($null -eq $portType -or [string]::IsNullOrWhiteSpace($portType)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a port type. If the Port Type dropdown is empty, no templates are available for the selected vendor.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
     if (-not $script:PortTemplates.ContainsKey($vendor)) {
         [System.Windows.Forms.MessageBox]::Show("Vendor '$vendor' not found in templates.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
@@ -4013,6 +4041,17 @@ $btnSaveTemplate.Add_Click({
     $vendor = $cboVendor.SelectedItem
     $portType = $cboPortType.SelectedItem
     $templateContent = $txtConfigOutput.Text
+
+    # Validate selections are not null
+    if ($null -eq $vendor -or [string]::IsNullOrWhiteSpace($vendor)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a vendor.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    if ($null -eq $portType -or [string]::IsNullOrWhiteSpace($portType)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a port type before saving a template.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
 
     if ([string]::IsNullOrWhiteSpace($templateContent)) {
         [System.Windows.Forms.MessageBox]::Show(
@@ -4091,6 +4130,17 @@ $btnSaveTemplate.Add_Click({
 $btnLoadTemplate.Add_Click({
     $vendor = $cboVendor.SelectedItem
     $portType = $cboPortType.SelectedItem
+
+    # Validate selections are not null
+    if ($null -eq $vendor -or [string]::IsNullOrWhiteSpace($vendor)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a vendor.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    if ($null -eq $portType -or [string]::IsNullOrWhiteSpace($portType)) {
+        [System.Windows.Forms.MessageBox]::Show("Please select a port type. If the Port Type dropdown is empty, no templates are available for the selected vendor.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
 
     if ($script:PortTemplates.ContainsKey($vendor) -and $script:PortTemplates[$vendor].ContainsKey($portType)) {
         $txtConfigOutput.Text = $script:PortTemplates[$vendor][$portType]
