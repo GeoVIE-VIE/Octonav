@@ -4456,12 +4456,6 @@ EXAMPLE: COMPARING SWITCH CONFIGS
    5. Save the HTML for your change documentation!
 
 
-EMBEDDED RESOURCES:
-   At the bottom of this tab, you can export .RDOX files that are
-   packaged with OctoNav. Click "Export to Working Directory" to
-   extract them.
-
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TAB 5: PORT CONFIG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4523,6 +4517,8 @@ GENERAL TIPS
 • Most tabs have a log/output area at the bottom - check there for errors
 
 • Use the View menu to switch between Light and Dark themes
+
+• Use the Tools menu to export embedded resources (.RDOX files)
 
 • Settings are saved automatically when you close the app
 
