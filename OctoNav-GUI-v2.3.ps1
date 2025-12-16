@@ -553,31 +553,6 @@ $menuFile.DropDownItems.Add($menuFileExit)
 $menuTools = New-Object System.Windows.Forms.ToolStripMenuItem
 $menuTools.Text = "&Tools"
 
-$menuToolsSettings = New-Object System.Windows.Forms.ToolStripMenuItem
-$menuToolsSettings.Text = "&Settings"
-$menuToolsSettings.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::S
-$menuToolsSettings.Add_Click({
-    $newSettings = Show-SettingsDialog -CurrentSettings $script:Settings -ParentForm $mainForm
-    if ($newSettings) {
-        $script:Settings = $newSettings
-        Save-OctoNavSettings -Settings $script:Settings
-
-        # Apply theme if changed
-        if ($script:CurrentTheme.Name -ne $script:Settings.Theme) {
-            $script:CurrentTheme = Get-Theme -ThemeName $script:Settings.Theme
-            Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
-        }
-
-        [System.Windows.Forms.MessageBox]::Show(
-            "Settings saved successfully!`nSome changes may require restarting the application.",
-            "Settings Saved",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-    }
-})
-$menuTools.DropDownItems.Add($menuToolsSettings)
-
 $menuToolsRefresh = New-Object System.Windows.Forms.ToolStripMenuItem
 $menuToolsRefresh.Text = "&Refresh Dashboard"
 $menuToolsRefresh.ShortcutKeys = [System.Windows.Forms.Keys]::F5
