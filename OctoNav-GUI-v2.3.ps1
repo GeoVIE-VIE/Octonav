@@ -4163,6 +4163,318 @@ $btnLoadTemplate.Add_Click({
 })
 
 # ============================================
+# TAB 6: HELP GUIDE
+# ============================================
+
+$tab6 = New-Object System.Windows.Forms.TabPage
+$tab6.Text = "Help Guide"
+$tab6.BackColor = [System.Drawing.Color]::White
+$tab6.AutoScroll = $true
+$tabControl.Controls.Add($tab6)
+
+# Help content panel
+$helpPanel = New-Object System.Windows.Forms.Panel
+$helpPanel.Location = New-Object System.Drawing.Point(10, 10)
+$helpPanel.Size = New-Object System.Drawing.Size(950, 600)
+$helpPanel.AutoScroll = $true
+$tab6.Controls.Add($helpPanel)
+
+# Title
+$helpTitle = New-Object System.Windows.Forms.Label
+$helpTitle.Text = "HOW TO USE PORT CONFIG"
+$helpTitle.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+$helpTitle.Location = New-Object System.Drawing.Point(10, 10)
+$helpTitle.Size = New-Object System.Drawing.Size(900, 40)
+$helpTitle.ForeColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$helpPanel.Controls.Add($helpTitle)
+
+# Help RichTextBox
+$helpText = New-Object System.Windows.Forms.RichTextBox
+$helpText.Location = New-Object System.Drawing.Point(10, 60)
+$helpText.Size = New-Object System.Drawing.Size(910, 520)
+$helpText.ReadOnly = $true
+$helpText.BorderStyle = "None"
+$helpText.BackColor = [System.Drawing.Color]::White
+$helpText.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+$helpPanel.Controls.Add($helpText)
+
+# Build help content
+$helpContent = @"
+═══════════════════════════════════════════════════════════════════════════════
+                              OCTONAV HELP GUIDE
+═══════════════════════════════════════════════════════════════════════════════
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 1: NETWORK CONFIGURATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Changes your computer's IP address. Useful when you need to connect
+   directly to a switch or router for configuration.
+
+⚠️  IMPORTANT: You must run OctoNav as Administrator for this tab to work!
+   (Right-click the script → "Run as Administrator")
+
+
+HOW TO USE IT:
+
+   STEP 1: Click "Find Unidentified Network"
+      • This finds network adapters that aren't connected to your normal network
+      • Usually this is the port you plugged into a switch
+
+   STEP 2: Fill in the IP settings
+      • New IP Address: The IP you want (example: 192.168.1.101)
+      • Gateway: Usually the switch's IP (example: 192.168.1.1)
+      • Prefix Length: Usually 24 (same as subnet mask 255.255.255.0)
+
+   STEP 3: Click "Apply Configuration"
+      • Your network adapter now has the new IP address
+      • You can now access the switch/router at the gateway address
+
+   STEP 4: When done, click "Restore Defaults"
+      • This sets your adapter back to DHCP (automatic IP)
+      • Your normal network connection will work again
+
+
+COMMON SCENARIOS:
+
+   "I need to configure a new switch out of the box"
+      1. Plug your laptop into the switch
+      2. Find Unidentified Network
+      3. Set IP to same subnet as switch (check switch manual for default IP)
+      4. Apply Configuration
+      5. Open browser, go to switch IP
+      6. When done, Restore Defaults
+
+   "What IP should I use?"
+      • If switch is 192.168.1.1 → use 192.168.1.100 (same first 3 numbers)
+      • If switch is 10.0.0.1 → use 10.0.0.100
+      • The last number just needs to be different from the switch
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 2: DHCP STATISTICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Collects information about DHCP scopes from your Windows DHCP servers.
+   Shows you how full each scope is, what options are set, etc.
+
+
+HOW TO USE IT:
+
+   STEP 1: Select your DHCP servers
+      • Click "Refresh Server List" to get servers from Active Directory
+      • Check the boxes next to servers you want to query
+      • OR type server names manually (comma-separated)
+
+   STEP 2: (Optional) Select specific scopes
+      • Click "Refresh Cache" to load all scopes from selected servers
+      • Use the filter box to find specific scopes
+      • Check the scopes you want, or leave empty for ALL scopes
+
+   STEP 3: Choose what info to collect
+      • Include DNS (Option 6) - shows DNS servers in each scope
+      • Include Option 60 - shows vendor class info
+      • Include Option 43 - shows vendor-specific info
+
+   STEP 4: Click "Collect DHCP Statistics"
+      • Wait for it to gather data from all servers
+      • Results appear in a table below
+
+
+WHAT THE RESULTS SHOW:
+   • Scope name and IP range
+   • How many IPs are used vs available
+   • Percentage full (watch for scopes over 80%!)
+   • DNS servers assigned to that scope
+   • Any special options configured
+
+
+TIPS:
+   • If no servers are selected, it queries ALL domain DHCP servers
+   • Use the filter to quickly find scopes by name or IP
+   • Export results to CSV for reporting
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 3: DNA CENTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Connects to Cisco DNA Center to manage network devices.
+   You can view devices, run commands, and perform bulk operations.
+
+
+HOW TO USE IT:
+
+   STEP 1: Connect to DNA Center
+      • Select your DNA Center server from the dropdown
+      • Enter your username and password
+      • Click "Connect"
+      • Wait for "Connected" status
+
+   STEP 2: Load devices
+      • Click "Load Devices"
+      • Wait for the device list to populate
+
+   STEP 3: Filter devices (optional)
+      • Hostname Search: Type part of a hostname to filter
+      • Family: Filter by device type (switches, routers, etc.)
+      • Role: Filter by network role (access, distribution, core)
+      • IP Address: Filter by specific IP or subnet
+
+   STEP 4: Select devices
+      • Check the boxes next to devices you want to work with
+      • Use "Select All (Current Filter)" to check all visible devices
+      • The status bar shows how many are selected
+
+   STEP 5: Run a function
+      • Double-click a function in the TreeView on the left
+      • The function runs on all selected devices
+      • Results appear in the output area
+
+
+AVAILABLE FUNCTIONS:
+   • Get Device Info - basic device details
+   • Get Interfaces - show all interfaces
+   • Get Config - retrieve running config
+   • Command Runner - run CLI commands
+   • And more in the TreeView...
+
+
+TIPS:
+   • Filter first, then Select All - much faster than checking one by one
+   • Use "Reset All" to clear filters and start over
+   • Check the status bar to confirm how many devices are selected
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 4: FILE COMPARE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Compares two text files and shows you what changed.
+   Perfect for comparing switch configs before/after changes.
+
+
+HOW TO USE IT:
+
+   STEP 1: Select the ORIGINAL file
+      • Click "Browse..." next to "Original File"
+      • Pick the BEFORE version (the old config)
+
+   STEP 2: Select the MODIFIED file
+      • Click "Browse..." next to "Modified File"
+      • Pick the AFTER version (the new config)
+
+   STEP 3: Click "Compare & Export HTML"
+      • An HTML file is created and opens in your browser
+      • Green = lines that were ADDED
+      • Red = lines that were REMOVED
+      • Gray = lines that stayed the same
+
+
+BROWSER FEATURES:
+   • Prev/Next buttons - jump between changes
+   • Unified view - see changes inline
+   • Side-by-Side view - see old and new next to each other
+   • Keyboard shortcuts: j/k or arrow keys to navigate
+   • Statistics show total additions, deletions, unchanged
+
+
+OTHER BUTTONS:
+   • Swap Files - switches Original and Modified
+   • Clear - clears both file selections
+
+
+EXAMPLE: COMPARING SWITCH CONFIGS
+
+   1. Before making changes, copy the switch config to "config_before.txt"
+   2. Make your changes on the switch
+   3. Copy the new config to "config_after.txt"
+   4. Use File Compare to see exactly what changed
+   5. Save the HTML for your change documentation!
+
+
+EMBEDDED RESOURCES:
+   At the bottom of this tab, you can export .RDOX files that are
+   packaged with OctoNav. Click "Export to Working Directory" to
+   extract them.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAB 5: PORT CONFIG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT DOES:
+   Generates switch port configurations from templates.
+   Fill in the blanks, click Generate, copy to your switch.
+
+
+HOW TO USE IT:
+
+   STEP 1: Pick your switch type
+      • Cisco = Regular Cisco switches (uses 'switchport' commands)
+      • ICX/FCX 8030 = Brocade ICX or FCX 8030 switches
+      • FCX 7.3 = Older FCX switches running 7.3 firmware
+
+   STEP 2: Pick a Port Type
+      • Type1 through Type6 are different template styles
+      • Each type has slightly different commands
+
+   STEP 3: Fill in the boxes
+      • Interface: The port name (example: Gi1/0/1)
+      • Description: What's plugged in (example: "John's PC")
+      • VLAN: The data VLAN number (example: 100)
+      • Voice VLAN: For phones (example: 200)
+      • Status: "no shutdown" to enable, "shutdown" to disable
+
+   STEP 4: Click "Generate Config"
+      • Config appears in the text box on the right
+      • Click "Copy to Clipboard"
+      • Paste into your switch!
+
+
+SAVING CUSTOM TEMPLATES:
+
+   1. Paste your config into the output text box
+   2. Replace values with placeholders:
+      interface Gi1/0/5  →  interface {{INTERFACE}}
+      vlan 100           →  vlan {{VLAN}}
+   3. Select Vendor and Port Type
+   4. Click "Save as Template"
+
+
+PLACEHOLDERS:
+   {{INTERFACE}}    = Port name
+   {{DESCRIPTION}}  = Port description
+   {{VLAN}}         = Data VLAN
+   {{VOICE_VLAN}}   = Voice VLAN
+   {{OLD_VLAN}}     = Old VLAN (FCX 7.3 only)
+   {{STATUS}}       = no shutdown / shutdown
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GENERAL TIPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Run as Administrator for Network Configuration tab to work
+
+• Most tabs have a log/output area at the bottom - check there for errors
+
+• Use the View menu to switch between Light and Dark themes
+
+• Settings are saved automatically when you close the app
+
+• If something isn't working, check the log area for error messages
+
+"@
+
+$helpText.Text = $helpContent
+
+# ============================================
 # CREATE TAB CONTROL
 # ============================================
 
