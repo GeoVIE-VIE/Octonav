@@ -1421,7 +1421,7 @@ $tab2.Controls.Add($lblDHCPInfo)
 # Server Configuration Group
 $dhcpServerGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpServerGroupBox.Text = "Server Selection"
-$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(920, 150)
+$dhcpServerGroupBox.Size = New-Object System.Drawing.Size(920, 170)
 $dhcpServerGroupBox.Location = New-Object System.Drawing.Point(10, 40)
 $dhcpServerGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpServerGroupBox)
@@ -1445,15 +1445,37 @@ $dhcpServerGroupBox.Controls.Add($btnRefreshDHCPServers)
 $script:lblLastRefresh = New-Object System.Windows.Forms.Label
 $script:lblLastRefresh.Text = "Last refreshed: Never"
 $script:lblLastRefresh.Location = New-Object System.Drawing.Point(530, 21)
-$script:lblLastRefresh.Size = New-Object System.Drawing.Size(400, 20)
+$script:lblLastRefresh.Size = New-Object System.Drawing.Size(300, 20)
 $script:lblLastRefresh.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $script:lblLastRefresh.ForeColor = [System.Drawing.Color]::Gray
 $dhcpServerGroupBox.Controls.Add($script:lblLastRefresh)
 
+# Filter textbox for server list
+$lblServerListFilter = New-Object System.Windows.Forms.Label
+$lblServerListFilter.Text = "Filter:"
+$lblServerListFilter.Size = New-Object System.Drawing.Size(40, 20)
+$lblServerListFilter.Location = New-Object System.Drawing.Point(15, 47)
+$dhcpServerGroupBox.Controls.Add($lblServerListFilter)
+
+$script:txtServerListFilter = New-Object System.Windows.Forms.TextBox
+$script:txtServerListFilter.Size = New-Object System.Drawing.Size(200, 20)
+$script:txtServerListFilter.Location = New-Object System.Drawing.Point(55, 45)
+$script:txtServerListFilter.MaxLength = 100
+$dhcpServerGroupBox.Controls.Add($script:txtServerListFilter)
+
+# Visible servers count label
+$script:lblVisibleServers = New-Object System.Windows.Forms.Label
+$script:lblVisibleServers.Text = ""
+$script:lblVisibleServers.Size = New-Object System.Drawing.Size(100, 20)
+$script:lblVisibleServers.Location = New-Object System.Drawing.Point(260, 47)
+$script:lblVisibleServers.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
+$script:lblVisibleServers.ForeColor = [System.Drawing.Color]::DarkBlue
+$dhcpServerGroupBox.Controls.Add($script:lblVisibleServers)
+
 # CheckedListBox for server selection
 $script:lstDHCPServers = New-Object System.Windows.Forms.CheckedListBox
-$script:lstDHCPServers.Size = New-Object System.Drawing.Size(450, 80)
-$script:lstDHCPServers.Location = New-Object System.Drawing.Point(15, 45)
+$script:lstDHCPServers.Size = New-Object System.Drawing.Size(450, 70)
+$script:lstDHCPServers.Location = New-Object System.Drawing.Point(15, 70)
 $script:lstDHCPServers.CheckOnClick = $true
 $dhcpServerGroupBox.Controls.Add($script:lstDHCPServers)
 
@@ -1461,33 +1483,33 @@ $dhcpServerGroupBox.Controls.Add($script:lstDHCPServers)
 $btnSelectAll = New-Object System.Windows.Forms.Button
 $btnSelectAll.Text = "Select All"
 $btnSelectAll.Size = New-Object System.Drawing.Size(100, 25)
-$btnSelectAll.Location = New-Object System.Drawing.Point(480, 45)
+$btnSelectAll.Location = New-Object System.Drawing.Point(480, 70)
 $dhcpServerGroupBox.Controls.Add($btnSelectAll)
 
 $btnSelectNone = New-Object System.Windows.Forms.Button
 $btnSelectNone.Text = "Select None"
 $btnSelectNone.Size = New-Object System.Drawing.Size(100, 25)
-$btnSelectNone.Location = New-Object System.Drawing.Point(480, 75)
+$btnSelectNone.Location = New-Object System.Drawing.Point(480, 100)
 $dhcpServerGroupBox.Controls.Add($btnSelectNone)
 
 # Manual entry option
 $lblManual = New-Object System.Windows.Forms.Label
 $lblManual.Text = "Or enter manually (comma-separated):"
-$lblManual.Location = New-Object System.Drawing.Point(590, 47)
+$lblManual.Location = New-Object System.Drawing.Point(590, 72)
 $lblManual.Size = New-Object System.Drawing.Size(250, 20)
 $lblManual.ForeColor = [System.Drawing.Color]::DarkGreen
 $dhcpServerGroupBox.Controls.Add($lblManual)
 
 $txtSpecificServers = New-Object System.Windows.Forms.TextBox
 $txtSpecificServers.Size = New-Object System.Drawing.Size(330, 20)
-$txtSpecificServers.Location = New-Object System.Drawing.Point(590, 70)
+$txtSpecificServers.Location = New-Object System.Drawing.Point(590, 95)
 $txtSpecificServers.MaxLength = 1000
 $dhcpServerGroupBox.Controls.Add($txtSpecificServers)
 
 # Note Label
 $lblServerNote = New-Object System.Windows.Forms.Label
 $lblServerNote.Text = "Note: Servers are cached from Active Directory. If no servers selected/entered, all domain servers will be queried."
-$lblServerNote.Location = New-Object System.Drawing.Point(15, 130)
+$lblServerNote.Location = New-Object System.Drawing.Point(15, 148)
 $lblServerNote.Size = New-Object System.Drawing.Size(900, 20)
 $lblServerNote.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblServerNote.ForeColor = [System.Drawing.Color]::Gray
@@ -1497,7 +1519,7 @@ $dhcpServerGroupBox.Controls.Add($lblServerNote)
 $dhcpScopeGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpScopeGroupBox.Text = "Scope Selection (Optional)"
 $dhcpScopeGroupBox.Size = New-Object System.Drawing.Size(920, 160)
-$dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 200)
+$dhcpScopeGroupBox.Location = New-Object System.Drawing.Point(10, 220)
 $dhcpScopeGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpScopeGroupBox)
 
@@ -1579,7 +1601,7 @@ $dhcpScopeGroupBox.Controls.Add($lblScopeNote)
 $dhcpOptionsGroupBox = New-Object System.Windows.Forms.GroupBox
 $dhcpOptionsGroupBox.Text = "Collection Options"
 $dhcpOptionsGroupBox.Size = New-Object System.Drawing.Size(920, 90)
-$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 370)
+$dhcpOptionsGroupBox.Location = New-Object System.Drawing.Point(10, 390)
 $dhcpOptionsGroupBox.Anchor = "Top,Left,Right"
 $tab2.Controls.Add($dhcpOptionsGroupBox)
 
@@ -2187,22 +2209,30 @@ $btnRefreshDHCPServers.Add_Click({
         $servers = Update-DHCPServerCache
 
         if ($servers -and $servers.Count -gt 0) {
-            # Clear and populate the CheckedListBox
+            # Clear filter and list
+            $script:txtServerListFilter.Text = ""
             $script:lstDHCPServers.Items.Clear()
+
+            # Store all server display names for filtering
+            $script:allDHCPServerDisplayNames = @()
 
             foreach ($server in $servers) {
                 $displayText = "$($server.DnsName) ($($server.IPAddress))"
+                $script:allDHCPServerDisplayNames += $displayText
                 $script:lstDHCPServers.Items.Add($displayText) | Out-Null
             }
 
-            # Update last refresh timestamp
+            # Update last refresh timestamp and visible count
             $script:lblLastRefresh.Text = "Last refreshed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            $script:lblVisibleServers.Text = "($($servers.Count) visible)"
 
             Write-Log -Message "Found $($servers.Count) DHCP server(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         } else {
             Write-Log -Message "No DHCP servers found in Active Directory" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             $script:lstDHCPServers.Items.Clear()
+            $script:allDHCPServerDisplayNames = @()
             $script:lblLastRefresh.Text = "Last refreshed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') (no servers found)"
+            $script:lblVisibleServers.Text = ""
         }
 
         $btnRefreshDHCPServers.Enabled = $true
@@ -2224,6 +2254,34 @@ $btnSelectNone.Add_Click({
     for ($i = 0; $i -lt $script:lstDHCPServers.Items.Count; $i++) {
         $script:lstDHCPServers.SetItemChecked($i, $false)
     }
+})
+
+# Event Handler: Server List Filter (real-time filtering)
+$script:txtServerListFilter.Add_TextChanged({
+    if (-not $script:allDHCPServerDisplayNames -or $script:allDHCPServerDisplayNames.Count -eq 0) {
+        return
+    }
+
+    $filterText = $script:txtServerListFilter.Text.Trim()
+    $script:lstDHCPServers.Items.Clear()
+
+    if ([string]::IsNullOrWhiteSpace($filterText)) {
+        # No filter - show all
+        foreach ($serverName in $script:allDHCPServerDisplayNames) {
+            $script:lstDHCPServers.Items.Add($serverName) | Out-Null
+        }
+    } else {
+        # Filter by name (case-insensitive)
+        $filterUpper = $filterText.ToUpper()
+        foreach ($serverName in $script:allDHCPServerDisplayNames) {
+            if ($serverName.ToUpper().Contains($filterUpper)) {
+                $script:lstDHCPServers.Items.Add($serverName) | Out-Null
+            }
+        }
+    }
+
+    # Update visible count label
+    $script:lblVisibleServers.Text = "($($script:lstDHCPServers.Items.Count) visible)"
 })
 
 # Event Handler: Refresh Scope Cache
