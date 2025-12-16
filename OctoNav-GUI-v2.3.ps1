@@ -724,23 +724,12 @@ $mainForm.Controls.Add($menuStrip)
 $mainForm.MainMenuStrip = $menuStrip
 
 # ============================================
-# EMBEDDED RESOURCES (Auto-generated)
-# ============================================
-# Generated: Placeholder - No resources embedded yet
-# Files: 0
-# To update: Place files in 'resources' folder and run Package-Resources.ps1
-
-$script:EmbeddedResources = @{
-    # Resources will be added here by Package-Resources.ps1
-    # Example: 'template.rdox' = 'base64encodedcontent...'
-}
-
-# ============================================
 # PORT CONFIGURATION TEMPLATES
 # ============================================
 # Placeholders: {{INTERFACE}}, {{DESCRIPTION}}, {{VLAN}}, {{OLD_VLAN}}, {{VOICE_VLAN}}, {{STATUS}}
 # {{STATUS}} = "no shutdown" or "shutdown" based on Enable checkbox
 # {{OLD_VLAN}} only used by FCX 7.3
+# NOTE: This section must remain OUTSIDE the EMBEDDED RESOURCES block to survive packaging
 
 $script:PortTemplates = @{
     "Cisco" = @{
@@ -971,6 +960,18 @@ if (Test-Path $templateFile) {
 } else {
     Write-Host "PortTemplates.json not found at: $templateFile" -ForegroundColor Yellow
     Write-Host "Using embedded default templates" -ForegroundColor Yellow
+}
+
+# ============================================
+# EMBEDDED RESOURCES (Auto-generated)
+# ============================================
+# Generated: Placeholder - No resources embedded yet
+# Files: 0
+# To update: Place files in 'resources' folder and run Package-Resources.ps1
+
+$script:EmbeddedResources = @{
+    # Resources will be added here by Package-Resources.ps1
+    # Example: 'template.rdox' = 'base64encodedcontent...'
 }
 
 function Get-EmbeddedResourceList {
