@@ -3924,7 +3924,7 @@ $tab5.Controls.Add($btnLoadTemplate)
 $lblPlaceholderHelp = New-Object System.Windows.Forms.Label
 $lblPlaceholderHelp.Text = "Placeholders: {{INTERFACE}} {{DESCRIPTION}} {{VLAN}} {{OLD_VLAN}} {{VOICE_VLAN}} {{STATUS}}"
 $lblPlaceholderHelp.Location = New-Object System.Drawing.Point(10, 390)
-$lblPlaceholderHelp.Size = New-Object System.Drawing.Size(400, 20)
+$lblPlaceholderHelp.AutoSize = $true
 $lblPlaceholderHelp.Font = New-Object System.Drawing.Font("Consolas", 8)
 $lblPlaceholderHelp.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
 $tab5.Controls.Add($lblPlaceholderHelp)
