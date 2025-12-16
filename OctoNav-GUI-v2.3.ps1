@@ -509,6 +509,9 @@ $script:NewGateway = $null
 $script:BatchProcess = $null
 $script:IsRunningAsAdmin = Test-IsAdministrator
 
+# Initialize DHCP server filter backing variable
+$script:allDHCPServerDisplayNames = @()
+
 # Output directory
 $script:outputDir = if ($script:Settings.DefaultExportPath) {
     $script:Settings.DefaultExportPath
@@ -2283,24 +2286,28 @@ $btnSelectNone.Add_Click({
 
 # Event Handler: Server List Filter (real-time filtering)
 $script:txtServerListFilter.Add_TextChanged({
-    if (-not $script:allDHCPServerDisplayNames -or $script:allDHCPServerDisplayNames.Count -eq 0) {
+    # Check if we have servers to filter
+    if ($null -eq $script:allDHCPServerDisplayNames -or $script:allDHCPServerDisplayNames.Count -eq 0) {
         return
     }
 
     $filterText = $script:txtServerListFilter.Text.Trim()
+
+    # Clear the listbox
     $script:lstDHCPServers.Items.Clear()
 
     if ([string]::IsNullOrWhiteSpace($filterText)) {
-        # No filter - show all
+        # No filter - show all servers
         foreach ($serverName in $script:allDHCPServerDisplayNames) {
-            $script:lstDHCPServers.Items.Add($serverName) | Out-Null
+            [void]$script:lstDHCPServers.Items.Add($serverName)
         }
     } else {
-        # Filter by name (case-insensitive)
-        $filterUpper = $filterText.ToUpper()
+        # Filter by name using wildcard match (case-insensitive)
+        # This matches if filterText appears anywhere in the server name
+        $pattern = "*$filterText*"
         foreach ($serverName in $script:allDHCPServerDisplayNames) {
-            if ($serverName.ToUpper().Contains($filterUpper)) {
-                $script:lstDHCPServers.Items.Add($serverName) | Out-Null
+            if ($serverName -like $pattern) {
+                [void]$script:lstDHCPServers.Items.Add($serverName)
             }
         }
     }
