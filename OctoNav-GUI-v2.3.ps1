@@ -506,6 +506,7 @@ $script:TargetAdapter = $null
 $script:OriginalConfig = $null
 $script:NewIPAddress = $null
 $script:NewGateway = $null
+$script:BatchProcess = $null
 $script:IsRunningAsAdmin = Test-IsAdministrator
 
 # Output directory
@@ -1301,17 +1302,11 @@ $btnFindNetwork.Add_Click({
 
 $btnApplyConfig.Add_Click({
     try {
-        if (-not $script:TargetAdapter) {
-            Write-Log -Message "Please find a network adapter first" -Color "Warning" -LogBox $netLogBox -Theme $script:CurrentTheme
-            [System.Windows.Forms.MessageBox]::Show("Please find a network adapter first using the 'Find Unidentified Network' button", "No Adapter", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-
         $ip = $txtIPAddress.Text.Trim()
         $gateway = $txtGateway.Text.Trim()
         $prefixText = $txtPrefix.Text.Trim()
 
-        # Validate IP address
+        # Validate IP address first
         if (-not (Test-IPAddress -IPAddress $ip)) {
             Write-Log -Message 'Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)' -Color 'Error' -LogBox $netLogBox -Theme $script:CurrentTheme
             [System.Windows.Forms.MessageBox]::Show("Invalid IP address format!", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
@@ -1332,6 +1327,25 @@ $btnApplyConfig.Add_Click({
             return
         }
 
+        # Auto-find the network if not already found
+        if (-not $script:TargetAdapter) {
+            Write-Log -Message "Finding unidentified network adapter..." -Color "Cyan" -LogBox $netLogBox -Theme $script:CurrentTheme
+            $networkInfo = Find-UnidentifiedNetwork -LogBox $netLogBox
+
+            if ($networkInfo) {
+                $script:TargetAdapter = $networkInfo.Adapter
+                $script:OriginalConfig = @{
+                    NetworkCategory = $networkInfo.Profile.NetworkCategory
+                    DHCP = (Get-NetIPInterface -InterfaceIndex $script:TargetAdapter.ifIndex -AddressFamily IPv4).Dhcp
+                }
+                Write-Log -Message "Adapter found: $($script:TargetAdapter.Name)" -Color "Success" -LogBox $netLogBox -Theme $script:CurrentTheme
+            } else {
+                Write-Log -Message "No unidentified network found. Cannot apply configuration." -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
+                [System.Windows.Forms.MessageBox]::Show("No unidentified network found. Please ensure the network adapter is connected and has an APIPA address (169.254.x.x).", "No Network Found", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+        }
+
         $prefix = [int]$prefixText
         $script:NewIPAddress = $ip
         $script:NewGateway = $gateway
@@ -1339,6 +1353,28 @@ $btnApplyConfig.Add_Click({
         $success = Set-NetworkConfiguration -Adapter $script:TargetAdapter -IPAddress $ip -Gateway $gateway -PrefixLength $prefix -LogBox $netLogBox
 
         if ($success) {
+            Write-Log -Message "Network configuration applied successfully!" -Color "Success" -LogBox $netLogBox -Theme $script:CurrentTheme
+
+            # Start RunStandAloneMT.bat (TFTP server) if it exists
+            $batFile = Join-Path $PSScriptRoot "RunStandAloneMT.bat"
+            if (Test-Path $batFile) {
+                Write-Log -Message "Starting TFTP server (RunStandAloneMT.bat)..." -Color "Cyan" -LogBox $netLogBox -Theme $script:CurrentTheme
+                try {
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = "cmd.exe"
+                    $psi.Arguments = "/c `"$batFile`""
+                    $psi.WorkingDirectory = $PSScriptRoot
+                    $psi.UseShellExecute = $true
+
+                    $script:BatchProcess = [System.Diagnostics.Process]::Start($psi)
+                    Write-Log -Message "TFTP server started (PID: $($script:BatchProcess.Id))" -Color "Success" -LogBox $netLogBox -Theme $script:CurrentTheme
+                } catch {
+                    Write-Log -Message "Failed to start TFTP server: $($_.Exception.Message)" -Color "Warning" -LogBox $netLogBox -Theme $script:CurrentTheme
+                }
+            } else {
+                Write-Log -Message "RunStandAloneMT.bat not found - TFTP server not started" -Color "Warning" -LogBox $netLogBox -Theme $script:CurrentTheme
+            }
+
             [System.Windows.Forms.MessageBox]::Show("Network configuration applied successfully!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
     } catch {
@@ -1351,19 +1387,33 @@ $btnRestoreDefaults.Add_Click({
     try {
         # Confirm before restoring
         $result = [System.Windows.Forms.MessageBox]::Show(
-            "This will restore network adapter to DHCP and remove static IP configuration. Continue?",
+            "This will stop the TFTP server (if running), restore network adapter to DHCP, and remove static IP configuration. Continue?",
             "Confirm Restore Defaults",
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question
         )
 
         if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            # Stop TFTP server if running
+            if ($script:BatchProcess -and -not $script:BatchProcess.HasExited) {
+                Write-Log -Message "Stopping TFTP server..." -Color "Yellow" -LogBox $netLogBox -Theme $script:CurrentTheme
+                try {
+                    Stop-Process -Id $script:BatchProcess.Id -Force -ErrorAction SilentlyContinue
+                    Write-Log -Message "TFTP server stopped" -Color "Success" -LogBox $netLogBox -Theme $script:CurrentTheme
+                } catch {
+                    Write-Log -Message "Warning: Could not stop TFTP server: $($_.Exception.Message)" -Color "Warning" -LogBox $netLogBox -Theme $script:CurrentTheme
+                }
+            }
+            $script:BatchProcess = $null
+
             Restore-NetworkDefaults -LogBox $netLogBox
             [System.Windows.Forms.MessageBox]::Show("Network defaults restored!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
 
             # Clear the target adapter
             $script:TargetAdapter = $null
             $script:OriginalConfig = $null
+            $script:NewIPAddress = $null
+            $script:NewGateway = $null
         }
     } catch {
         Write-Log -Message "Error: $($_.Exception.Message)" -Color "Error" -LogBox $netLogBox -Theme $script:CurrentTheme
@@ -4243,8 +4293,9 @@ TAB 1: NETWORK CONFIGURATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 WHAT IT DOES:
-   Changes your computer's IP address. Useful when you need to connect
-   directly to a switch or router for configuration.
+   Changes your computer's IP address and starts the TFTP server.
+   Useful when you need to connect directly to a switch for configuration
+   or firmware uploads.
 
 ⚠️  IMPORTANT: You must run OctoNav as Administrator for this tab to work!
    (Right-click the script → "Run as Administrator")
@@ -4252,21 +4303,21 @@ WHAT IT DOES:
 
 HOW TO USE IT:
 
-   STEP 1: Click "Find Unidentified Network"
-      • This finds network adapters that aren't connected to your normal network
-      • Usually this is the port you plugged into a switch
-
-   STEP 2: Fill in the IP settings
+   STEP 1: Fill in the IP settings
       • New IP Address: The IP you want (example: 192.168.1.101)
       • Gateway: Usually the switch's IP (example: 192.168.1.1)
       • Prefix Length: Usually 24 (same as subnet mask 255.255.255.0)
 
-   STEP 3: Click "Apply Configuration"
-      • Your network adapter now has the new IP address
+   STEP 2: Click "Apply Configuration"
+      • Automatically finds the unidentified network adapter
+      • Applies your IP configuration
+      • Changes network from Public to Private
+      • Starts the TFTP server (RunStandAloneMT.bat) if present
       • You can now access the switch/router at the gateway address
 
-   STEP 4: When done, click "Restore Defaults"
-      • This sets your adapter back to DHCP (automatic IP)
+   STEP 3: When done, click "Restore Defaults"
+      • Stops the TFTP server
+      • Sets your adapter back to DHCP (automatic IP)
       • Your normal network connection will work again
 
 
@@ -4274,11 +4325,16 @@ COMMON SCENARIOS:
 
    "I need to configure a new switch out of the box"
       1. Plug your laptop into the switch
-      2. Find Unidentified Network
-      3. Set IP to same subnet as switch (check switch manual for default IP)
-      4. Apply Configuration
-      5. Open browser, go to switch IP
-      6. When done, Restore Defaults
+      2. Set IP to same subnet as switch (check switch manual for default IP)
+      3. Apply Configuration (finds adapter + starts TFTP automatically!)
+      4. Open browser, go to switch IP
+      5. When done, Restore Defaults
+
+   "I need to upload firmware to a switch via TFTP"
+      1. Make sure RunStandAloneMT.bat is in the same folder as OctoNav
+      2. Apply Configuration - TFTP server starts automatically
+      3. On the switch, use the TFTP command pointing to your IP
+      4. When done, Restore Defaults
 
    "What IP should I use?"
       • If switch is 192.168.1.1 → use 192.168.1.100 (same first 3 numbers)
