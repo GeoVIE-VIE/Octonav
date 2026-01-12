@@ -1080,46 +1080,17 @@ $healthGroupBox.Controls.Add($script:dnaPanel.Panel)
 $script:dhcpPanel = New-DashboardPanel -Title "DHCP Servers" -Value "..." -X 725 -Y 25 -Theme $script:CurrentTheme
 $healthGroupBox.Controls.Add($script:dhcpPanel.Panel)
 
-# Quick Actions Group
-$quickActionsGroupBox = New-Object System.Windows.Forms.GroupBox
-$quickActionsGroupBox.Text = "Quick Actions"
-$quickActionsGroupBox.Location = New-Object System.Drawing.Point(15, 195)
-$quickActionsGroupBox.Size = New-Object System.Drawing.Size(920, 100)
-$quickActionsGroupBox.Anchor = "Top,Left,Right"
-$tab0.Controls.Add($quickActionsGroupBox)
-
-# Quick Action Buttons
-$btnQuickDNA = New-QuickActionButton -Text "Connect to DNA Center" -X 20 -Y 30 -OnClick {
-    $tabControl.SelectedIndex = 3  # Switch to DNA Center tab
-} -Theme $script:CurrentTheme
-$quickActionsGroupBox.Controls.Add($btnQuickDNA)
-
-$btnQuickDHCP = New-QuickActionButton -Text "Collect DHCP Stats" -X 240 -Y 30 -OnClick {
-    $tabControl.SelectedIndex = 2  # Switch to DHCP tab
-} -Theme $script:CurrentTheme
-$quickActionsGroupBox.Controls.Add($btnQuickDHCP)
-
-$btnQuickNetwork = New-QuickActionButton -Text "Configure Network" -X 460 -Y 30 -OnClick {
-    $tabControl.SelectedIndex = 1  # Switch to Network Config tab
-} -Theme $script:CurrentTheme
-$quickActionsGroupBox.Controls.Add($btnQuickNetwork)
-
-$btnRefreshDashboard = New-QuickActionButton -Text "Refresh Dashboard" -X 680 -Y 30 -OnClick {
-    Update-Dashboard
-} -Theme $script:CurrentTheme
-$quickActionsGroupBox.Controls.Add($btnRefreshDashboard)
-
 # Recent Activity Group
 $recentActivityGroupBox = New-Object System.Windows.Forms.GroupBox
 $recentActivityGroupBox.Text = "Recent Activity"
-$recentActivityGroupBox.Location = New-Object System.Drawing.Point(15, 305)
-$recentActivityGroupBox.Size = New-Object System.Drawing.Size(920, 280)
+$recentActivityGroupBox.Location = New-Object System.Drawing.Point(15, 195)
+$recentActivityGroupBox.Size = New-Object System.Drawing.Size(920, 390)
 $recentActivityGroupBox.Anchor = "Top,Bottom,Left,Right"
 $tab0.Controls.Add($recentActivityGroupBox)
 
 $script:lstRecentActivity = New-Object System.Windows.Forms.ListBox
 $script:lstRecentActivity.Location = New-Object System.Drawing.Point(15, 25)
-$script:lstRecentActivity.Size = New-Object System.Drawing.Size(885, 240)
+$script:lstRecentActivity.Size = New-Object System.Drawing.Size(885, 350)
 $script:lstRecentActivity.Font = New-Object System.Drawing.Font("Consolas", 9)
 $script:lstRecentActivity.Anchor = "Top,Bottom,Left,Right"
 $recentActivityGroupBox.Controls.Add($script:lstRecentActivity)
@@ -3240,7 +3211,7 @@ $actionPanel.Controls.Add($lblActionInfo)
 # Results Summary Panel - simplified instructions
 $resultsSummaryPanel = New-Object System.Windows.Forms.Panel
 $resultsSummaryPanel.Location = New-Object System.Drawing.Point(0, 200)
-$resultsSummaryPanel.Size = New-Object System.Drawing.Size(940, 415)
+$resultsSummaryPanel.Size = New-Object System.Drawing.Size(940, 410)
 $resultsSummaryPanel.Anchor = "Top,Bottom,Left,Right"
 $resultsSummaryPanel.BackColor = [System.Drawing.Color]::FromArgb(248, 249, 250)
 $resultsSummaryPanel.BorderStyle = "FixedSingle"
@@ -3258,24 +3229,52 @@ $lblComparisonSummary.Anchor = "Top,Bottom,Left,Right"
 $resultsSummaryPanel.Controls.Add($lblComparisonSummary)
 
 # ============================================
-# EMBEDDED RESOURCES PANEL
+# TAB 7: RDOX EXPORTS
 # ============================================
+
+$tab7 = New-Object System.Windows.Forms.TabPage
+$tab7.Text = "RDOX Exports"
+$tab7.AutoScroll = $true
+$tab7.AutoScrollMinSize = New-Object System.Drawing.Size(980, 500)
+$tab7.Padding = New-Object System.Windows.Forms.Padding(10)
+$tab7.BackColor = [System.Drawing.Color]::White
+$tabControl.Controls.Add($tab7)
+Add-IconToTab -Tab $tab7 -IconName "Export"
+
+# Title Label
+$lblRdoxTitle = New-Object System.Windows.Forms.Label
+$lblRdoxTitle.Text = "RDOX Resource Export"
+$lblRdoxTitle.Location = New-Object System.Drawing.Point(15, 15)
+$lblRdoxTitle.Size = New-Object System.Drawing.Size(900, 35)
+$lblRdoxTitle.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+$lblRdoxTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 60, 114)
+$tab7.Controls.Add($lblRdoxTitle)
+
+# Description Label
+$lblRdoxDesc = New-Object System.Windows.Forms.Label
+$lblRdoxDesc.Text = "Export embedded RDOX resource files. Select files from the list below and choose an export location."
+$lblRdoxDesc.Location = New-Object System.Drawing.Point(15, 55)
+$lblRdoxDesc.Size = New-Object System.Drawing.Size(900, 25)
+$lblRdoxDesc.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$lblRdoxDesc.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$tab7.Controls.Add($lblRdoxDesc)
 
 $resourcesGroupBox = New-Object System.Windows.Forms.GroupBox
 $resourcesGroupBox.Text = "Embedded Resources (.RDOX Files)"
-$resourcesGroupBox.Location = New-Object System.Drawing.Point(0, 200)
-$resourcesGroupBox.Size = New-Object System.Drawing.Size(940, 95)
+$resourcesGroupBox.Location = New-Object System.Drawing.Point(15, 90)
+$resourcesGroupBox.Size = New-Object System.Drawing.Size(920, 350)
 $resourcesGroupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$resourcesGroupBox.Anchor = "Bottom,Left,Right"
-$compareMainPanel.Controls.Add($resourcesGroupBox)
+$resourcesGroupBox.Anchor = "Top,Bottom,Left,Right"
+$tab7.Controls.Add($resourcesGroupBox)
 
 # Resources ListBox
 $script:lstResources = New-Object System.Windows.Forms.ListBox
-$script:lstResources.Location = New-Object System.Drawing.Point(15, 22)
-$script:lstResources.Size = New-Object System.Drawing.Size(600, 60)
-$script:lstResources.Font = New-Object System.Drawing.Font("Consolas", 9)
+$script:lstResources.Location = New-Object System.Drawing.Point(15, 25)
+$script:lstResources.Size = New-Object System.Drawing.Size(700, 280)
+$script:lstResources.Font = New-Object System.Drawing.Font("Consolas", 10)
 $script:lstResources.SelectionMode = "MultiExtended"
 $script:lstResources.BorderStyle = "FixedSingle"
+$script:lstResources.Anchor = "Top,Bottom,Left,Right"
 $resourcesGroupBox.Controls.Add($script:lstResources)
 
 # Populate resources list
@@ -3291,34 +3290,37 @@ if ($script:EmbeddedResources -and $script:EmbeddedResources.Count -gt 0) {
 # Export to Working Directory button
 $btnExportToWorkDir = New-Object System.Windows.Forms.Button
 $btnExportToWorkDir.Text = "Export to Working Directory"
-$btnExportToWorkDir.Location = New-Object System.Drawing.Point(630, 22)
-$btnExportToWorkDir.Size = New-Object System.Drawing.Size(145, 28)
+$btnExportToWorkDir.Location = New-Object System.Drawing.Point(730, 25)
+$btnExportToWorkDir.Size = New-Object System.Drawing.Size(170, 35)
 $btnExportToWorkDir.FlatStyle = "Flat"
 $btnExportToWorkDir.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
 $btnExportToWorkDir.ForeColor = [System.Drawing.Color]::White
-$btnExportToWorkDir.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnExportToWorkDir.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $btnExportToWorkDir.Cursor = [System.Windows.Forms.Cursors]::Hand
+$btnExportToWorkDir.Anchor = "Top,Right"
 $resourcesGroupBox.Controls.Add($btnExportToWorkDir)
 
 # Export to Custom Directory button
 $btnExportToCustomDir = New-Object System.Windows.Forms.Button
 $btnExportToCustomDir.Text = "Export to Folder..."
-$btnExportToCustomDir.Location = New-Object System.Drawing.Point(785, 22)
-$btnExportToCustomDir.Size = New-Object System.Drawing.Size(140, 28)
+$btnExportToCustomDir.Location = New-Object System.Drawing.Point(730, 70)
+$btnExportToCustomDir.Size = New-Object System.Drawing.Size(170, 35)
 $btnExportToCustomDir.FlatStyle = "Flat"
 $btnExportToCustomDir.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
 $btnExportToCustomDir.ForeColor = [System.Drawing.Color]::White
-$btnExportToCustomDir.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$btnExportToCustomDir.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $btnExportToCustomDir.Cursor = [System.Windows.Forms.Cursors]::Hand
+$btnExportToCustomDir.Anchor = "Top,Right"
 $resourcesGroupBox.Controls.Add($btnExportToCustomDir)
 
 # Info label
 $lblResourceInfo = New-Object System.Windows.Forms.Label
-$lblResourceInfo.Text = "Select files to export (Ctrl+Click for multiple) or leave empty to export all"
-$lblResourceInfo.Location = New-Object System.Drawing.Point(630, 55)
-$lblResourceInfo.Size = New-Object System.Drawing.Size(295, 32)
-$lblResourceInfo.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+$lblResourceInfo.Text = "Select files to export (Ctrl+Click for multiple)`nor leave empty to export all resources"
+$lblResourceInfo.Location = New-Object System.Drawing.Point(730, 115)
+$lblResourceInfo.Size = New-Object System.Drawing.Size(170, 50)
+$lblResourceInfo.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblResourceInfo.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
+$lblResourceInfo.Anchor = "Top,Right"
 $resourcesGroupBox.Controls.Add($lblResourceInfo)
 
 # Export to Working Directory click handler
@@ -3621,6 +3623,43 @@ let diffs=[],hunks=[],curHunk=0;
 
 function isBlank(s){return !s||!s.trim();}
 
+// Character-level diff using word-based approach for better highlighting
+function charDiff(s1,s2){
+  if(!s1&&!s2)return{del:[],add:[]};
+  if(!s1)return{del:[],add:[[0,s2.length]]};
+  if(!s2)return{del:[[0,s1.length]],add:[]};
+
+  // Find common prefix
+  let pre=0;
+  while(pre<s1.length&&pre<s2.length&&s1[pre]===s2[pre])pre++;
+
+  // Find common suffix (don't overlap with prefix)
+  let suf=0;
+  while(suf<s1.length-pre&&suf<s2.length-pre&&s1[s1.length-1-suf]===s2[s2.length-1-suf])suf++;
+
+  // The different parts
+  const del1=pre,del2=s1.length-suf;
+  const add1=pre,add2=s2.length-suf;
+
+  return{
+    del:del2>del1?[[del1,del2]]:[],
+    add:add2>add1?[[add1,add2]]:[]
+  };
+}
+
+// Render text with inline highlighting
+function renderWithHighlight(text,ranges,hlClass){
+  if(!ranges||ranges.length===0)return esc(text);
+  let result='',lastEnd=0;
+  for(const[start,end]of ranges){
+    if(start>lastEnd)result+=esc(text.slice(lastEnd,start));
+    result+=`<span class="${hlClass}">${esc(text.slice(start,end))}</span>`;
+    lastEnd=end;
+  }
+  if(lastEnd<text.length)result+=esc(text.slice(lastEnd));
+  return result;
+}
+
 function computeDiff(ignoreBlanks){
   const m=f1.length,n=f2.length;
   const m1=new Int32Array(m).fill(-1),m2=new Int32Array(n).fill(-1);
@@ -3675,6 +3714,18 @@ function computeDiff(ignoreBlanks){
     else if(j<n&&m2[j]<0){d.push({t:'+',i1:-1,i2:j});j++;}
     else{if(i<m){d.push({t:'-',i1:i,i2:-1});i++;}if(j<n){d.push({t:'+',i1:-1,i2:j});j++;}}
   }
+
+  // Pair up adjacent del/add as modifications for inline highlighting
+  for(let k=0;k<d.length-1;k++){
+    if(d[k].t==='-'&&d[k+1].t==='+'){
+      const s1=f1[d[k].i1]||'',s2=f2[d[k+1].i2]||'';
+      const cd=charDiff(s1,s2);
+      d[k].hl=cd.del;
+      d[k].paired=k+1;
+      d[k+1].hl=cd.add;
+      d[k+1].paired=k;
+    }
+  }
   return d;
 }
 
@@ -3720,14 +3771,54 @@ function render(){
     html+=`<div class="hunk" id="hunk${hi}"><div class="hunk-header">@@ Lines ${h.startLine1} / ${h.startLine2} @@</div><div class="side"><div class="panel"><div class="panel-header">Original</div>`;
     // Left panel
     h.lines.forEach(d=>{
-      if(d.t==='+'){html+=`<div class="row empty-panel"></div>`;}
-      else{const ln=d.i1>=0?d.i1+1:'';const cls=d.t==='-'?'row-del':'row-ctx';html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${esc(f1[d.i1])}</div></div>`;}
+      if(d.t==='+'){
+        // Show paired line content with highlighting if this is a modification
+        if(d.paired!==undefined){
+          const pairD=diffs[d.paired];
+          if(pairD){
+            const ln=pairD.i1>=0?pairD.i1+1:'';
+            const content=renderWithHighlight(f1[pairD.i1]||'',pairD.hl,'hl-del');
+            html+=`<div class="row row-del"><div class="ln">${ln}</div><div class="code">${content}</div></div>`;
+            return;
+          }
+        }
+        html+=`<div class="row empty-panel"></div>`;
+      }
+      else if(d.t==='-'&&d.paired!==undefined){
+        // Skip - will be rendered when we hit the paired + line
+      }
+      else{
+        const ln=d.i1>=0?d.i1+1:'';
+        const cls=d.t==='-'?'row-del':'row-ctx';
+        const content=d.hl?renderWithHighlight(f1[d.i1]||'',d.hl,'hl-del'):esc(f1[d.i1]);
+        html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${content}</div></div>`;
+      }
     });
     html+=`</div><div class="panel"><div class="panel-header">Modified</div>`;
     // Right panel
     h.lines.forEach(d=>{
-      if(d.t==='-'){html+=`<div class="row empty-panel"></div>`;}
-      else{const ln=d.i2>=0?d.i2+1:'';const cls=d.t==='+'?'row-add':'row-ctx';html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${esc(f2[d.i2])}</div></div>`;}
+      if(d.t==='-'){
+        // Show paired line content with highlighting if this is a modification
+        if(d.paired!==undefined){
+          const pairD=diffs[d.paired];
+          if(pairD){
+            const ln=pairD.i2>=0?pairD.i2+1:'';
+            const content=renderWithHighlight(f2[pairD.i2]||'',pairD.hl,'hl-add');
+            html+=`<div class="row row-add"><div class="ln">${ln}</div><div class="code">${content}</div></div>`;
+            return;
+          }
+        }
+        html+=`<div class="row empty-panel"></div>`;
+      }
+      else if(d.t==='+'&&d.paired!==undefined){
+        // Skip - will be rendered when we hit the paired - line
+      }
+      else{
+        const ln=d.i2>=0?d.i2+1:'';
+        const cls=d.t==='+'?'row-add':'row-ctx';
+        const content=d.hl?renderWithHighlight(f2[d.i2]||'',d.hl,'hl-add'):esc(f2[d.i2]);
+        html+=`<div class="row ${cls}"><div class="ln">${ln}</div><div class="code">${content}</div></div>`;
+      }
     });
     html+=`</div></div></div>`;
   });
@@ -4530,7 +4621,7 @@ GENERAL TIPS
 
 • Use the View menu to switch between Light and Dark themes
 
-• Use the Tools menu to export embedded resources (.RDOX files)
+• Use the RDOX Exports tab to export embedded resources (.RDOX files)
 
 • Settings are saved automatically when you close the app
 
