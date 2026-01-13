@@ -1533,19 +1533,19 @@ $script:txtScopeListFilter.Size = New-Object System.Drawing.Size(430, 20)
 $script:txtScopeListFilter.Location = New-Object System.Drawing.Point(55, 45)
 $script:txtScopeListFilter.MaxLength = 500
 $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
-$script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+$script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
 $dhcpScopeGroupBox.Controls.Add($script:txtScopeListFilter)
 
 # Placeholder behavior for filter textbox
 $script:txtScopeListFilter.Add_GotFocus({
-    if ($script:txtScopeListFilter.Text -eq "e.g., SITE1, SITE2, 192.168") {
+    if ($script:txtScopeListFilter.Text -eq "e.g., SITE1, SITE2 (min 3 chars)") {
         $script:txtScopeListFilter.Text = ""
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Black
     }
 })
 $script:txtScopeListFilter.Add_LostFocus({
     if ([string]::IsNullOrWhiteSpace($script:txtScopeListFilter.Text)) {
-        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
     }
 })
@@ -2288,7 +2288,7 @@ $script:btnRefreshScopeCache.Add_Click({
 
         # Clear previous selections and reset filter to placeholder
         $script:selectedScopeNames.Clear()
-        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
 
         # Populate list with display names
@@ -2315,6 +2315,7 @@ $script:btnRefreshScopeCache.Add_Click({
 
 # Event Handler: Scope List Filter (real-time filtering with selection persistence)
 # Supports comma-delimited search terms (e.g., "ABCD, EFGH, XYZ")
+# Minimum 3 characters per term before filtering (for performance with large scope lists)
 $script:txtScopeListFilter.Add_TextChanged({
     if (-not $script:allDHCPScopes) {
         return
@@ -2334,20 +2335,28 @@ $script:txtScopeListFilter.Add_TextChanged({
     }
 
     $filterText = $script:txtScopeListFilter.Text.Trim()
-    $script:lstDHCPScopes.Items.Clear()
 
     # Treat placeholder text as empty filter
-    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2, 192.168"
+    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2 (min 3 chars)"
 
     if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
         # No filter - show all
+        $script:lstDHCPScopes.Items.Clear()
         foreach ($scope in $script:allDHCPScopes) {
             $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
         }
     } else {
-        # Parse comma-delimited filter terms
-        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne '' }
+        # Parse comma-delimited filter terms (only terms with 3+ characters)
+        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
 
+        # Only filter if we have at least one valid term (3+ chars)
+        if ($filterTerms.Count -eq 0) {
+            # No valid terms yet - update hint but don't re-filter
+            $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
+            return
+        }
+
+        $script:lstDHCPScopes.Items.Clear()
         foreach ($scope in $script:allDHCPScopes) {
             $displayUpper = $scope.DisplayName.ToUpper()
             # Match if ANY filter term is found in the display name
