@@ -1521,18 +1521,34 @@ $script:lblScopeCacheStatus.Font = New-Object System.Drawing.Font("Arial", 8, [S
 $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Gray
 $dhcpScopeGroupBox.Controls.Add($script:lblScopeCacheStatus)
 
-# Filter textbox for scope list
+# Filter textbox for scope list (supports comma-delimited terms)
 $lblScopeListFilter = New-Object System.Windows.Forms.Label
-$lblScopeListFilter.Text = "Filter list:"
-$lblScopeListFilter.Size = New-Object System.Drawing.Size(60, 20)
+$lblScopeListFilter.Text = "Filter:"
+$lblScopeListFilter.Size = New-Object System.Drawing.Size(40, 20)
 $lblScopeListFilter.Location = New-Object System.Drawing.Point(15, 47)
 $dhcpScopeGroupBox.Controls.Add($lblScopeListFilter)
 
 $script:txtScopeListFilter = New-Object System.Windows.Forms.TextBox
-$script:txtScopeListFilter.Size = New-Object System.Drawing.Size(390, 20)
-$script:txtScopeListFilter.Location = New-Object System.Drawing.Point(80, 45)
-$script:txtScopeListFilter.MaxLength = 100
+$script:txtScopeListFilter.Size = New-Object System.Drawing.Size(430, 20)
+$script:txtScopeListFilter.Location = New-Object System.Drawing.Point(55, 45)
+$script:txtScopeListFilter.MaxLength = 500
+$script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
+$script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
 $dhcpScopeGroupBox.Controls.Add($script:txtScopeListFilter)
+
+# Placeholder behavior for filter textbox
+$script:txtScopeListFilter.Add_GotFocus({
+    if ($script:txtScopeListFilter.Text -eq "e.g., SITE1, SITE2, 192.168") {
+        $script:txtScopeListFilter.Text = ""
+        $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Black
+    }
+})
+$script:txtScopeListFilter.Add_LostFocus({
+    if ([string]::IsNullOrWhiteSpace($script:txtScopeListFilter.Text)) {
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
+    }
+})
 
 # CheckedListBox for scope selection
 $script:lstDHCPScopes = New-Object System.Windows.Forms.CheckedListBox
@@ -2256,9 +2272,10 @@ $script:btnRefreshScopeCache.Add_Click({
         # Store all scopes for filtering
         $script:allDHCPScopes = $scopes
 
-        # Clear previous selections and filter when refreshing cache
+        # Clear previous selections and reset filter to placeholder
         $script:selectedScopeNames.Clear()
-        $script:txtScopeListFilter.Text = ""
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
 
         # Populate list with display names
         $script:lstDHCPScopes.Items.Clear()
@@ -2283,6 +2300,7 @@ $script:btnRefreshScopeCache.Add_Click({
 })
 
 # Event Handler: Scope List Filter (real-time filtering with selection persistence)
+# Supports comma-delimited search terms (e.g., "ABCD, EFGH, XYZ")
 $script:txtScopeListFilter.Add_TextChanged({
     if (-not $script:allDHCPScopes) {
         return
@@ -2304,16 +2322,29 @@ $script:txtScopeListFilter.Add_TextChanged({
     $filterText = $script:txtScopeListFilter.Text.Trim()
     $script:lstDHCPScopes.Items.Clear()
 
-    if ([string]::IsNullOrWhiteSpace($filterText)) {
+    # Treat placeholder text as empty filter
+    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2, 192.168"
+
+    if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
         # No filter - show all
         foreach ($scope in $script:allDHCPScopes) {
             $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
         }
     } else {
-        # Filter by DisplayName (case-insensitive)
-        $filterUpper = $filterText.ToUpper()
+        # Parse comma-delimited filter terms
+        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne '' }
+
         foreach ($scope in $script:allDHCPScopes) {
-            if ($scope.DisplayName.ToUpper().Contains($filterUpper)) {
+            $displayUpper = $scope.DisplayName.ToUpper()
+            # Match if ANY filter term is found in the display name
+            $matchFound = $false
+            foreach ($term in $filterTerms) {
+                if ($displayUpper.Contains($term)) {
+                    $matchFound = $true
+                    break
+                }
+            }
+            if ($matchFound) {
                 $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
             }
         }
