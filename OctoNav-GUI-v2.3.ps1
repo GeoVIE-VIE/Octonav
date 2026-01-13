@@ -1533,19 +1533,19 @@ $script:txtScopeListFilter.Size = New-Object System.Drawing.Size(430, 20)
 $script:txtScopeListFilter.Location = New-Object System.Drawing.Point(55, 45)
 $script:txtScopeListFilter.MaxLength = 500
 $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
-$script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+$script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
 $dhcpScopeGroupBox.Controls.Add($script:txtScopeListFilter)
 
 # Placeholder behavior for filter textbox
 $script:txtScopeListFilter.Add_GotFocus({
-    if ($script:txtScopeListFilter.Text -eq "e.g., SITE1, SITE2, 192.168") {
+    if ($script:txtScopeListFilter.Text -eq "e.g., SITE1, SITE2 (min 3 chars)") {
         $script:txtScopeListFilter.Text = ""
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Black
     }
 })
 $script:txtScopeListFilter.Add_LostFocus({
     if ([string]::IsNullOrWhiteSpace($script:txtScopeListFilter.Text)) {
-        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
     }
 })
@@ -1670,17 +1670,30 @@ $btnStopDHCP.BackColor = [System.Drawing.Color]::LightCoral
 $btnStopDHCP.Enabled = $false
 $dhcpActionsGroupBox.Controls.Add($btnStopDHCP)
 
-$btnExportDHCP = New-Object System.Windows.Forms.Button
-$btnExportDHCP.Text = "Export to CSV"
-$btnExportDHCP.Size = New-Object System.Drawing.Size(150, 35)
-$btnExportDHCP.Location = New-Object System.Drawing.Point(345, 25)
-$btnExportDHCP.Enabled = $false
-$dhcpActionsGroupBox.Controls.Add($btnExportDHCP)
+$btnExportDHCPWorkDir = New-Object System.Windows.Forms.Button
+$btnExportDHCPWorkDir.Text = "Export to Working Dir"
+$btnExportDHCPWorkDir.Size = New-Object System.Drawing.Size(140, 35)
+$btnExportDHCPWorkDir.Location = New-Object System.Drawing.Point(345, 25)
+$btnExportDHCPWorkDir.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$btnExportDHCPWorkDir.ForeColor = [System.Drawing.Color]::White
+$btnExportDHCPWorkDir.FlatStyle = "Flat"
+$btnExportDHCPWorkDir.Enabled = $false
+$dhcpActionsGroupBox.Controls.Add($btnExportDHCPWorkDir)
+
+$btnExportDHCPFolder = New-Object System.Windows.Forms.Button
+$btnExportDHCPFolder.Text = "Export to Folder..."
+$btnExportDHCPFolder.Size = New-Object System.Drawing.Size(130, 35)
+$btnExportDHCPFolder.Location = New-Object System.Drawing.Point(495, 25)
+$btnExportDHCPFolder.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
+$btnExportDHCPFolder.ForeColor = [System.Drawing.Color]::White
+$btnExportDHCPFolder.FlatStyle = "Flat"
+$btnExportDHCPFolder.Enabled = $false
+$dhcpActionsGroupBox.Controls.Add($btnExportDHCPFolder)
 
 $lblExportHint = New-Object System.Windows.Forms.Label
-$lblExportHint.Text = "Results auto-exported after collection. Use Export to re-export."
-$lblExportHint.Size = New-Object System.Drawing.Size(400, 20)
-$lblExportHint.Location = New-Object System.Drawing.Point(510, 33)
+$lblExportHint.Text = "Results auto-exported after collection"
+$lblExportHint.Size = New-Object System.Drawing.Size(280, 20)
+$lblExportHint.Location = New-Object System.Drawing.Point(640, 33)
 $lblExportHint.Font = New-Object System.Drawing.Font("Arial", 8, [System.Drawing.FontStyle]::Italic)
 $lblExportHint.ForeColor = [System.Drawing.Color]::Gray
 $dhcpActionsGroupBox.Controls.Add($lblExportHint)
@@ -1715,7 +1728,8 @@ $btnCollectDHCP.Add_Click({
     try {
         $btnCollectDHCP.Enabled = $false
         $btnStopDHCP.Enabled = $true
-        $btnExportDHCP.Enabled = $false
+        $btnExportDHCPWorkDir.Enabled = $false
+        $btnExportDHCPFolder.Enabled = $false
         $script:dhcpStopRequested = $false
 
         # Check for selected scopes from cache (new approach - takes precedence)
@@ -2081,12 +2095,11 @@ $btnCollectDHCP.Add_Click({
 
                 Write-Log -Message "DEBUG: Assigned to script:dhcpResults, count = $($script:dhcpResults.Count)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                 Write-Log -Message "DEBUG: script:dhcpResults type = $($script:dhcpResults.GetType().FullName)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                Write-Log -Message "DEBUG: btnExportDHCP state BEFORE enable = $($btnExportDHCP.Enabled)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                 if ($script:dhcpResults.Count -gt 0) {
-                    Write-Log -Message "DEBUG: Count > 0, enabling export button..." -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-                    $btnExportDHCP.Enabled = $true
-                    Write-Log -Message "DEBUG: btnExportDHCP state AFTER enable = $($btnExportDHCP.Enabled)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "DEBUG: Count > 0, enabling export buttons..." -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    $btnExportDHCPWorkDir.Enabled = $true
+                    $btnExportDHCPFolder.Enabled = $true
                     Write-Log -Message "Collection complete! Found $($script:dhcpResults.Count) scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                 # Auto-export if enabled
@@ -2156,7 +2169,8 @@ $btnCollectDHCP.Add_Click({
             # Even if not successful, save any partial results collected before stop/error
             if ($actualResult.Results -and $actualResult.Results.Count -gt 0) {
                 $script:dhcpResults = @($actualResult.Results)
-                $btnExportDHCP.Enabled = $true
+                $btnExportDHCPWorkDir.Enabled = $true
+                $btnExportDHCPFolder.Enabled = $true
                 Write-Log -Message "Partial results available: $($script:dhcpResults.Count) scopes collected before operation was stopped" -Color "Warning" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
             }
 
@@ -2274,7 +2288,7 @@ $script:btnRefreshScopeCache.Add_Click({
 
         # Clear previous selections and reset filter to placeholder
         $script:selectedScopeNames.Clear()
-        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2, 192.168"
+        $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
 
         # Populate list with display names
@@ -2301,6 +2315,7 @@ $script:btnRefreshScopeCache.Add_Click({
 
 # Event Handler: Scope List Filter (real-time filtering with selection persistence)
 # Supports comma-delimited search terms (e.g., "ABCD, EFGH, XYZ")
+# Minimum 3 characters per term before filtering (for performance with large scope lists)
 $script:txtScopeListFilter.Add_TextChanged({
     if (-not $script:allDHCPScopes) {
         return
@@ -2320,20 +2335,28 @@ $script:txtScopeListFilter.Add_TextChanged({
     }
 
     $filterText = $script:txtScopeListFilter.Text.Trim()
-    $script:lstDHCPScopes.Items.Clear()
 
     # Treat placeholder text as empty filter
-    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2, 192.168"
+    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2 (min 3 chars)"
 
     if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
         # No filter - show all
+        $script:lstDHCPScopes.Items.Clear()
         foreach ($scope in $script:allDHCPScopes) {
             $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
         }
     } else {
-        # Parse comma-delimited filter terms
-        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne '' }
+        # Parse comma-delimited filter terms (only terms with 3+ characters)
+        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
 
+        # Only filter if we have at least one valid term (3+ chars)
+        if ($filterTerms.Count -eq 0) {
+            # No valid terms yet - update hint but don't re-filter
+            $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
+            return
+        }
+
+        $script:lstDHCPScopes.Items.Clear()
         foreach ($scope in $script:allDHCPScopes) {
             $displayUpper = $scope.DisplayName.ToUpper()
             # Match if ANY filter term is found in the display name
@@ -2530,63 +2553,87 @@ $script:lstDHCPScopes.Add_ItemCheck({
     }
 })
 
-$btnExportDHCP.Add_Click({
+# Shared function for DHCP export logic
+function Export-DHCPResultsToPath {
+    param([string]$OutputPath)
+
+    # Check if results exist and have data
+    if (-not $script:dhcpResults -or $script:dhcpResults.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("No DHCP results to export. Please collect statistics first.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $csvPath = Join-Path -Path $OutputPath -ChildPath "DHCPScopeStats_$timestamp.csv"
+
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+    }
+
+    Write-Log -Message "Exporting $($script:dhcpResults.Count) scope(s) to CSV..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+
+    # Apply grouping if enabled
+    $dataToExport = $script:dhcpResults
+    if ($script:chkGroupByScope.Checked) {
+        Write-Log -Message "Grouping redundant scopes by Scope ID..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        $dataToExport = Group-DHCPScopesByScopeId -ScopeData $script:dhcpResults
+        Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+    }
+
+    # Format data with specific columns in order (build column list dynamically)
+    $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
+
+    if ($dataToExport.Count -gt 0) {
+        $firstItem = $dataToExport[0]
+
+        if ($firstItem.PSObject.Properties.Name -contains 'DNSServers') {
+            $exportColumns += 'DNSServers'
+            Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
+        if ($firstItem.PSObject.Properties.Name -contains 'Option60') {
+            $exportColumns += 'Option60'
+            Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
+        if ($firstItem.PSObject.Properties.Name -contains 'Option43') {
+            $exportColumns += 'Option43'
+            Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+    }
+
+    $exportData = $dataToExport | Select-Object $exportColumns
+
+    $exportedPath = Export-ToCSV -Data $exportData -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
+
+    Write-Log -Message "Exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+    [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$exportedPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+    # Add to export history
+    Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
+}
+
+# Export to Working Directory
+$btnExportDHCPWorkDir.Add_Click({
     try {
-        # Check if results exist and have data
-        if (-not $script:dhcpResults -or $script:dhcpResults.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("No DHCP results to export. Please collect statistics first.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
+        $workingDir = Get-Location
+        Export-DHCPResultsToPath -OutputPath $workingDir
+    } catch {
+        Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        [System.Windows.Forms.MessageBox]::Show("Error exporting: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+})
+
+# Export to Custom Folder
+$btnExportDHCPFolder.Add_Click({
+    try {
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select folder to export DHCP Statistics"
+        $folderBrowser.ShowNewFolderButton = $true
+
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            Export-DHCPResultsToPath -OutputPath $folderBrowser.SelectedPath
         }
-
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $csvPath = Join-Path -Path $script:outputDir -ChildPath "DHCPScopeStats_$timestamp.csv"
-
-        if (-not (Test-Path $script:outputDir)) {
-            New-Item -ItemType Directory -Path $script:outputDir -Force | Out-Null
-        }
-
-        Write-Log -Message "Exporting $($script:dhcpResults.Count) scope(s) to CSV..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-
-        # Apply grouping if enabled
-        $dataToExport = $script:dhcpResults
-        if ($script:chkGroupByScope.Checked) {
-            Write-Log -Message "Grouping redundant scopes by Scope ID..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            $dataToExport = Group-DHCPScopesByScopeId -ScopeData $script:dhcpResults
-            Write-Log -Message "Grouped into $($dataToExport.Count) unique scope(s)" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        }
-
-        # Format data with specific columns in order (build column list dynamically)
-        $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
-
-        if ($dataToExport.Count -gt 0) {
-            $firstItem = $dataToExport[0]
-
-            if ($firstItem.PSObject.Properties.Name -contains 'DNSServers') {
-                $exportColumns += 'DNSServers'
-                Write-Log -Message "Including DNS server information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            }
-
-            if ($firstItem.PSObject.Properties.Name -contains 'Option60') {
-                $exportColumns += 'Option60'
-                Write-Log -Message "Including Option 60 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            }
-
-            if ($firstItem.PSObject.Properties.Name -contains 'Option43') {
-                $exportColumns += 'Option43'
-                Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-            }
-        }
-
-        $exportData = $dataToExport | Select-Object $exportColumns
-
-        $exportedPath = Export-ToCSV -Data $exportData -FilePath $csvPath -IncludeTimestamp:$script:Settings.IncludeTimestampInFilename
-
-        Write-Log -Message "Exported to: $exportedPath" -Color "Success" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
-        [System.Windows.Forms.MessageBox]::Show("Export successful!`n`n$exportedPath", "Export Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-
-        # Add to export history
-        Add-ExportHistory -Settings $script:Settings -FilePath $exportedPath -Operation "DHCP Statistics" -Format "CSV"
-
     } catch {
         Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color "Error" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         [System.Windows.Forms.MessageBox]::Show("Error exporting: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -2600,7 +2647,7 @@ $btnExportDHCP.Add_Click({
 $tab3 = New-Object System.Windows.Forms.TabPage
 $tab3.Text = "DNA Center"
 $tab3.AutoScroll = $true
-$tab3.AutoScrollMinSize = New-Object System.Drawing.Size(980, 920)
+$tab3.AutoScrollMinSize = New-Object System.Drawing.Size(980, 960)
 $tab3.Padding = New-Object System.Windows.Forms.Padding(5)
 $tabControl.Controls.Add($tab3)
 Add-IconToTab -Tab $tab3 -IconName "DNA"
@@ -2892,10 +2939,86 @@ $script:lstFavorites.Size = New-Object System.Drawing.Size(430, 230)
 $script:lstFavorites.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaFavoritesGroupBox.Controls.Add($script:lstFavorites)
 
+# Export Path Settings Group
+$dnaExportGroupBox = New-Object System.Windows.Forms.GroupBox
+$dnaExportGroupBox.Text = "Export Settings"
+$dnaExportGroupBox.Size = New-Object System.Drawing.Size(940, 55)
+$dnaExportGroupBox.Location = New-Object System.Drawing.Point(10, 795)
+$dnaExportGroupBox.Anchor = "Top,Left,Right"
+$tab3.Controls.Add($dnaExportGroupBox)
+
+$lblDNAExportPath = New-Object System.Windows.Forms.Label
+$lblDNAExportPath.Text = "Export Path:"
+$lblDNAExportPath.Size = New-Object System.Drawing.Size(75, 20)
+$lblDNAExportPath.Location = New-Object System.Drawing.Point(15, 22)
+$dnaExportGroupBox.Controls.Add($lblDNAExportPath)
+
+$script:txtDNAExportPath = New-Object System.Windows.Forms.TextBox
+$script:txtDNAExportPath.Size = New-Object System.Drawing.Size(500, 20)
+$script:txtDNAExportPath.Location = New-Object System.Drawing.Point(95, 20)
+$script:txtDNAExportPath.Text = $script:outputDir
+$script:txtDNAExportPath.ReadOnly = $true
+$script:txtDNAExportPath.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
+$dnaExportGroupBox.Controls.Add($script:txtDNAExportPath)
+
+$btnDNAExportWorkDir = New-Object System.Windows.Forms.Button
+$btnDNAExportWorkDir.Text = "Use Working Dir"
+$btnDNAExportWorkDir.Size = New-Object System.Drawing.Size(120, 25)
+$btnDNAExportWorkDir.Location = New-Object System.Drawing.Point(610, 18)
+$btnDNAExportWorkDir.BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87)
+$btnDNAExportWorkDir.ForeColor = [System.Drawing.Color]::White
+$btnDNAExportWorkDir.FlatStyle = "Flat"
+$dnaExportGroupBox.Controls.Add($btnDNAExportWorkDir)
+
+$btnDNAExportFolder = New-Object System.Windows.Forms.Button
+$btnDNAExportFolder.Text = "Browse Folder..."
+$btnDNAExportFolder.Size = New-Object System.Drawing.Size(120, 25)
+$btnDNAExportFolder.Location = New-Object System.Drawing.Point(740, 18)
+$btnDNAExportFolder.BackColor = [System.Drawing.Color]::FromArgb(70, 130, 180)
+$btnDNAExportFolder.ForeColor = [System.Drawing.Color]::White
+$btnDNAExportFolder.FlatStyle = "Flat"
+$dnaExportGroupBox.Controls.Add($btnDNAExportFolder)
+
+$btnDNAExportDefault = New-Object System.Windows.Forms.Button
+$btnDNAExportDefault.Text = "Reset Default"
+$btnDNAExportDefault.Size = New-Object System.Drawing.Size(100, 25)
+$btnDNAExportDefault.Location = New-Object System.Drawing.Point(870, 18)
+$btnDNAExportDefault.FlatStyle = "Flat"
+$dnaExportGroupBox.Controls.Add($btnDNAExportDefault)
+
+# Export Path Button Handlers
+$btnDNAExportWorkDir.Add_Click({
+    $workingDir = (Get-Location).Path
+    $script:outputDir = $workingDir
+    $script:txtDNAExportPath.Text = $workingDir
+    $env:OCTONAV_OUTPUT_DIR = $workingDir
+    Write-Log -Message "DNA Center export path set to: $workingDir" -Color "Info" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+})
+
+$btnDNAExportFolder.Add_Click({
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Select folder for DNA Center exports"
+    $folderBrowser.ShowNewFolderButton = $true
+    if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $script:outputDir = $folderBrowser.SelectedPath
+        $script:txtDNAExportPath.Text = $folderBrowser.SelectedPath
+        $env:OCTONAV_OUTPUT_DIR = $folderBrowser.SelectedPath
+        Write-Log -Message "DNA Center export path set to: $($folderBrowser.SelectedPath)" -Color "Info" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+    }
+})
+
+$btnDNAExportDefault.Add_Click({
+    $defaultPath = "C:\DNACenter_Reports"
+    $script:outputDir = $defaultPath
+    $script:txtDNAExportPath.Text = $defaultPath
+    $env:OCTONAV_OUTPUT_DIR = $defaultPath
+    Write-Log -Message "DNA Center export path reset to default: $defaultPath" -Color "Info" -LogBox $dnaLogBox -Theme $script:CurrentTheme
+})
+
 # DNA Log
 $dnaLogBox = New-Object System.Windows.Forms.RichTextBox
 $dnaLogBox.Size = New-Object System.Drawing.Size(940, 90)
-$dnaLogBox.Location = New-Object System.Drawing.Point(10, 800)
+$dnaLogBox.Location = New-Object System.Drawing.Point(10, 855)
 $dnaLogBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $dnaLogBox.ReadOnly = $true
 $dnaLogBox.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
