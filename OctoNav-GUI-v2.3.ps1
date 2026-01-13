@@ -2283,7 +2283,10 @@ $script:btnRefreshScopeCache.Add_Click({
             Update-DHCPScopeCache -ThrottleLimit $throttleLimit
         }
 
-        # Store all scopes for filtering
+        # Store all scopes for filtering and pre-cache uppercase display names for faster filtering
+        foreach ($scope in $scopes) {
+            $scope | Add-Member -NotePropertyName 'DisplayNameUpper' -NotePropertyValue $scope.DisplayName.ToUpper() -Force
+        }
         $script:allDHCPScopes = $scopes
 
         # Clear previous selections and reset filter to placeholder
@@ -2291,10 +2294,15 @@ $script:btnRefreshScopeCache.Add_Click({
         $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
 
-        # Populate list with display names
-        $script:lstDHCPScopes.Items.Clear()
-        foreach ($scope in $scopes) {
-            $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+        # Populate list with display names (use BeginUpdate for performance)
+        $script:lstDHCPScopes.BeginUpdate()
+        try {
+            $script:lstDHCPScopes.Items.Clear()
+            foreach ($scope in $scopes) {
+                $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+            }
+        } finally {
+            $script:lstDHCPScopes.EndUpdate()
         }
 
         # Update visible count label
@@ -2339,46 +2347,54 @@ $script:txtScopeListFilter.Add_TextChanged({
     # Treat placeholder text as empty filter
     $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2 (min 3 chars)"
 
-    if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
-        # No filter - show all
-        $script:lstDHCPScopes.Items.Clear()
-        foreach ($scope in $script:allDHCPScopes) {
-            $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
-        }
-    } else {
-        # Parse comma-delimited filter terms (only terms with 3+ characters)
-        $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
-
-        # Only filter if we have at least one valid term (3+ chars)
-        if ($filterTerms.Count -eq 0) {
-            # No valid terms yet - update hint but don't re-filter
-            $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
-            return
-        }
-
-        $script:lstDHCPScopes.Items.Clear()
-        foreach ($scope in $script:allDHCPScopes) {
-            $displayUpper = $scope.DisplayName.ToUpper()
-            # Match if ANY filter term is found in the display name
-            $matchFound = $false
-            foreach ($term in $filterTerms) {
-                if ($displayUpper.Contains($term)) {
-                    $matchFound = $true
-                    break
-                }
-            }
-            if ($matchFound) {
+    # Suspend UI updates for performance
+    $script:lstDHCPScopes.BeginUpdate()
+    try {
+        if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
+            # No filter - show all
+            $script:lstDHCPScopes.Items.Clear()
+            foreach ($scope in $script:allDHCPScopes) {
                 $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
             }
-        }
-    }
+        } else {
+            # Parse comma-delimited filter terms (only terms with 3+ characters)
+            $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
 
-    # Restore checked state for items that were previously selected
-    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-        $itemName = $script:lstDHCPScopes.Items[$i].ToString()
-        if ($script:selectedScopeNames.ContainsKey($itemName)) {
-            $script:lstDHCPScopes.SetItemChecked($i, $true)
+            # Only filter if we have at least one valid term (3+ chars)
+            if ($filterTerms.Count -eq 0) {
+                # No valid terms yet - update hint but don't re-filter
+                $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
+                return
+            }
+
+            $script:lstDHCPScopes.Items.Clear()
+            foreach ($scope in $script:allDHCPScopes) {
+                # Use cached uppercase if available, otherwise compute
+                $displayUpper = if ($scope.DisplayNameUpper) { $scope.DisplayNameUpper } else { $scope.DisplayName.ToUpper() }
+                # Match if ANY filter term is found in the display name
+                $matchFound = $false
+                foreach ($term in $filterTerms) {
+                    if ($displayUpper.Contains($term)) {
+                        $matchFound = $true
+                        break
+                    }
+                }
+                if ($matchFound) {
+                    $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+                }
+            }
         }
+
+        # Restore checked state for items that were previously selected
+        for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+            $itemName = $script:lstDHCPScopes.Items[$i].ToString()
+            if ($script:selectedScopeNames.ContainsKey($itemName)) {
+                $script:lstDHCPScopes.SetItemChecked($i, $true)
+            }
+        }
+    } finally {
+        # Resume UI updates
+        $script:lstDHCPScopes.EndUpdate()
     }
 
     # Update visible count label and show selected count
@@ -2392,11 +2408,16 @@ $script:txtScopeListFilter.Add_TextChanged({
 
 # Event Handler: Select All Scopes (visible items only)
 $btnSelectAllScopes.Add_Click({
-    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-        $script:lstDHCPScopes.SetItemChecked($i, $true)
-        # Track in backing variable
-        $itemName = $script:lstDHCPScopes.Items[$i].ToString()
-        $script:selectedScopeNames[$itemName] = $true
+    $script:lstDHCPScopes.BeginUpdate()
+    try {
+        for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+            $script:lstDHCPScopes.SetItemChecked($i, $true)
+            # Track in backing variable
+            $itemName = $script:lstDHCPScopes.Items[$i].ToString()
+            $script:selectedScopeNames[$itemName] = $true
+        }
+    } finally {
+        $script:lstDHCPScopes.EndUpdate()
     }
     # Update label
     $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible, $($script:selectedScopeNames.Count) selected)"
@@ -2404,8 +2425,13 @@ $btnSelectAllScopes.Add_Click({
 
 # Event Handler: Select None Scopes (clears ALL selections, not just visible)
 $btnSelectNoneScopes.Add_Click({
-    for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
-        $script:lstDHCPScopes.SetItemChecked($i, $false)
+    $script:lstDHCPScopes.BeginUpdate()
+    try {
+        for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
+            $script:lstDHCPScopes.SetItemChecked($i, $false)
+        }
+    } finally {
+        $script:lstDHCPScopes.EndUpdate()
     }
     # Clear ALL tracked selections
     $script:selectedScopeNames.Clear()
