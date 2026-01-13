@@ -2458,10 +2458,20 @@ $script:lstDHCPScopes.Add_ItemCheck({
 
                                     if ($scope -and $scope.ScopeId -eq $targetScopeId) {
                                         $listBox.SetItemChecked($index, $true)
+                                        # Track in selectedScopeNames for filter persistence
+                                        $itemName = $listBox.Items[$index].ToString()
+                                        $script:selectedScopeNames[$itemName] = $true
                                         $matchCount++
                                     }
                                 }
                             }
+
+                            # Also track the originally checked item
+                            $checkedItemName = $listBox.Items[$checkedIndex].ToString()
+                            $script:selectedScopeNames[$checkedItemName] = $true
+
+                            # Update the visible/selected label
+                            $script:lblVisibleScopes.Text = "($($listBox.Items.Count) visible, $($script:selectedScopeNames.Count) selected)"
 
                             # Log results
                             if ($matchCount -gt 0) {
@@ -2495,6 +2505,28 @@ $script:lstDHCPScopes.Add_ItemCheck({
         # Prevent unhandled exceptions from crashing the application
         # Reset flag to avoid lock-up - don't log as that could cause additional errors
         $script:isAutoSelecting = $false
+    }
+
+    # Track manual selection changes for filter persistence (runs regardless of auto-match)
+    # Use e.NewValue since ItemCheck fires BEFORE the state changes
+    try {
+        $itemName = $script:lstDHCPScopes.Items[$e.Index].ToString()
+        if ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked) {
+            $script:selectedScopeNames[$itemName] = $true
+        } else {
+            if ($script:selectedScopeNames.ContainsKey($itemName)) {
+                $script:selectedScopeNames.Remove($itemName)
+            }
+        }
+        # Update the visible/selected label
+        $selectedCount = $script:selectedScopeNames.Count
+        if ($selectedCount -gt 0) {
+            $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible, $selectedCount selected)"
+        } else {
+            $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
+        }
+    } catch {
+        # Ignore tracking errors
     }
 })
 
