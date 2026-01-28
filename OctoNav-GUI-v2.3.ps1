@@ -1529,12 +1529,27 @@ $lblScopeListFilter.Location = New-Object System.Drawing.Point(15, 47)
 $dhcpScopeGroupBox.Controls.Add($lblScopeListFilter)
 
 $script:txtScopeListFilter = New-Object System.Windows.Forms.TextBox
-$script:txtScopeListFilter.Size = New-Object System.Drawing.Size(430, 20)
+$script:txtScopeListFilter.Size = New-Object System.Drawing.Size(300, 20)
 $script:txtScopeListFilter.Location = New-Object System.Drawing.Point(55, 45)
 $script:txtScopeListFilter.MaxLength = 500
 $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
 $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
 $dhcpScopeGroupBox.Controls.Add($script:txtScopeListFilter)
+
+# Prefix filter (2-character minimum, matches from START of scope name)
+$lblPrefixFilter = New-Object System.Windows.Forms.Label
+$lblPrefixFilter.Text = "Prefix:"
+$lblPrefixFilter.Size = New-Object System.Drawing.Size(40, 20)
+$lblPrefixFilter.Location = New-Object System.Drawing.Point(365, 47)
+$dhcpScopeGroupBox.Controls.Add($lblPrefixFilter)
+
+$script:txtPrefixFilter = New-Object System.Windows.Forms.TextBox
+$script:txtPrefixFilter.Size = New-Object System.Drawing.Size(120, 20)
+$script:txtPrefixFilter.Location = New-Object System.Drawing.Point(405, 45)
+$script:txtPrefixFilter.MaxLength = 10
+$script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Gray
+$script:txtPrefixFilter.Text = "e.g., ZA (2+ chars)"
+$dhcpScopeGroupBox.Controls.Add($script:txtPrefixFilter)
 
 # Placeholder behavior for filter textbox
 $script:txtScopeListFilter.Add_GotFocus({
@@ -1547,6 +1562,20 @@ $script:txtScopeListFilter.Add_LostFocus({
     if ([string]::IsNullOrWhiteSpace($script:txtScopeListFilter.Text)) {
         $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
+    }
+})
+
+# Placeholder behavior for prefix filter textbox
+$script:txtPrefixFilter.Add_GotFocus({
+    if ($script:txtPrefixFilter.Text -eq "e.g., ZA (2+ chars)") {
+        $script:txtPrefixFilter.Text = ""
+        $script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Black
+    }
+})
+$script:txtPrefixFilter.Add_LostFocus({
+    if ([string]::IsNullOrWhiteSpace($script:txtPrefixFilter.Text)) {
+        $script:txtPrefixFilter.Text = "e.g., ZA (2+ chars)"
+        $script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Gray
     }
 })
 
@@ -1581,7 +1610,7 @@ $dhcpScopeGroupBox.Controls.Add($script:lblVisibleScopes)
 
 # Note label
 $lblScopeNote = New-Object System.Windows.Forms.Label
-$lblScopeNote.Text = "Workflow: Refresh cache → Filter (optional) → Select All Visible → Collect DHCP Statistics"
+$lblScopeNote.Text = "Workflow: Refresh cache → Filter/Prefix (optional) → Select All Visible → Collect DHCP Statistics"
 $lblScopeNote.Location = New-Object System.Drawing.Point(15, 147)
 $lblScopeNote.Size = New-Object System.Drawing.Size(900, 15)
 $lblScopeNote.Font = New-Object System.Drawing.Font("Arial", 7, [System.Drawing.FontStyle]::Italic)
@@ -2289,10 +2318,12 @@ $script:btnRefreshScopeCache.Add_Click({
         }
         $script:allDHCPScopes = $scopes
 
-        # Clear previous selections and reset filter to placeholder
+        # Clear previous selections and reset filters to placeholder
         $script:selectedScopeNames.Clear()
         $script:txtScopeListFilter.Text = "e.g., SITE1, SITE2 (min 3 chars)"
         $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
+        $script:txtPrefixFilter.Text = "e.g., ZA (2+ chars)"
+        $script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Gray
 
         # Populate list with display names (use BeginUpdate for performance)
         $script:lstDHCPScopes.BeginUpdate()
@@ -2321,10 +2352,8 @@ $script:btnRefreshScopeCache.Add_Click({
     }
 })
 
-# Event Handler: Scope List Filter (real-time filtering with selection persistence)
-# Supports comma-delimited search terms (e.g., "ABCD, EFGH, XYZ")
-# Minimum 3 characters per term before filtering (for performance with large scope lists)
-$script:txtScopeListFilter.Add_TextChanged({
+# Shared function: Apply both filters (Contains + Prefix) to scope list
+function Apply-ScopeFilters {
     if (-not $script:allDHCPScopes) {
         return
     }
@@ -2335,57 +2364,90 @@ $script:txtScopeListFilter.Add_TextChanged({
         if ($script:lstDHCPScopes.GetItemChecked($i)) {
             $script:selectedScopeNames[$itemName] = $true
         } else {
-            # Only remove if unchecked while visible (user explicitly unchecked it)
             if ($script:selectedScopeNames.ContainsKey($itemName)) {
                 $script:selectedScopeNames.Remove($itemName)
             }
         }
     }
 
-    $filterText = $script:txtScopeListFilter.Text.Trim()
+    # Get contains filter text
+    $containsText = $script:txtScopeListFilter.Text.Trim()
+    $containsPlaceholder = $containsText -eq "e.g., SITE1, SITE2 (min 3 chars)"
+    if ($containsPlaceholder) { $containsText = "" }
 
-    # Treat placeholder text as empty filter
-    $isPlaceholder = $filterText -eq "e.g., SITE1, SITE2 (min 3 chars)"
+    # Get prefix filter text
+    $prefixText = $script:txtPrefixFilter.Text.Trim()
+    $prefixPlaceholder = $prefixText -eq "e.g., ZA (2+ chars)"
+    if ($prefixPlaceholder) { $prefixText = "" }
+
+    # Parse contains filter terms (3+ chars each)
+    $containsTerms = @()
+    if (-not [string]::IsNullOrWhiteSpace($containsText)) {
+        $containsTerms = $containsText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
+    }
+
+    # Parse prefix filter (2+ chars, comma-delimited)
+    $prefixTerms = @()
+    if (-not [string]::IsNullOrWhiteSpace($prefixText)) {
+        $prefixTerms = $prefixText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 2 }
+    }
+
+    # Check if filters are waiting for more input
+    $containsWaiting = (-not [string]::IsNullOrWhiteSpace($containsText)) -and ($containsTerms.Count -eq 0)
+    $prefixWaiting = (-not [string]::IsNullOrWhiteSpace($prefixText)) -and ($prefixTerms.Count -eq 0)
+
+    if ($containsWaiting -and $prefixWaiting) {
+        $script:lblVisibleScopes.Text = "(filter: 3+ chars, prefix: 2+ chars)"
+        return
+    } elseif ($containsWaiting) {
+        $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
+        return
+    } elseif ($prefixWaiting) {
+        $script:lblVisibleScopes.Text = "(type 2+ chars for prefix)"
+        return
+    }
+
+    $hasContainsFilter = $containsTerms.Count -gt 0
+    $hasPrefixFilter = $prefixTerms.Count -gt 0
 
     # Suspend UI updates for performance
     $script:lstDHCPScopes.BeginUpdate()
     try {
-        if ([string]::IsNullOrWhiteSpace($filterText) -or $isPlaceholder) {
-            # No filter - show all
-            $script:lstDHCPScopes.Items.Clear()
-            foreach ($scope in $script:allDHCPScopes) {
-                $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
-            }
-        } else {
-            # Parse comma-delimited filter terms (only terms with 3+ characters)
-            $filterTerms = $filterText.Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_.Length -ge 3 }
+        $script:lstDHCPScopes.Items.Clear()
+        foreach ($scope in $script:allDHCPScopes) {
+            $displayUpper = if ($scope.DisplayNameUpper) { $scope.DisplayNameUpper } else { $scope.DisplayName.ToUpper() }
 
-            # Only filter if we have at least one valid term (3+ chars)
-            if ($filterTerms.Count -eq 0) {
-                # No valid terms yet - update hint but don't re-filter
-                $script:lblVisibleScopes.Text = "(type 3+ chars to filter)"
-                return
-            }
-
-            $script:lstDHCPScopes.Items.Clear()
-            foreach ($scope in $script:allDHCPScopes) {
-                # Use cached uppercase if available, otherwise compute
-                $displayUpper = if ($scope.DisplayNameUpper) { $scope.DisplayNameUpper } else { $scope.DisplayName.ToUpper() }
-                # Match if ANY filter term is found in the display name
-                $matchFound = $false
-                foreach ($term in $filterTerms) {
-                    if ($displayUpper.Contains($term)) {
-                        $matchFound = $true
+            # Check prefix filter (if active) - must START with any prefix term
+            $prefixMatch = $true
+            if ($hasPrefixFilter) {
+                $prefixMatch = $false
+                foreach ($prefix in $prefixTerms) {
+                    if ($displayUpper.StartsWith($prefix)) {
+                        $prefixMatch = $true
                         break
                     }
                 }
-                if ($matchFound) {
-                    $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
+            }
+
+            # Check contains filter (if active) - must CONTAIN any filter term
+            $containsMatch = $true
+            if ($hasContainsFilter) {
+                $containsMatch = $false
+                foreach ($term in $containsTerms) {
+                    if ($displayUpper.Contains($term)) {
+                        $containsMatch = $true
+                        break
+                    }
                 }
+            }
+
+            # Item passes if it matches both active filters (AND logic)
+            if ($prefixMatch -and $containsMatch) {
+                $script:lstDHCPScopes.Items.Add($scope.DisplayName) | Out-Null
             }
         }
 
-        # Restore checked state for items that were previously selected
+        # Restore checked state for previously selected items
         for ($i = 0; $i -lt $script:lstDHCPScopes.Items.Count; $i++) {
             $itemName = $script:lstDHCPScopes.Items[$i].ToString()
             if ($script:selectedScopeNames.ContainsKey($itemName)) {
@@ -2393,17 +2455,26 @@ $script:txtScopeListFilter.Add_TextChanged({
             }
         }
     } finally {
-        # Resume UI updates
         $script:lstDHCPScopes.EndUpdate()
     }
 
-    # Update visible count label and show selected count
+    # Update visible count label
     $selectedCount = $script:selectedScopeNames.Count
     if ($selectedCount -gt 0) {
         $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible, $selectedCount selected)"
     } else {
         $script:lblVisibleScopes.Text = "($($script:lstDHCPScopes.Items.Count) visible)"
     }
+}
+
+# Event Handler: Contains Filter TextChanged
+$script:txtScopeListFilter.Add_TextChanged({
+    Apply-ScopeFilters
+})
+
+# Event Handler: Prefix Filter TextChanged
+$script:txtPrefixFilter.Add_TextChanged({
+    Apply-ScopeFilters
 })
 
 # Event Handler: Select All Scopes (visible items only)
