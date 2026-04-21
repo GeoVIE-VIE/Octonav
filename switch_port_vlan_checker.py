@@ -38,7 +38,10 @@ os.environ.setdefault("OPENSSL_ENABLE_SHA1_SIGNATURES", "yes")
 os.environ.setdefault("CRYPTO_POLICY", "LEGACY")
 
 # ANSI escape sequence stripper (switches sometimes emit colour/cursor codes)
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r|\x08")
+# Pager output: Cisco "--More--" and Brocade "--More--, next page: Space ..."
+_MORE_RE = re.compile(rb"--\s*[Mm]ore\s*--")
+_PAGER_LINE_RE = re.compile(r"--\s*[Mm]ore\s*--[^\r\n]*")
 
 
 def _strip_ansi(text):
@@ -196,18 +199,57 @@ class SSHSession:
         return buf
 
     def send_command(self, cmd, timeout=None):
-        """Send a command and return its output (prompt + echo stripped)."""
+        """Send a command and return its output (prompt + echo stripped).
+
+        Automatically feeds a space to '--More--' pager prompts so the
+        command completes even before paging is disabled.
+        """
         if self.fd is None:
             raise RuntimeError("session not connected")
         os.write(self.fd, cmd.encode() + b"\n")
-        raw = self._read_until([self.PROMPT_RE], timeout or self.timeout)
-        text = _strip_ansi(raw.decode(errors="replace"))
+
+        effective_timeout = timeout or self.timeout
+        deadline = time.time() + effective_timeout
+        buf = b""
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"timeout after {effective_timeout}s; last bytes: "
+                    f"{buf[-200:]!r}"
+                )
+            try:
+                r, _, _ = select.select([self.fd], [], [], min(remaining, 1.0))
+            except (OSError, ValueError):
+                break
+            if self.fd not in r:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError as e:
+                if e.errno in (errno.EIO, errno.EBADF):
+                    break
+                raise
+            if not chunk:
+                break
+            buf += chunk
+            tail = buf[-256:]
+            if _MORE_RE.search(tail):
+                # Feed a space to advance the pager, then keep reading.
+                try:
+                    os.write(self.fd, b" ")
+                except OSError:
+                    pass
+                continue
+            if self.PROMPT_RE.search(tail):
+                break
+
+        text = _strip_ansi(buf.decode(errors="replace"))
+        text = _PAGER_LINE_RE.sub("", text)
         lines = text.splitlines()
-        # Drop the echoed command (first line containing the command text)
-        # and the final prompt line.
         cleaned = []
         dropped_echo = False
-        for i, line in enumerate(lines):
+        for line in lines:
             if not dropped_echo and cmd.strip() and cmd.strip() in line:
                 dropped_echo = True
                 continue
@@ -475,14 +517,19 @@ def process_device(host, username, password):
         except Exception:
             pass
 
+        # Disable paging up front, before we know the vendor. Each command
+        # is a no-op on the other platform (invalid-input error + reprompt),
+        # so sending both is safe and keeps 'show version' from hitting
+        # --More--.
+        for paging_cmd in ("terminal length 0", "skip-page-display"):
+            try:
+                sess.send_command(paging_cmd, timeout=10)
+            except Exception:
+                pass
+
         vendor = detect_vendor(sess)
         if vendor not in ("cisco", "brocade"):
             raise RuntimeError(f"could not determine vendor for {host}")
-
-        if vendor == "cisco":
-            sess.send_command("terminal length 0", timeout=10)
-        else:
-            sess.send_command("skip-page-display", timeout=10)
 
         hostname = get_hostname(sess)
 
