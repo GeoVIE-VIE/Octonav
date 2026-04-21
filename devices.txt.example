@@ -1,0 +1,8 @@
+# One device per line (hostname or IP).
+# Blank lines and lines starting with '#' are ignored.
+# Vendor (Cisco vs. Brocade) is always auto-detected — do not specify.
+#
+# Examples:
+# core-sw-01.example.com
+# access-sw-05
+# 10.0.0.1
