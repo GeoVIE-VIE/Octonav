@@ -1,0 +1,9 @@
+# One device per line. Format: hostname[,vendor]
+# vendor is optional; must be 'cisco' or 'brocade' if set.
+# If vendor is omitted it will be auto-detected from 'show version'.
+# Lines starting with # are ignored.
+#
+# Examples:
+# core-sw-01.example.com,cisco
+# access-sw-05,brocade
+# 10.0.0.1
