@@ -3,10 +3,9 @@
 hostname, port, description/port-name, and VLAN membership.
 
 Device list: devices.txt in the same directory as this script.
-Format (one per line):
-    hostname[,vendor]
-where vendor is 'cisco' or 'brocade'. If omitted, vendor is auto-detected.
-Blank lines and lines starting with '#' are ignored.
+Format: one hostname or IP per line. Blank lines and lines starting
+with '#' are ignored. Vendor (Cisco vs. Brocade) is always
+auto-detected on connection.
 
 Output: prints a table to stdout and writes port_vlan_report.csv.
 """
@@ -21,6 +20,7 @@ from collections import defaultdict
 try:
     from netmiko import ConnectHandler
     from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
+    from netmiko.ssh_autodetect import SSHDetect
 except ImportError:
     sys.stderr.write(
         "netmiko is required. Install with: pip install netmiko\n"
@@ -34,26 +34,39 @@ OUTPUT_CSV = os.path.join(SCRIPT_DIR, "port_vlan_report.csv")
 
 
 def read_devices(path):
-    devices = []
+    hosts = []
     with open(path) as f:
         for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
                 continue
-            parts = [p.strip() for p in line.split(",")]
-            host = parts[0]
-            vendor = parts[1].lower() if len(parts) > 1 and parts[1] else None
-            devices.append((host, vendor))
-    return devices
+            # Accept stray whitespace/commas but only use the first token.
+            hosts.append(line.split(",", 1)[0].strip().split()[0])
+    return hosts
 
 
-def detect_vendor(conn):
-    """Return 'cisco' or 'brocade' by probing the device."""
-    out = conn.send_command("show version", read_timeout=30)
-    low = out.lower()
-    if "brocade" in low or "foundry" in low or "fastiron" in low or "icx" in low or "ruckus" in low:
+def _vendor_from_device_type(device_type):
+    """Map a netmiko device_type string to 'cisco' or 'brocade'."""
+    if not device_type:
+        return None
+    dt = device_type.lower()
+    if "brocade" in dt or "ruckus" in dt or "foundry" in dt:
         return "brocade"
-    if "cisco" in low or "ios" in low or "nx-os" in low:
+    if "cisco" in dt:
+        return "cisco"
+    return None
+
+
+def detect_vendor_via_showver(conn):
+    """Fallback vendor probe using 'show version' output."""
+    try:
+        out = conn.send_command("show version", read_timeout=30)
+    except Exception:
+        return None
+    low = out.lower()
+    if any(k in low for k in ("brocade", "foundry", "fastiron", "icx", "ruckus")):
+        return "brocade"
+    if any(k in low for k in ("cisco", "ios", "nx-os")):
         return "cisco"
     return None
 
@@ -293,37 +306,79 @@ def _port_sort_key(p):
     return [int(x) if x.isdigit() else x.lower() for x in re.findall(r"\d+|\D+", p)]
 
 
-def process_device(host, vendor_hint, username, password):
-    base = {
+def _ssh_params(host, username, password):
+    """Common SSH parameters used for both detection and the main session."""
+    return {
         "host": host,
         "username": username,
         "password": password,
         "fast_cli": False,
+        # --- SSH hardening / compatibility ---
+        # Password auth only; ignore local ssh-agent and key files.
+        "use_keys": False,
+        "allow_agent": False,
+        "key_file": None,
+        # Do not consult ~/.ssh/known_hosts; auto-accept host keys.
+        "ssh_strict": False,
+        "system_host_keys": False,
+        "alt_host_keys": False,
+        # Re-enable legacy KEX / host-key algorithms that modern paramiko
+        # disables by default — many older Brocade/Cisco images only
+        # offer diffie-hellman-group1-sha1 and ssh-rsa (SHA1).
+        "disabled_algorithms": {"pubkeys": [], "kex": []},
+        # Reasonable timeouts for slow switches.
+        "conn_timeout": 30,
+        "auth_timeout": 30,
+        "banner_timeout": 30,
     }
-    # Try a sensible device_type based on hint, else default to autodetect.
-    if vendor_hint == "cisco":
-        device_type = "cisco_ios"
-    elif vendor_hint == "brocade":
-        device_type = "brocade_fastiron"
+
+
+def autodetect_device_type(host, username, password):
+    """Return (device_type, vendor). Never trusts caller hints."""
+    params = _ssh_params(host, username, password)
+    guesser = SSHDetect(device_type="autodetect", **params)
+    best = None
+    try:
+        best = guesser.autodetect()
+    finally:
+        try:
+            guesser.connection.disconnect()
+        except Exception:
+            pass
+    vendor = _vendor_from_device_type(best)
+    return best, vendor
+
+
+def process_device(host, username, password):
+    # Step 1: always auto-detect vendor before opening the main session.
+    device_type, vendor = autodetect_device_type(host, username, password)
+
+    # Step 2: pick a concrete device_type for the working session.
+    if vendor == "cisco":
+        device_type = device_type or "cisco_ios"
+    elif vendor == "brocade":
+        device_type = device_type or "brocade_fastiron"
     else:
-        device_type = "autodetect"
+        # SSHDetect couldn't decide — fall back to a neutral handler and
+        # probe 'show version' once connected.
+        device_type = "terminal_server"
 
-    if device_type == "autodetect":
-        # netmiko autodetect is heavy; just connect as a generic terminal.
-        device_type = "generic_termserver"
-
-    conn = ConnectHandler(device_type=device_type, **base)
+    params = _ssh_params(host, username, password)
+    conn = ConnectHandler(device_type=device_type, **params)
     try:
         try:
             conn.enable()
         except Exception:
             pass
 
-        vendor = vendor_hint or detect_vendor(conn)
+        if vendor is None:
+            vendor = detect_vendor_via_showver(conn)
         if vendor not in ("cisco", "brocade"):
-            raise RuntimeError(f"could not determine vendor for {host}")
+            raise RuntimeError(
+                f"could not determine vendor for {host} (device_type={device_type})"
+            )
 
-        # Disable paging.
+        # Disable paging per-vendor.
         if vendor == "cisco":
             conn.send_command("terminal length 0", expect_string=r"[>#]")
         else:
@@ -356,13 +411,14 @@ def main():
     password = getpass.getpass("Password: ")
 
     all_rows = []
-    for host, vendor in devices:
-        sys.stderr.write(f"[*] {host} ({vendor or 'auto'}) ... ")
+    for host in devices:
+        sys.stderr.write(f"[*] {host} ... ")
         sys.stderr.flush()
         try:
-            rows = process_device(host, vendor, username, password)
+            rows = process_device(host, username, password)
+            vendor = rows[0]["vendor"] if rows else "?"
             all_rows.extend(rows)
-            sys.stderr.write(f"ok ({len(rows)} ports)\n")
+            sys.stderr.write(f"ok [{vendor}] ({len(rows)} ports)\n")
         except NetmikoAuthenticationException:
             sys.stderr.write("auth failed\n")
         except NetmikoTimeoutException:
