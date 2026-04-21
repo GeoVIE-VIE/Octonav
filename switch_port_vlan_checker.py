@@ -2,6 +2,9 @@
 """SSH into Cisco IOS or Brocade FastIron/ICX switches and report
 hostname, port, description/port-name, and VLAN membership.
 
+Standard library only -- no netmiko / paramiko required.
+Requires the system `ssh` client (OpenSSH). Linux or macOS.
+
 Device list: devices.txt in the same directory as this script.
 Format: one hostname or IP per line. Blank lines and lines starting
 with '#' are ignored. Vendor (Cisco vs. Brocade) is always
@@ -11,75 +14,227 @@ Output: prints a table to stdout and writes port_vlan_report.csv.
 """
 
 import csv
+import errno
 import getpass
 import os
+import pty
 import re
+import select
+import shutil
+import signal
 import sys
+import time
 from collections import defaultdict
-
-try:
-    from netmiko import ConnectHandler
-    from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
-    from netmiko.ssh_autodetect import SSHDetect
-except ImportError:
-    sys.stderr.write(
-        "netmiko is required. Install with: pip install netmiko\n"
-    )
-    sys.exit(1)
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEVICES_FILE = os.path.join(SCRIPT_DIR, "devices.txt")
 OUTPUT_CSV = os.path.join(SCRIPT_DIR, "port_vlan_report.csv")
 
+# ANSI escape sequence stripper (switches sometimes emit colour/cursor codes)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
-def read_devices(path):
-    hosts = []
-    with open(path) as f:
-        for raw in f:
-            line = raw.split("#", 1)[0].strip()
-            if not line:
+
+def _strip_ansi(text):
+    return _ANSI_RE.sub("", text)
+
+
+# ---------------------------------------------------------------------------
+# SSH session (pty-driven, stdlib only)
+# ---------------------------------------------------------------------------
+
+class SSHSession:
+    """Minimal interactive SSH session driven via a pty."""
+
+    PROMPT_RE = re.compile(rb"[\r\n][^\r\n]{0,80}[>#]\s*$")
+    PW_RE = re.compile(rb"(?i)(password|passphrase)[^:]*:\s*$")
+    FAIL_RE = re.compile(
+        rb"(?i)(permission denied|authentication fail|access denied|"
+        rb"connection (refused|closed|reset)|no route to host|"
+        rb"could not resolve hostname|host key verification failed)"
+    )
+
+    SSH_OPTS = [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "PubkeyAuthentication=no",
+        "-o", "PreferredAuthentications=password,keyboard-interactive",
+        "-o", "NumberOfPasswordPrompts=1",
+        "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=30",
+        "-o", "ServerAliveInterval=15",
+        # Broaden crypto for older Brocade / Cisco images.
+        "-o", "KexAlgorithms=+diffie-hellman-group1-sha1,"
+              "diffie-hellman-group14-sha1,"
+              "diffie-hellman-group-exchange-sha1",
+        "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-dss,ssh-rsa-cert-v01@openssh.com",
+        "-o", "PubkeyAcceptedKeyTypes=+ssh-rsa",
+        "-o", "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc",
+        "-o", "MACs=+hmac-sha1,hmac-sha1-96,hmac-md5",
+    ]
+
+    def __init__(self, host, username, password, timeout=30):
+        self.host = host
+        self.username = username
+        self.password = password
+        self.timeout = timeout
+        self.pid = None
+        self.fd = None
+        self.prompt_terminators = (b">", b"#")
+
+    # ---- process lifecycle ----
+
+    def connect(self):
+        if not shutil.which("ssh"):
+            raise RuntimeError("'ssh' binary not found in PATH")
+
+        argv = ["ssh"] + self.SSH_OPTS + ["-l", self.username, self.host]
+        pid, fd = pty.fork()
+        if pid == 0:
+            # child
+            try:
+                os.execvp("ssh", argv)
+            except Exception as e:
+                sys.stderr.write(f"exec ssh failed: {e}\n")
+                os._exit(127)
+        self.pid = pid
+        self.fd = fd
+
+        buf = self._read_until([self.PW_RE, self.PROMPT_RE, self.FAIL_RE], self.timeout)
+        if self.FAIL_RE.search(buf):
+            raise RuntimeError(self._describe_failure(buf))
+        if self.PW_RE.search(buf):
+            os.write(self.fd, self.password.encode() + b"\n")
+            buf = self._read_until([self.PROMPT_RE, self.FAIL_RE, self.PW_RE], self.timeout)
+            if self.PW_RE.search(buf):
+                raise RuntimeError("authentication failed")
+            if self.FAIL_RE.search(buf):
+                raise RuntimeError(self._describe_failure(buf))
+        # At the prompt.
+        return _strip_ansi(buf.decode(errors="replace"))
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                os.write(self.fd, b"exit\n")
+            except OSError:
+                pass
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        if self.pid is not None:
+            for _ in range(20):
+                try:
+                    done, _ = os.waitpid(self.pid, os.WNOHANG)
+                    if done:
+                        break
+                except ChildProcessError:
+                    break
+                time.sleep(0.05)
+            else:
+                try:
+                    os.kill(self.pid, signal.SIGTERM)
+                    os.waitpid(self.pid, 0)
+                except (ProcessLookupError, ChildProcessError):
+                    pass
+            self.pid = None
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    # ---- I/O ----
+
+    def _read_until(self, patterns, timeout):
+        buf = b""
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"timeout after {timeout}s; last bytes: "
+                    f"{buf[-200:]!r}"
+                )
+            try:
+                r, _, _ = select.select([self.fd], [], [], min(remaining, 1.0))
+            except (OSError, ValueError):
+                break
+            if self.fd in r:
+                try:
+                    chunk = os.read(self.fd, 4096)
+                except OSError as e:
+                    if e.errno in (errno.EIO, errno.EBADF):
+                        break
+                    raise
+                if not chunk:
+                    break
+                buf += chunk
+                for pat in patterns:
+                    if pat.search(buf):
+                        return buf
+        return buf
+
+    def send_command(self, cmd, timeout=None):
+        """Send a command and return its output (prompt + echo stripped)."""
+        if self.fd is None:
+            raise RuntimeError("session not connected")
+        os.write(self.fd, cmd.encode() + b"\n")
+        raw = self._read_until([self.PROMPT_RE], timeout or self.timeout)
+        text = _strip_ansi(raw.decode(errors="replace"))
+        lines = text.splitlines()
+        # Drop the echoed command (first line containing the command text)
+        # and the final prompt line.
+        cleaned = []
+        dropped_echo = False
+        for i, line in enumerate(lines):
+            if not dropped_echo and cmd.strip() and cmd.strip() in line:
+                dropped_echo = True
                 continue
-            # Accept stray whitespace/commas but only use the first token.
-            hosts.append(line.split(",", 1)[0].strip().split()[0])
-    return hosts
+            cleaned.append(line)
+        if cleaned and re.match(r"^\S.*[>#]\s*$", cleaned[-1]):
+            cleaned.pop()
+        return "\n".join(cleaned)
+
+    # ---- helpers ----
+
+    @staticmethod
+    def _describe_failure(buf):
+        txt = _strip_ansi(buf.decode(errors="replace")).strip()
+        last = txt.splitlines()[-3:] if txt else []
+        return "connection failed: " + " | ".join(l.strip() for l in last if l.strip())
 
 
-def _vendor_from_device_type(device_type):
-    """Map a netmiko device_type string to 'cisco' or 'brocade'."""
-    if not device_type:
-        return None
-    dt = device_type.lower()
-    if "brocade" in dt or "ruckus" in dt or "foundry" in dt:
+# ---------------------------------------------------------------------------
+# Vendor detection
+# ---------------------------------------------------------------------------
+
+def detect_vendor(sess):
+    """Return 'cisco' or 'brocade' by probing the device."""
+    out = sess.send_command("show version", timeout=30).lower()
+    if any(k in out for k in ("brocade", "foundry", "fastiron", "icx", "ruckus", "netiron")):
         return "brocade"
-    if "cisco" in dt:
+    if any(k in out for k in ("cisco", "ios software", "nx-os", "ios-xe", "ios xe")):
         return "cisco"
     return None
 
 
-def detect_vendor_via_showver(conn):
-    """Fallback vendor probe using 'show version' output."""
+def get_hostname(sess):
+    """Derive the device hostname from its prompt."""
+    # Send a newline to re-print the prompt, then read it.
     try:
-        out = conn.send_command("show version", read_timeout=30)
-    except Exception:
-        return None
-    low = out.lower()
-    if any(k in low for k in ("brocade", "foundry", "fastiron", "icx", "ruckus")):
-        return "brocade"
-    if any(k in low for k in ("cisco", "ios", "nx-os")):
-        return "cisco"
-    return None
-
-
-def get_hostname(conn, vendor):
-    """Return the device's configured hostname."""
-    try:
-        prompt = conn.find_prompt()
-        # Strip trailing prompt chars (#, >, (config)..., etc.)
-        name = re.sub(r"[>#].*$", "", prompt).strip()
-        name = re.sub(r"\(.*\)$", "", name).strip()
-        if name:
-            return name
+        os.write(sess.fd, b"\n")
+        buf = sess._read_until([SSHSession.PROMPT_RE], 5)
+        text = _strip_ansi(buf.decode(errors="replace")).strip()
+        last = text.splitlines()[-1] if text else ""
+        m = re.match(r"^(\S+?)(?:\(.*\))?[>#]\s*$", last)
+        if m:
+            return m.group(1)
     except Exception:
         pass
     return "unknown"
@@ -90,7 +245,6 @@ def get_hostname(conn, vendor):
 # ---------------------------------------------------------------------------
 
 def _expand_cisco_port_list(s):
-    """Expand 'Gi1/0/1-3, Gi1/0/5' style lists into individual interfaces."""
     ports = []
     for chunk in re.split(r",\s*", s.strip()):
         chunk = chunk.strip()
@@ -113,20 +267,15 @@ def _expand_cisco_port_list(s):
     return ports
 
 
-def collect_cisco(conn):
-    """Return list of dicts: port, description, vlan."""
-    vlan_brief = conn.send_command("show vlan brief", read_timeout=60)
-    desc_out = conn.send_command("show interfaces description", read_timeout=60)
-    status_out = conn.send_command("show interfaces status", read_timeout=60)
-    trunk_out = conn.send_command("show interfaces trunk", read_timeout=60)
+def collect_cisco(sess):
+    vlan_brief = sess.send_command("show vlan brief", timeout=60)
+    desc_out = sess.send_command("show interfaces description", timeout=60)
+    status_out = sess.send_command("show interfaces status", timeout=60)
+    trunk_out = sess.send_command("show interfaces trunk", timeout=60)
 
-    # Map port -> vlan from 'show vlan brief' (access ports only)
     port_vlan = {}
     current_vlan = None
     ports_blob = ""
-    # Parse the tabular output. Rows look like:
-    # 10   DATA     active    Gi1/0/1, Gi1/0/2, Gi1/0/3
-    #                                  Gi1/0/4
     for line in vlan_brief.splitlines():
         m = re.match(r"^\s*(\d+)\s+\S.*?\s+(?:active|act/lshut|suspended)\s*(.*)$", line)
         if m:
@@ -141,8 +290,6 @@ def collect_cisco(conn):
         for p in _expand_cisco_port_list(ports_blob):
             port_vlan[p] = current_vlan
 
-    # Supplement with 'show interfaces status' (gives short-name port + access VLAN)
-    # Port      Name        Status        Vlan       Duplex  Speed Type
     status_map = {}
     for line in status_out.splitlines():
         m = re.match(r"^(\S+)\s+(.{0,19}?)\s{2,}(\S+)\s+(\S+)\s+", line)
@@ -150,7 +297,6 @@ def collect_cisco(conn):
             port, name, _status, vlan = m.group(1), m.group(2).strip(), m.group(3), m.group(4)
             status_map[port] = {"name": name, "vlan": vlan}
 
-    # Trunks: gather allowed VLAN list per trunk port
     trunk_map = {}
     in_allowed = False
     for line in trunk_out.splitlines():
@@ -165,8 +311,6 @@ def collect_cisco(conn):
             if m:
                 trunk_map[m.group(1)] = m.group(2).strip()
 
-    # Descriptions
-    # Interface   Status   Protocol  Description
     desc_map = {}
     for line in desc_out.splitlines():
         if line.startswith("Interface") or not line.strip():
@@ -175,9 +319,8 @@ def collect_cisco(conn):
         if m:
             desc_map[m.group(1)] = m.group(2).strip()
 
-    # Merge. Use status_map as the canonical port list.
     rows = []
-    all_ports = set(status_map.keys()) | set(port_vlan.keys()) | set(desc_map.keys()) | set(trunk_map.keys())
+    all_ports = set(status_map) | set(port_vlan) | set(desc_map) | set(trunk_map)
     for port in sorted(all_ports, key=_port_sort_key):
         desc = desc_map.get(port, status_map.get(port, {}).get("name", ""))
         if port in trunk_map:
@@ -193,15 +336,13 @@ def collect_cisco(conn):
 # ---------------------------------------------------------------------------
 
 def _expand_brocade_port_list(tokens):
-    """Expand 'ethe 1/1/1 to 1/1/24' or 'ethe 1/1/1 ethe 1/1/5' lists."""
     ports = []
     i = 0
     while i < len(tokens):
         t = tokens[i]
         if t.lower() in ("ethe", "ethernet"):
             if i + 3 < len(tokens) and tokens[i + 2].lower() == "to":
-                start, end = tokens[i + 1], tokens[i + 3]
-                ports.extend(_brocade_range(start, end))
+                ports.extend(_brocade_range(tokens[i + 1], tokens[i + 3]))
                 i += 4
             elif i + 1 < len(tokens):
                 ports.append(tokens[i + 1])
@@ -224,15 +365,10 @@ def _brocade_range(start, end):
         return [start, end]
 
 
-def collect_brocade(conn):
-    vlan_out = conn.send_command("show vlan", read_timeout=120)
-    # 'show interface brief' gives concise port + name + VLAN
-    brief = conn.send_command("show interface brief", read_timeout=120)
+def collect_brocade(sess):
+    vlan_out = sess.send_command("show vlan", timeout=120)
+    brief = sess.send_command("show interface brief", timeout=120)
 
-    # Parse `show vlan` blocks:
-    # PORT-VLAN 10, Name DATA, Priority Level -, ...
-    #  Untagged Ports : ethe 1/1/1 to 1/1/24
-    #  Tagged Ports   : ethe 1/1/48
     port_vlan_untagged = {}
     port_vlan_tagged = defaultdict(list)
     current_vlan = None
@@ -254,9 +390,6 @@ def collect_brocade(conn):
                 else:
                     port_vlan_tagged[p].append(current_vlan)
 
-    # Parse `show interface brief` for names.
-    # Port   Link    State    Dupl Speed Trunk Tag Pvid Pri MAC            Name
-    # 1/1/1  Up      Forward  Full 1G    None  No  10   0   aaaa.bbbb.cccc MyName
     brief_map = {}
     header_seen = False
     name_col = None
@@ -280,7 +413,7 @@ def collect_brocade(conn):
         brief_map[port] = name
 
     rows = []
-    all_ports = set(brief_map.keys()) | set(port_vlan_untagged.keys()) | set(port_vlan_tagged.keys())
+    all_ports = set(brief_map) | set(port_vlan_untagged) | set(port_vlan_tagged)
     for port in sorted(all_ports, key=_port_sort_key):
         desc = brief_map.get(port, "")
         untagged = port_vlan_untagged.get(port)
@@ -298,106 +431,62 @@ def collect_brocade(conn):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Orchestration
 # ---------------------------------------------------------------------------
 
 def _port_sort_key(p):
-    # Split letters and digits so Gi1/0/2 sorts before Gi1/0/10.
     return [int(x) if x.isdigit() else x.lower() for x in re.findall(r"\d+|\D+", p)]
 
 
-def _ssh_params(host, username, password):
-    """Common SSH parameters used for both detection and the main session."""
-    return {
-        "host": host,
-        "username": username,
-        "password": password,
-        "fast_cli": False,
-        # --- SSH hardening / compatibility ---
-        # Password auth only; ignore local ssh-agent and key files.
-        "use_keys": False,
-        "allow_agent": False,
-        "key_file": None,
-        # Do not consult ~/.ssh/known_hosts; auto-accept host keys.
-        "ssh_strict": False,
-        "system_host_keys": False,
-        "alt_host_keys": False,
-        # Re-enable legacy KEX / host-key algorithms that modern paramiko
-        # disables by default — many older Brocade/Cisco images only
-        # offer diffie-hellman-group1-sha1 and ssh-rsa (SHA1).
-        "disabled_algorithms": {"pubkeys": [], "kex": []},
-        # Reasonable timeouts for slow switches.
-        "conn_timeout": 30,
-        "auth_timeout": 30,
-        "banner_timeout": 30,
-    }
-
-
-def autodetect_device_type(host, username, password):
-    """Return (device_type, vendor). Never trusts caller hints."""
-    params = _ssh_params(host, username, password)
-    guesser = SSHDetect(device_type="autodetect", **params)
-    best = None
-    try:
-        best = guesser.autodetect()
-    finally:
-        try:
-            guesser.connection.disconnect()
-        except Exception:
-            pass
-    vendor = _vendor_from_device_type(best)
-    return best, vendor
+def read_devices(path):
+    hosts = []
+    with open(path) as f:
+        for raw in f:
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            hosts.append(line.split(",", 1)[0].strip().split()[0])
+    return hosts
 
 
 def process_device(host, username, password):
-    # Step 1: always auto-detect vendor before opening the main session.
-    device_type, vendor = autodetect_device_type(host, username, password)
-
-    # Step 2: pick a concrete device_type for the working session.
-    if vendor == "cisco":
-        device_type = device_type or "cisco_ios"
-    elif vendor == "brocade":
-        device_type = device_type or "brocade_fastiron"
-    else:
-        # SSHDetect couldn't decide — fall back to a neutral handler and
-        # probe 'show version' once connected.
-        device_type = "terminal_server"
-
-    params = _ssh_params(host, username, password)
-    conn = ConnectHandler(device_type=device_type, **params)
-    try:
+    with SSHSession(host, username, password) as sess:
+        # Try to enter enable mode on Cisco. Brocade is typically enabled
+        # at login; 'enable' there either no-ops or prompts for a password
+        # we don't have. Best effort, ignore failures.
         try:
-            conn.enable()
+            os.write(sess.fd, b"enable\n")
+            sess._read_until([SSHSession.PROMPT_RE, SSHSession.PW_RE], 5)
         except Exception:
             pass
 
-        if vendor is None:
-            vendor = detect_vendor_via_showver(conn)
+        vendor = detect_vendor(sess)
         if vendor not in ("cisco", "brocade"):
-            raise RuntimeError(
-                f"could not determine vendor for {host} (device_type={device_type})"
-            )
+            raise RuntimeError(f"could not determine vendor for {host}")
 
-        # Disable paging per-vendor.
         if vendor == "cisco":
-            conn.send_command("terminal length 0", expect_string=r"[>#]")
+            sess.send_command("terminal length 0", timeout=10)
         else:
-            conn.send_command("skip-page-display", expect_string=r"[>#]")
+            sess.send_command("skip-page-display", timeout=10)
 
-        hostname = get_hostname(conn, vendor)
+        hostname = get_hostname(sess)
+
         if vendor == "cisco":
-            rows = collect_cisco(conn)
+            rows = collect_cisco(sess)
         else:
-            rows = collect_brocade(conn)
+            rows = collect_brocade(sess)
+
         for r in rows:
             r["hostname"] = hostname
             r["vendor"] = vendor
         return rows
-    finally:
-        conn.disconnect()
 
 
 def main():
+    if not shutil.which("ssh"):
+        sys.stderr.write("error: 'ssh' binary not found in PATH\n")
+        sys.exit(1)
+
     if not os.path.exists(DEVICES_FILE):
         sys.stderr.write(f"devices.txt not found at {DEVICES_FILE}\n")
         sys.exit(1)
@@ -419,10 +508,8 @@ def main():
             vendor = rows[0]["vendor"] if rows else "?"
             all_rows.extend(rows)
             sys.stderr.write(f"ok [{vendor}] ({len(rows)} ports)\n")
-        except NetmikoAuthenticationException:
-            sys.stderr.write("auth failed\n")
-        except NetmikoTimeoutException:
-            sys.stderr.write("timeout\n")
+        except TimeoutError as e:
+            sys.stderr.write(f"timeout ({e})\n")
         except Exception as e:
             sys.stderr.write(f"error: {e}\n")
 
@@ -437,7 +524,6 @@ def main():
         for r in all_rows:
             w.writerow({k: r.get(k, "") for k in fieldnames})
 
-    # Console table.
     widths = {k: max(len(k), *(len(str(r.get(k, ""))) for r in all_rows)) for k in fieldnames}
     fmt = "  ".join("{:<" + str(widths[k]) + "}" for k in fieldnames)
     print(fmt.format(*fieldnames))
