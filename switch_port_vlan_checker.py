@@ -31,6 +31,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEVICES_FILE = os.path.join(SCRIPT_DIR, "devices.txt")
 OUTPUT_CSV = os.path.join(SCRIPT_DIR, "port_vlan_report.csv")
 
+# RHEL 9 / modern OpenSSL disables SHA-1 RSA signatures by default, which
+# breaks SSH to older Brocade/Cisco images. These per-process env vars
+# re-enable just this session -- no root / crypto-policies change needed.
+os.environ.setdefault("OPENSSL_ENABLE_SHA1_SIGNATURES", "yes")
+os.environ.setdefault("CRYPTO_POLICY", "LEGACY")
+
 # ANSI escape sequence stripper (switches sometimes emit colour/cursor codes)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
@@ -55,21 +61,30 @@ class SSHSession:
     )
 
     SSH_OPTS = [
+        # Skip any system-wide ssh_config that might override our settings.
+        "-F", "/dev/null",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "GlobalKnownHostsFile=/dev/null",
         "-o", "PubkeyAuthentication=no",
+        "-o", "GSSAPIAuthentication=no",
+        "-o", "HostbasedAuthentication=no",
         "-o", "PreferredAuthentications=password,keyboard-interactive",
         "-o", "NumberOfPasswordPrompts=1",
         "-o", "LogLevel=ERROR",
         "-o", "ConnectTimeout=30",
         "-o", "ServerAliveInterval=15",
-        # Broaden crypto for older Brocade / Cisco images.
+        # Broaden crypto for older Brocade / Cisco images. The '+' prefix
+        # appends to the compiled-in defaults without requiring root.
         "-o", "KexAlgorithms=+diffie-hellman-group1-sha1,"
               "diffie-hellman-group14-sha1,"
               "diffie-hellman-group-exchange-sha1",
         "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-dss,ssh-rsa-cert-v01@openssh.com",
+        # Older OpenSSH uses PubkeyAcceptedKeyTypes; newer uses
+        # PubkeyAcceptedAlgorithms. Passing both is harmless -- unknown
+        # options warn to stderr but do not abort the connection.
         "-o", "PubkeyAcceptedKeyTypes=+ssh-rsa",
+        "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
         "-o", "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc",
         "-o", "MACs=+hmac-sha1,hmac-sha1-96,hmac-md5",
     ]
