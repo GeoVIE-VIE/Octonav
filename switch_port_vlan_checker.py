@@ -39,6 +39,10 @@ os.environ.setdefault("CRYPTO_POLICY", "LEGACY")
 
 # ANSI escape sequence stripper (switches sometimes emit colour/cursor codes)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r|\x08")
+
+
+class AuthFailure(Exception):
+    """Raised when the device rejects the supplied credentials."""
 # Pager output: Cisco "--More--" and Brocade "--More--, next page: Space ..."
 _MORE_RE = re.compile(rb"--\s*[Mm]ore\s*--")
 _PAGER_LINE_RE = re.compile(r"--\s*[Mm]ore\s*--[^\r\n]*")
@@ -121,16 +125,24 @@ class SSHSession:
 
         buf = self._read_until([self.PW_RE, self.PROMPT_RE, self.FAIL_RE], self.timeout)
         if self.FAIL_RE.search(buf):
-            raise RuntimeError(self._describe_failure(buf))
+            self._raise_for_failure(buf)
         if self.PW_RE.search(buf):
             os.write(self.fd, self.password.encode() + b"\n")
             buf = self._read_until([self.PROMPT_RE, self.FAIL_RE, self.PW_RE], self.timeout)
             if self.PW_RE.search(buf):
-                raise RuntimeError("authentication failed")
+                raise AuthFailure("authentication failed (password rejected)")
             if self.FAIL_RE.search(buf):
-                raise RuntimeError(self._describe_failure(buf))
+                self._raise_for_failure(buf)
         # At the prompt.
         return _strip_ansi(buf.decode(errors="replace"))
+
+    @classmethod
+    def _raise_for_failure(cls, buf):
+        """Classify a failure buffer and raise AuthFailure or RuntimeError."""
+        text = _strip_ansi(buf.decode(errors="replace")).lower()
+        if re.search(r"permission denied|authentication fail|access denied", text):
+            raise AuthFailure(cls._describe_failure(buf))
+        raise RuntimeError(cls._describe_failure(buf))
 
     def close(self):
         if self.fd is not None:
@@ -596,6 +608,16 @@ def main():
             vendor = rows[0]["vendor"] if rows else "?"
             all_rows.extend(rows)
             sys.stderr.write(f"ok [{vendor}] ({len(rows)} ports)\n")
+        except AuthFailure as e:
+            # Stop immediately on auth failure. We use the same credentials
+            # for every device, so if one rejects them the rest will too --
+            # and retrying could lock the account out.
+            sys.stderr.write(f"auth failed: {e}\n")
+            sys.stderr.write(
+                "aborting before trying remaining devices to avoid "
+                "locking out the account. rerun with the correct password.\n"
+            )
+            sys.exit(3)
         except TimeoutError as e:
             sys.stderr.write(f"timeout ({e})\n")
         except Exception as e:
