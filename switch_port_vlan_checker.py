@@ -451,6 +451,7 @@ def collect_brocade(sess):
     port_vlan_tagged = defaultdict(list)
     port_name = {}
     port_dualmode_native = {}   # port -> native VLAN id when 'dual-mode N' is set
+    port_auth_default = {}      # port -> 802.1X auth-default-vlan
 
     lines = run_out.splitlines()
     i = 0
@@ -498,6 +499,16 @@ def collect_brocade(sess):
                 dm = re.match(r"^dual-mode(?:\s+(\d+))?\s*$", s, re.IGNORECASE)
                 if dm and dm.group(1):
                     port_dualmode_native[port] = dm.group(1)
+                # 802.1X default VLAN for unauthenticated devices on this
+                # interface. The port isn't necessarily an 'untagged' member
+                # of a vlan stanza when dot1x is driving it, so treat this
+                # as the effective untagged VLAN if nothing else claims it.
+                ad = re.match(
+                    r"^authentication\s+auth-default-vlan\s+(\d+)\s*$",
+                    s, re.IGNORECASE,
+                )
+                if ad:
+                    port_auth_default[port] = ad.group(1)
                 i += 1
             continue
 
@@ -507,6 +518,14 @@ def collect_brocade(sess):
     # VLAN on the interface wins over anything inferred from vlan blocks).
     for port, native in port_dualmode_native.items():
         port_vlan_untagged[port] = native
+
+    # Fill in auth-default-vlan as the untagged VLAN for dot1x ports that
+    # are not claimed as 'untagged' by any vlan stanza. Mark with '(auth)'
+    # so the operator can tell it came from the 802.1X config, not a
+    # static assignment.
+    for port, vlan in port_auth_default.items():
+        if port not in port_vlan_untagged:
+            port_vlan_untagged[port] = f"{vlan}(auth)"
 
     # Secondary pass: 'show interface brief' catches ports that are silent
     # in show-run (default VLAN 1, no port-name, no other config) and also
