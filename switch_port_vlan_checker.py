@@ -471,19 +471,28 @@ def _should_skip_brocade(desc):
 def collect_brocade(sess):
     """Parse 'show running-config' and emit one row per access port.
 
-    Policy (per the operator's requirements):
-      * A port is reported only if its 'interface ethernet' stanza has
-        'authentication auth-default-vlan <N>'. Nothing else sources the
-        VLAN -- vlan blocks, dual-mode, brief Pvid are all ignored.
-      * The vlan column is just the number.
-      * Ports whose port-name matches the skip list (IS01/IS02/DR01/DR02/
-        IR01/IR02/OS01/OS02/AP) are dropped; these are known uplink/AP
-        ports that live on multiple VLANs.
+    A port's VLAN comes from one of two sources:
+
+      1. 'authentication auth-default-vlan <N>' inside an
+         'interface ethernet' stanza (dot1x ports).
+      2. 'untagged ethe <port>' inside a 'vlan <N> ... !' block
+         (non-dot1x ports).
+
+    If both are present for the same port, source #1 wins (the
+    dot1x-driven default is what the port actually presents).
+    Ports with neither source are not reported. Tagged-only ports
+    (trunk/uplinks) are also not reported; those are typically
+    caught by the description skip filter anyway.
+
+    The VLAN column is just the number. Port-descriptions matching
+    the skip list (IS0x / DR0x / IR0x / OS0x / AP / MGMT /
+    Management) are dropped.
     """
     run_out = sess.send_command("show running-config", timeout=180)
 
     port_name = {}
-    port_auth_default = {}
+    port_auth_default = {}   # port -> VLAN id from auth-default-vlan
+    port_untagged = {}       # port -> VLAN id from 'vlan N ... untagged ethe ...'
 
     lines = run_out.splitlines()
     i = 0
@@ -491,6 +500,27 @@ def collect_brocade(sess):
         line = lines[i]
         stripped = line.strip()
 
+        # --- Top-level VLAN stanza: 'vlan <id> [name <x>] [by port]' ---
+        m = re.match(r"^vlan\s+(\d+)\b", stripped, re.IGNORECASE)
+        if m and not line.startswith((" ", "\t")):
+            vlan_id = m.group(1)
+            i += 1
+            while i < len(lines):
+                inner = lines[i]
+                s = inner.strip()
+                if s == "!" or (inner and not inner.startswith((" ", "\t"))):
+                    break
+                um = re.match(r"^untagged\s+(.*)$", s, re.IGNORECASE)
+                if um:
+                    for p in _expand_brocade_port_list(um.group(1).split()):
+                        port_untagged[p] = vlan_id
+                # 'tagged ethe ...' lines are intentionally ignored:
+                # trunk ports live on many VLANs and don't fit the
+                # per-port model this script reports.
+                i += 1
+            continue
+
+        # --- Top-level interface stanza: 'interface ethernet X/Y/Z' ---
         m = re.match(r"^interface\s+ethernet\s+(\S+)", stripped, re.IGNORECASE)
         if m and not line.startswith((" ", "\t")):
             port = m.group(1)
@@ -514,22 +544,36 @@ def collect_brocade(sess):
 
         i += 1
 
+    # Merge sources: auth-default-vlan wins over untagged-block assignment.
+    port_vlan = {}
+    for port, vlan in port_untagged.items():
+        port_vlan[port] = vlan
+    for port, vlan in port_auth_default.items():
+        port_vlan[port] = vlan
+
     rows = []
     skipped = 0
-    for port in sorted(port_auth_default, key=_port_sort_key):
+    for port in sorted(port_vlan, key=_port_sort_key):
         desc = port_name.get(port, "")
+        vlan = port_vlan[port]
         if _should_skip_brocade(desc):
-            sys.stderr.write(f"    skip {port} vlan={port_auth_default[port]} desc={desc!r}\n")
+            sys.stderr.write(
+                f"    skip {port} vlan={vlan} desc={desc!r}\n"
+            )
             skipped += 1
             continue
         rows.append({
             "port": port,
             "description": desc,
-            "vlan": port_auth_default[port],
+            "vlan": vlan,
         })
+
+    n_auth = len(port_auth_default)
+    n_untagged_only = sum(1 for p in port_untagged if p not in port_auth_default)
     sys.stderr.write(
-        f"    ({len(rows)} kept, {skipped} filtered out of "
-        f"{len(port_auth_default)} ports with auth-default-vlan)\n"
+        f"    ({len(rows)} kept, {skipped} filtered; "
+        f"sources: {n_auth} auth-default-vlan, "
+        f"{n_untagged_only} untagged-block)\n"
     )
     return rows
 
