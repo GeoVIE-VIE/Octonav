@@ -434,20 +434,27 @@ def _brocade_range(start, end):
         return [start, end]
 
 
-# Port descriptions containing any of these tokens are excluded from
-# the Brocade report because they are known uplink / trunk / AP ports
-# that carry multiple VLANs. Matching is case-insensitive substring --
-# "has X in the description" -- with no word-boundary constraint, so
-# even run-together names like 'MYIS01UPLINK' will be caught.
+# Port descriptions containing any of these tokens are excluded from the
+# Brocade report because they are known uplink / trunk / AP / management
+# ports that do not fit the per-port "what VLAN is this in" model.
+# Matching is case-insensitive substring -- "has X in the description" --
+# so run-together names like 'MYIS01UPLINK' and underscore-wrapped names
+# like '_IS02_' are both caught.
 _BROCADE_SKIP_TOKENS = (
     "IS01", "IS02",
     "DR01", "DR02",
     "IR01", "IR02",
     "OS01", "OS02",
+    "MGMT",        # 'Sup mgmt port', 'mgmt', etc.
+    "MANAGEMENT",  # 'Management Port', 'Switch Management', etc.
 )
-# 'AP' is a short token, so match it on word boundaries to avoid false
-# positives like 'APARTMENT' or 'TRAP-A'.
-_BROCADE_SKIP_AP_RE = re.compile(r"\bAP\b", re.IGNORECASE)
+# 'AP' is a short token. Require that the 'A' and 'P' not be flanked by
+# another letter, so we still catch AP, -AP-, AP5, AP01, AP-01, etc., but
+# skip false positives like APARTMENT, TRAPPING, HANDICAP, CHEAP.
+_BROCADE_SKIP_AP_RE = re.compile(
+    r"(?<![A-Za-z])AP(?![A-Za-z])",
+    re.IGNORECASE,
+)
 
 
 def _should_skip_brocade(desc):
@@ -512,7 +519,7 @@ def collect_brocade(sess):
     for port in sorted(port_auth_default, key=_port_sort_key):
         desc = port_name.get(port, "")
         if _should_skip_brocade(desc):
-            sys.stderr.write(f"    skip {port} ({desc})\n")
+            sys.stderr.write(f"    skip {port} vlan={port_auth_default[port]} desc={desc!r}\n")
             skipped += 1
             continue
         rows.append({
@@ -520,8 +527,10 @@ def collect_brocade(sess):
             "description": desc,
             "vlan": port_auth_default[port],
         })
-    if skipped:
-        sys.stderr.write(f"    ({skipped} ports filtered by description)\n")
+    sys.stderr.write(
+        f"    ({len(rows)} kept, {skipped} filtered out of "
+        f"{len(port_auth_default)} ports with auth-default-vlan)\n"
+    )
     return rows
 
 
