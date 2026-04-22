@@ -24,7 +24,7 @@ import shutil
 import signal
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -422,36 +422,32 @@ def _brocade_range(start, end):
         return [start, end]
 
 
+# Port descriptions matching any of these tokens are excluded from the
+# Brocade report because they are uplink / trunk / AP ports that carry
+# multiple VLANs and the per-port "what VLAN is this in" model does not
+# apply. Tokens match on word boundaries, case-insensitive.
+_BROCADE_SKIP_RE = re.compile(
+    r"\b(?:IS0[12]|DR0[12]|IR0[12]|OS0[12]|AP)\b",
+    re.IGNORECASE,
+)
+
+
 def collect_brocade(sess):
-    """Parse 'show running-config' for VLAN membership and port-name.
+    """Parse 'show running-config' and emit one row per access port.
 
-    On Brocade FastIron/ICX the running-config is the authoritative source:
-      vlan 10 name DATA by port
-       untagged ethe 1/1/1 to 1/1/24
-       tagged   ethe 1/1/48
-      !
-      interface ethernet 1/1/1
-       port-name Office-Desk-1
-       dual-mode 10
-      !
-
-    We read VLAN membership from the 'vlan N' stanzas and descriptions
-    (+ optional dual-mode native VLAN) from the 'interface ethernet'
-    stanzas.
-
-    Caveat: ports that remain in the default VLAN 1 with no other
-    configuration do not appear in show-run at all. We run
-    'show interface brief' as a secondary pass to pick up those ports
-    (using the Pvid column as their untagged VLAN) so the report is
-    complete.
+    Policy (per the operator's requirements):
+      * A port is reported only if its 'interface ethernet' stanza has
+        'authentication auth-default-vlan <N>'. Nothing else sources the
+        VLAN -- vlan blocks, dual-mode, brief Pvid are all ignored.
+      * The vlan column is just the number.
+      * Ports whose port-name matches the skip list (IS01/IS02/DR01/DR02/
+        IR01/IR02/OS01/OS02/AP) are dropped; these are known uplink/AP
+        ports that live on multiple VLANs.
     """
     run_out = sess.send_command("show running-config", timeout=180)
 
-    port_vlan_untagged = {}
-    port_vlan_tagged = defaultdict(list)
     port_name = {}
-    port_dualmode_native = {}   # port -> native VLAN id when 'dual-mode N' is set
-    port_auth_default = {}      # port -> 802.1X auth-default-vlan
+    port_auth_default = {}
 
     lines = run_out.splitlines()
     i = 0
@@ -459,31 +455,6 @@ def collect_brocade(sess):
         line = lines[i]
         stripped = line.strip()
 
-        # Top-level VLAN stanza: 'vlan <id> [name <x>] [by port]'
-        m = re.match(r"^vlan\s+(\d+)\b", stripped, re.IGNORECASE)
-        if m and not line.startswith((" ", "\t")):
-            vlan_id = m.group(1)
-            i += 1
-            while i < len(lines):
-                inner = lines[i]
-                s = inner.strip()
-                if s == "!" or (inner and not inner.startswith((" ", "\t"))):
-                    break
-                mm = re.match(
-                    r"^(untagged|tagged)\s+(.*)$", s, re.IGNORECASE
-                )
-                if mm:
-                    kind = mm.group(1).lower()
-                    tokens = mm.group(2).split()
-                    for p in _expand_brocade_port_list(tokens):
-                        if kind == "untagged":
-                            port_vlan_untagged[p] = vlan_id
-                        else:
-                            port_vlan_tagged[p].append(vlan_id)
-                i += 1
-            continue
-
-        # Top-level interface stanza: 'interface ethernet X/Y/Z'
         m = re.match(r"^interface\s+ethernet\s+(\S+)", stripped, re.IGNORECASE)
         if m and not line.startswith((" ", "\t")):
             port = m.group(1)
@@ -496,13 +467,6 @@ def collect_brocade(sess):
                 pn = re.match(r"^port-name\s+(.+)$", s, re.IGNORECASE)
                 if pn:
                     port_name[port] = pn.group(1).strip().strip('"')
-                dm = re.match(r"^dual-mode(?:\s+(\d+))?\s*$", s, re.IGNORECASE)
-                if dm and dm.group(1):
-                    port_dualmode_native[port] = dm.group(1)
-                # 802.1X default VLAN for unauthenticated devices on this
-                # interface. The port isn't necessarily an 'untagged' member
-                # of a vlan stanza when dot1x is driving it, so treat this
-                # as the effective untagged VLAN if nothing else claims it.
                 ad = re.match(
                     r"^authentication\s+auth-default-vlan\s+(\d+)\s*$",
                     s, re.IGNORECASE,
@@ -514,88 +478,16 @@ def collect_brocade(sess):
 
         i += 1
 
-    # Promote dual-mode native VLAN into the untagged map (explicit native
-    # VLAN on the interface wins over anything inferred from vlan blocks).
-    for port, native in port_dualmode_native.items():
-        port_vlan_untagged[port] = native
-
-    # Fill in auth-default-vlan as the untagged VLAN for dot1x ports that
-    # are not claimed as 'untagged' by any vlan stanza. Mark with '(auth)'
-    # so the operator can tell it came from the 802.1X config, not a
-    # static assignment.
-    for port, vlan in port_auth_default.items():
-        if port not in port_vlan_untagged:
-            port_vlan_untagged[port] = f"{vlan}(auth)"
-
-    # Secondary pass: 'show interface brief' catches ports that are silent
-    # in show-run (default VLAN 1, no port-name, no other config) and also
-    # gives us a cross-check on Pvid.
-    brief_map = {}       # port -> port-name (from Name column)
-    brief_pvid = {}      # port -> Pvid (untagged VLAN)
-    try:
-        brief = sess.send_command("show interface brief", timeout=120)
-    except Exception:
-        brief = ""
-    header_seen = False
-    name_col = None
-    pvid_col = None
-    for line in brief.splitlines():
-        if not header_seen:
-            low = line.lower()
-            if re.search(r"^\s*port\s+link", low):
-                header_seen = True
-                name_col = low.find("name")
-                pvid_col = low.find("pvid")
-            continue
-        if not line.strip():
-            continue
-        parts = line.split()
-        if not parts:
-            continue
-        port = parts[0]
-        if not re.match(r"^\d+(/\d+)+$", port):
-            continue
-        if name_col is not None and len(line) > name_col:
-            brief_map[port] = line[name_col:].strip()
-        if pvid_col is not None and pvid_col >= 0 and len(parts) > 2:
-            # Re-tokenise only the prefix up to Name so we don't grab the
-            # description field as a PVID.
-            prefix = line[: name_col] if name_col and name_col > 0 else line
-            p_parts = prefix.split()
-            # Column index of Pvid in the tokenised row (usually 7 for
-            # FastIron 'Port Link State Dupl Speed Trunk Tag Pvid Pri MAC').
-            for token in p_parts:
-                if token.isdigit():
-                    brief_pvid[port] = token
-                    # Keep scanning; the last numeric token before 'Pri' is
-                    # almost always Pvid on FastIron. Not perfect, but safe
-                    # enough as a fallback.
-                    break
-
-    # Fill in VLAN 1 (or Pvid) for ports that never appeared in any VLAN stanza.
-    for port in brief_map:
-        if port not in port_vlan_untagged and port not in port_vlan_tagged:
-            port_vlan_untagged[port] = brief_pvid.get(port, "1")
-
-    # Prefer show-run port-names; fall back to 'show interface brief' Name.
     rows = []
-    all_ports = (
-        set(port_name) | set(brief_map)
-        | set(port_vlan_untagged) | set(port_vlan_tagged)
-    )
-    for port in sorted(all_ports, key=_port_sort_key):
-        desc = port_name.get(port) or brief_map.get(port, "")
-        untagged = port_vlan_untagged.get(port)
-        tagged = port_vlan_tagged.get(port, [])
-        if tagged and untagged:
-            vlan = f"untagged:{untagged} tagged:{','.join(tagged)}"
-        elif tagged:
-            vlan = f"tagged:{','.join(tagged)}"
-        elif untagged:
-            vlan = untagged
-        else:
-            vlan = ""
-        rows.append({"port": port, "description": desc, "vlan": vlan})
+    for port in sorted(port_auth_default, key=_port_sort_key):
+        desc = port_name.get(port, "")
+        if desc and _BROCADE_SKIP_RE.search(desc):
+            continue
+        rows.append({
+            "port": port,
+            "description": desc,
+            "vlan": port_auth_default[port],
+        })
     return rows
 
 
@@ -704,6 +596,15 @@ def main():
     print(fmt.format(*("-" * widths[k] for k in fieldnames)))
     for r in all_rows:
         print(fmt.format(*(str(r.get(k, "")) for k in fieldnames)))
+
+    # Summary: total ports per VLAN across all devices.
+    counts = Counter(r["vlan"] for r in all_rows if r.get("vlan"))
+    if counts:
+        print()
+        print("VLAN totals:")
+        vlan_width = max(len(str(v)) for v in counts)
+        for vlan in sorted(counts, key=lambda v: (0, int(v)) if v.isdigit() else (1, v)):
+            print(f"  VLAN {str(vlan):<{vlan_width}} : {counts[vlan]}")
 
     sys.stderr.write(f"\nwrote {OUTPUT_CSV}\n")
 
