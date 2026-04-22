@@ -283,13 +283,76 @@ class SSHSession:
 # Vendor detection
 # ---------------------------------------------------------------------------
 
+def _peek_prompt(sess):
+    """Send a bare newline and return the line the device emits as its
+    prompt, or '' if we can't read it."""
+    try:
+        os.write(sess.fd, b"\n")
+        buf = sess._read_until([SSHSession.PROMPT_RE], 5)
+        text = _strip_ansi(buf.decode(errors="replace")).strip()
+        return text.splitlines()[-1] if text else ""
+    except Exception:
+        return ""
+
+
+_BROCADE_VERSION_KEYWORDS = (
+    "brocade", "foundry", "ruckus", "commscope",       # vendor names
+    "fastiron", "netiron", "ironware",                 # OS families
+    "icx", "fcx", "fgs", "fls", "fesx",                # FastIron hardware
+    "mlx", "mlxe", "ces", "cer", "serveriron",         # NetIron hardware
+    "ni-mlx", "ni-ces", "ni-cer",                      # alt model prefixes
+)
+_CISCO_VERSION_KEYWORDS = (
+    "cisco ios software", "cisco ios-xe", "cisco ios xe",
+    "cisco nexus", "cisco adaptive", "cisco internetwork",
+    "nx-os", "ios-xe", "ios xe", "catalyst",
+)
+# Brocade CLIs always prefix the hostname in the prompt with the access
+# protocol (SSH@, telnet@, console@). Cisco never does this.
+_BROCADE_PROMPT_RE = re.compile(r"^(?:SSH|telnet|console)@", re.IGNORECASE)
+
+
 def detect_vendor(sess):
-    """Return 'cisco' or 'brocade' by probing the device."""
-    out = sess.send_command("show version", timeout=30).lower()
-    if any(k in out for k in ("brocade", "foundry", "fastiron", "icx", "ruckus", "netiron")):
+    """Return 'cisco' or 'brocade' by probing the device.
+
+    Strategy:
+      1. 'show version' keyword match -- Brocade first (more specific
+         indicators), then Cisco.
+      2. Prompt-style fallback: Brocade prompts start with 'SSH@' /
+         'telnet@' / 'console@' which Cisco never uses.
+      3. Cisco-keyword fallback with 'cisco' alone.
+    A one-line explanation of the chosen vendor is printed to stderr so
+    mis-detections can be diagnosed from the run log.
+    """
+    out = sess.send_command("show version", timeout=30)
+    low = out.lower()
+
+    matched_brocade = next((k for k in _BROCADE_VERSION_KEYWORDS if k in low), None)
+    if matched_brocade:
+        sys.stderr.write(f"    vendor=brocade (show-version matched {matched_brocade!r})\n")
         return "brocade"
-    if any(k in out for k in ("cisco", "ios software", "nx-os", "ios-xe", "ios xe")):
+
+    matched_cisco = next((k for k in _CISCO_VERSION_KEYWORDS if k in low), None)
+    if matched_cisco:
+        sys.stderr.write(f"    vendor=cisco (show-version matched {matched_cisco!r})\n")
         return "cisco"
+
+    # No strong keyword hit. Try the prompt.
+    prompt = _peek_prompt(sess)
+    if _BROCADE_PROMPT_RE.match(prompt):
+        sys.stderr.write(f"    vendor=brocade (prompt {prompt!r} uses SSH@/telnet@/console@)\n")
+        return "brocade"
+
+    # Last-resort: bare 'cisco' anywhere in the output.
+    if "cisco" in low:
+        sys.stderr.write("    vendor=cisco (fallback: 'cisco' substring)\n")
+        return "cisco"
+
+    # Log a snippet so the operator can see what confused us.
+    snippet = " | ".join(l.strip() for l in out.splitlines() if l.strip())[:240]
+    sys.stderr.write(
+        f"    vendor=UNKNOWN; show-version snippet: {snippet!r}; prompt: {prompt!r}\n"
+    )
     return None
 
 
