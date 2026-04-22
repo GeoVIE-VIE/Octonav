@@ -422,14 +422,31 @@ def _brocade_range(start, end):
         return [start, end]
 
 
-# Port descriptions matching any of these tokens are excluded from the
-# Brocade report because they are uplink / trunk / AP ports that carry
-# multiple VLANs and the per-port "what VLAN is this in" model does not
-# apply. Tokens match on word boundaries, case-insensitive.
-_BROCADE_SKIP_RE = re.compile(
-    r"\b(?:IS0[12]|DR0[12]|IR0[12]|OS0[12]|AP)\b",
-    re.IGNORECASE,
+# Port descriptions containing any of these tokens are excluded from
+# the Brocade report because they are known uplink / trunk / AP ports
+# that carry multiple VLANs. Matching is case-insensitive substring --
+# "has X in the description" -- with no word-boundary constraint, so
+# even run-together names like 'MYIS01UPLINK' will be caught.
+_BROCADE_SKIP_TOKENS = (
+    "IS01", "IS02",
+    "DR01", "DR02",
+    "IR01", "IR02",
+    "OS01", "OS02",
 )
+# 'AP' is a short token, so match it on word boundaries to avoid false
+# positives like 'APARTMENT' or 'TRAP-A'.
+_BROCADE_SKIP_AP_RE = re.compile(r"\bAP\b", re.IGNORECASE)
+
+
+def _should_skip_brocade(desc):
+    if not desc:
+        return False
+    upper = desc.upper()
+    if any(tok in upper for tok in _BROCADE_SKIP_TOKENS):
+        return True
+    if _BROCADE_SKIP_AP_RE.search(desc):
+        return True
+    return False
 
 
 def collect_brocade(sess):
@@ -479,15 +496,20 @@ def collect_brocade(sess):
         i += 1
 
     rows = []
+    skipped = 0
     for port in sorted(port_auth_default, key=_port_sort_key):
         desc = port_name.get(port, "")
-        if desc and _BROCADE_SKIP_RE.search(desc):
+        if _should_skip_brocade(desc):
+            sys.stderr.write(f"    skip {port} ({desc})\n")
+            skipped += 1
             continue
         rows.append({
             "port": port,
             "description": desc,
             "vlan": port_auth_default[port],
         })
+    if skipped:
+        sys.stderr.write(f"    ({skipped} ports filtered by description)\n")
     return rows
 
 
