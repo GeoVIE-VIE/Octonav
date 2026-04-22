@@ -336,6 +336,64 @@ def _expand_cisco_port_list(s):
     return ports
 
 
+def _parse_cisco_status(status_out):
+    """Column-aware parse of 'show interfaces status'.
+
+    The previous token-based regex broke on IOS versions that spell the
+    status as two words ('not connected') because \\S+ grabs 'not' as
+    the Status column and 'connected' as the Vlan column, polluting the
+    report with 'connected' VLAN values.
+
+    We instead slice each line by the header-column offsets, which is
+    robust to multi-word Status/Reason text.
+    """
+    out = {}
+    header_cols = None
+    wanted = ("Port", "Name", "Status", "Vlan", "Duplex", "Speed", "Type")
+    for line in status_out.splitlines():
+        if not line.strip():
+            continue
+        if header_cols is None:
+            if line.lstrip().startswith("Port") and "Status" in line and "Vlan" in line:
+                offsets = []
+                for hdr in wanted:
+                    idx = line.find(hdr)
+                    if idx >= 0:
+                        offsets.append((hdr, idx))
+                offsets.sort(key=lambda kv: kv[1])
+                if {"Port", "Status", "Vlan"}.issubset({h for h, _ in offsets}):
+                    header_cols = offsets
+            continue
+        # Slice each column between its offset and the next header offset.
+        row = {}
+        for i, (hdr, start) in enumerate(header_cols):
+            end = header_cols[i + 1][1] if i + 1 < len(header_cols) else len(line)
+            if start >= len(line):
+                row[hdr] = ""
+            else:
+                row[hdr] = line[start:end].strip()
+        port = row.get("Port", "")
+        if not port or port.lower() == "port":
+            continue
+        out[port] = {
+            "name":   row.get("Name", ""),
+            "status": row.get("Status", ""),
+            "vlan":   row.get("Vlan", ""),
+        }
+    return out
+
+
+def _is_valid_cisco_vlan(v):
+    """A show-status Vlan field is usable if it is numeric, 'trunk',
+    'routed', or 'dynamic'. Anything else (e.g. a stray 'connected' from
+    a mis-parsed status column) should be ignored."""
+    if not v:
+        return False
+    if v.isdigit():
+        return True
+    return v.lower() in {"trunk", "routed", "dynamic"}
+
+
 def collect_cisco(sess):
     vlan_brief = sess.send_command("show vlan brief", timeout=60)
     desc_out = sess.send_command("show interfaces description", timeout=60)
@@ -359,12 +417,7 @@ def collect_cisco(sess):
         for p in _expand_cisco_port_list(ports_blob):
             port_vlan[p] = current_vlan
 
-    status_map = {}
-    for line in status_out.splitlines():
-        m = re.match(r"^(\S+)\s+(.{0,19}?)\s{2,}(\S+)\s+(\S+)\s+", line)
-        if m and m.group(1).lower() != "port":
-            port, name, _status, vlan = m.group(1), m.group(2).strip(), m.group(3), m.group(4)
-            status_map[port] = {"name": name, "vlan": vlan}
+    status_map = _parse_cisco_status(status_out)
 
     trunk_map = {}
     in_allowed = False
@@ -395,7 +448,16 @@ def collect_cisco(sess):
         if port in trunk_map:
             vlan = f"trunk:{trunk_map[port]}"
         else:
-            vlan = status_map.get(port, {}).get("vlan") or port_vlan.get(port, "")
+            # Prefer 'show vlan brief' (authoritative for access ports).
+            # Fall back to the status column only if it looks like a
+            # real VLAN -- numeric, trunk, routed, or dynamic. This
+            # rejects garbage like 'connected' that would have leaked in
+            # from a multi-word status column in older IOS.
+            vlan = port_vlan.get(port, "")
+            if not vlan:
+                status_vlan = status_map.get(port, {}).get("vlan", "")
+                if _is_valid_cisco_vlan(status_vlan):
+                    vlan = status_vlan
         rows.append({"port": port, "description": desc, "vlan": vlan})
     return rows
 
