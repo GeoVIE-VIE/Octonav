@@ -39,6 +39,10 @@ os.environ.setdefault("CRYPTO_POLICY", "LEGACY")
 
 # ANSI escape sequence stripper (switches sometimes emit colour/cursor codes)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r|\x08")
+
+
+class AuthFailure(Exception):
+    """Raised when the device rejects the supplied credentials."""
 # Pager output: Cisco "--More--" and Brocade "--More--, next page: Space ..."
 _MORE_RE = re.compile(rb"--\s*[Mm]ore\s*--")
 _PAGER_LINE_RE = re.compile(r"--\s*[Mm]ore\s*--[^\r\n]*")
@@ -121,16 +125,24 @@ class SSHSession:
 
         buf = self._read_until([self.PW_RE, self.PROMPT_RE, self.FAIL_RE], self.timeout)
         if self.FAIL_RE.search(buf):
-            raise RuntimeError(self._describe_failure(buf))
+            self._raise_for_failure(buf)
         if self.PW_RE.search(buf):
             os.write(self.fd, self.password.encode() + b"\n")
             buf = self._read_until([self.PROMPT_RE, self.FAIL_RE, self.PW_RE], self.timeout)
             if self.PW_RE.search(buf):
-                raise RuntimeError("authentication failed")
+                raise AuthFailure("authentication failed (password rejected)")
             if self.FAIL_RE.search(buf):
-                raise RuntimeError(self._describe_failure(buf))
+                self._raise_for_failure(buf)
         # At the prompt.
         return _strip_ansi(buf.decode(errors="replace"))
+
+    @classmethod
+    def _raise_for_failure(cls, buf):
+        """Classify a failure buffer and raise AuthFailure or RuntimeError."""
+        text = _strip_ansi(buf.decode(errors="replace")).lower()
+        if re.search(r"permission denied|authentication fail|access denied", text):
+            raise AuthFailure(cls._describe_failure(buf))
+        raise RuntimeError(cls._describe_failure(buf))
 
     def close(self):
         if self.fd is not None:
@@ -422,20 +434,27 @@ def _brocade_range(start, end):
         return [start, end]
 
 
-# Port descriptions containing any of these tokens are excluded from
-# the Brocade report because they are known uplink / trunk / AP ports
-# that carry multiple VLANs. Matching is case-insensitive substring --
-# "has X in the description" -- with no word-boundary constraint, so
-# even run-together names like 'MYIS01UPLINK' will be caught.
+# Port descriptions containing any of these tokens are excluded from the
+# Brocade report because they are known uplink / trunk / AP / management
+# ports that do not fit the per-port "what VLAN is this in" model.
+# Matching is case-insensitive substring -- "has X in the description" --
+# so run-together names like 'MYIS01UPLINK' and underscore-wrapped names
+# like '_IS02_' are both caught.
 _BROCADE_SKIP_TOKENS = (
     "IS01", "IS02",
     "DR01", "DR02",
     "IR01", "IR02",
     "OS01", "OS02",
+    "MGMT",        # 'Sup mgmt port', 'mgmt', etc.
+    "MANAGEMENT",  # 'Management Port', 'Switch Management', etc.
 )
-# 'AP' is a short token, so match it on word boundaries to avoid false
-# positives like 'APARTMENT' or 'TRAP-A'.
-_BROCADE_SKIP_AP_RE = re.compile(r"\bAP\b", re.IGNORECASE)
+# 'AP' is a short token. Require that the 'A' and 'P' not be flanked by
+# another letter, so we still catch AP, -AP-, AP5, AP01, AP-01, etc., but
+# skip false positives like APARTMENT, TRAPPING, HANDICAP, CHEAP.
+_BROCADE_SKIP_AP_RE = re.compile(
+    r"(?<![A-Za-z])AP(?![A-Za-z])",
+    re.IGNORECASE,
+)
 
 
 def _should_skip_brocade(desc):
@@ -500,7 +519,7 @@ def collect_brocade(sess):
     for port in sorted(port_auth_default, key=_port_sort_key):
         desc = port_name.get(port, "")
         if _should_skip_brocade(desc):
-            sys.stderr.write(f"    skip {port} ({desc})\n")
+            sys.stderr.write(f"    skip {port} vlan={port_auth_default[port]} desc={desc!r}\n")
             skipped += 1
             continue
         rows.append({
@@ -508,8 +527,10 @@ def collect_brocade(sess):
             "description": desc,
             "vlan": port_auth_default[port],
         })
-    if skipped:
-        sys.stderr.write(f"    ({skipped} ports filtered by description)\n")
+    sys.stderr.write(
+        f"    ({len(rows)} kept, {skipped} filtered out of "
+        f"{len(port_auth_default)} ports with auth-default-vlan)\n"
+    )
     return rows
 
 
@@ -596,6 +617,16 @@ def main():
             vendor = rows[0]["vendor"] if rows else "?"
             all_rows.extend(rows)
             sys.stderr.write(f"ok [{vendor}] ({len(rows)} ports)\n")
+        except AuthFailure as e:
+            # Stop immediately on auth failure. We use the same credentials
+            # for every device, so if one rejects them the rest will too --
+            # and retrying could lock the account out.
+            sys.stderr.write(f"auth failed: {e}\n")
+            sys.stderr.write(
+                "aborting before trying remaining devices to avoid "
+                "locking out the account. rerun with the correct password.\n"
+            )
+            sys.exit(3)
         except TimeoutError as e:
             sys.stderr.write(f"timeout ({e})\n")
         except Exception as e:
