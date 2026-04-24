@@ -1,0 +1,7 @@
+# Routers involved in the routing problem you are troubleshooting.
+# One hostname or IP per line. '#' comments and blank lines are ignored.
+#
+# Example:
+#   core-rtr-01.example.com
+#   core-rtr-02.example.com
+#   10.0.0.254
