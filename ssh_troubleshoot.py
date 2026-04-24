@@ -11,8 +11,9 @@ switch_port_vlan_checker.py which lives next to this file.
 Inputs:
   * devices.txt     -- one hostname/IP per line, '#' comments ignored.
                        Shared with switch_port_vlan_checker.py.
-  * OCTONAV_LLM_API_KEY env var (optional). If unset, prompted via
-    getpass at startup so the key is never echoed and never stored.
+  * SSH username / password -- prompted once at startup.
+  * LLM API key -- prompted once at startup (via getpass, so it is
+                   never echoed to the terminal and never persisted).
 
 Outputs:
   * commands.txt              -- raw command output, grouped per device.
@@ -175,9 +176,7 @@ def main():
     username = input("Username: ").strip()
     password = getpass.getpass("Password: ")
 
-    api_key = os.environ.get("OCTONAV_LLM_API_KEY")
-    if not api_key:
-        api_key = getpass.getpass("LLM API key: ")
+    api_key = getpass.getpass("LLM API key: ")
     if not api_key:
         sys.stderr.write("no LLM API key supplied; aborting\n")
         sys.exit(1)
