@@ -468,6 +468,8 @@ def _disable_paging(sess):
 
 
 def main():
+    no_llm = "--no-llm" in sys.argv[1:] or "--offline" in sys.argv[1:]
+
     if not os.path.exists(DEVICES_FILE):
         sys.stderr.write(f"devices.txt not found at {DEVICES_FILE}\n")
         sys.exit(1)
@@ -479,10 +481,12 @@ def main():
 
     username = input("Username: ").strip()
     password = getpass.getpass("Password: ")
-    api_key  = getpass.getpass("LLM API key: ")
-    if not api_key:
-        sys.stderr.write("no LLM API key supplied; aborting\n")
-        sys.exit(1)
+    api_key = ""
+    if not no_llm:
+        api_key = getpass.getpass("LLM API key (leave blank to skip API call): ")
+        if not api_key:
+            no_llm = True
+            sys.stderr.write("no API key -- skipping LLM call, output will be printed instead\n")
 
     sections = []
     for host in devices:
@@ -519,6 +523,21 @@ def main():
     with open(COMMANDS_FILE) as f:
         payload = f.read()
 
+    if no_llm:
+        # Print the full collected output so the operator can copy it
+        # from the terminal / scp the file to a host that can reach the
+        # LLM endpoint.
+        print()
+        print("#" * 78)
+        print("# LLM call skipped. Collected output below -- copy from terminal")
+        print(f"# or transfer {COMMANDS_FILE} to a host that can reach the API.")
+        print("#" * 78)
+        print()
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+        sys.stderr.write(f"\n{COMMANDS_FILE} is ready for transfer.\n")
+        return
+
     sys.stderr.write(
         f"sending {len(payload)} bytes to {LLM_ENDPOINT} ({LLM_MODEL}) ...\n"
     )
@@ -526,6 +545,16 @@ def main():
         answer = call_llm(api_key, payload)
     except Exception as e:
         sys.stderr.write(f"LLM call failed: {e}\n")
+        sys.stderr.write(
+            f"\nfalling back to printing {COMMANDS_FILE} so you can send "
+            "it from a host that can reach the API.\n\n"
+        )
+        print("#" * 78)
+        print(f"# LLM unreachable. Collected output below ({COMMANDS_FILE}):")
+        print("#" * 78)
+        print()
+        sys.stdout.write(payload)
+        sys.stdout.flush()
         sys.exit(4)
 
     with open(REPORT_FILE, "w") as f:
