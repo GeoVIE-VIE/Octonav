@@ -944,16 +944,40 @@ while ($true) {
     # Enter does not nuke the conversation). The only ways out are:
     #   * Type 'exit' / 'quit' / 'q' / ':q'
     #   * Press Ctrl-C
-    #   * Send EOF (Read-Host returns $null on EOF -> we exit)
+    #   * Stdin closes (we exit with a diagnostic message)
     $followup = $null
     while ($true) {
         Write-Host ''
-        Write-Host ('-' * 78)
-        Write-Host "Sites in context: $($currentSites -join ', ')   (type 'exit' to quit)"
-        Write-Host ('-' * 78)
-        $line = Read-Host -Prompt 'Follow-up'
+        Write-Host ('=' * 78)
+        Write-Host "  Sites in context: $($currentSites -join ', ')"
+        Write-Host "  Type your next question, or 'exit' to quit."
+        Write-Host ('=' * 78)
+        Write-Host '> ' -NoNewline
+
+        # Try reading via the host UI first (the PowerShell-native path
+        # that integrates with ConsoleHost / pwsh / ISE). If that throws
+        # or returns nothing, fall back to [Console]::In which works
+        # against the underlying stdin handle even when the host UI
+        # cannot prompt (e.g., piped input, non-interactive launches).
+        $line = $null
+        try {
+            $line = $Host.UI.ReadLine()
+        } catch {
+            $line = $null
+        }
         if ($null -eq $line) {
-            # EOF (stdin closed / Ctrl-D)
+            try {
+                $line = [Console]::In.ReadLine()
+            } catch {
+                $line = $null
+            }
+        }
+
+        if ($null -eq $line) {
+            Write-Host ''
+            Write-Host '[end-of-input received -- exiting REPL]'
+            Write-Host '(if you did not type exit, your shell may not be running pwsh interactively;'
+            Write-Host ' try invoking the script directly from a real terminal session.)'
             $followup = $null
             break
         }
