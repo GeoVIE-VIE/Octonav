@@ -35,12 +35,32 @@
     Per-file cap; files larger than this are listed but not embedded.
     Default 200KB.
 
+.PARAMETER NoPdfs
+    By default every .pdf in the site directory is attached as a
+    multimodal content part (base64 data URI, MIME application/pdf)
+    so the LLM can read it natively. Pass -NoPdfs if your gateway
+    rejects multimodal content -- PDFs will then be listed by
+    filename only.
+
+.PARAMETER MaxPdfBytes
+    Per-PDF size cap (default 8MB). Larger PDFs are listed but not
+    attached.
+
+.PARAMETER MaxAllPdfsBytes
+    Total cap on all attached PDFs combined (default 32MB). Once this
+    is hit, remaining PDFs are listed but not attached.
+
 .PARAMETER List
     List all available site codes and exit.
 
 .PARAMETER NoLLM
     Bundle the files and print to the terminal; skip the API call. Useful
     when the host running this script cannot reach the API.
+
+.NOTES
+    XLSX / XLSM workbooks are extracted to text natively (XLSX is a ZIP
+    of XML, so System.IO.Compression handles it). Each sheet is emitted
+    as CSV-style rows under a '## Sheet: <name>' header.
 
 .EXAMPLE
     PS> .\Invoke-SiteQuery.ps1 "what does AAAA have"
@@ -61,9 +81,12 @@ param(
 
     [string]$BaseDir,
 
-    [int]$MaxBundleBytes = 1MB,
-    [int]$MaxFileBytes   = 200KB,
+    [int]$MaxBundleBytes  = 1MB,
+    [int]$MaxFileBytes    = 200KB,
+    [int]$MaxPdfBytes     = 8MB,
+    [int]$MaxAllPdfsBytes = 32MB,
 
+    [switch]$NoPdfs,
     [switch]$List,
     [switch]$NoLLM
 )
@@ -76,11 +99,14 @@ $LLMModel    = 'gemini-2.5-flash'
 $SystemPrompt = @'
 You are an AI assistant answering questions about a specific site
 (building, data center, or remote location). The user has provided
-you with that site's documentation as a directory tree plus the
-contents of all readable text files. Cite specific filenames when
-referencing facts. If a detail would only live in a non-text file
-(PDF, image, CAD, or Office document), say so explicitly and
-recommend the operator open that file directly.
+you with that site's documentation: a directory tree, the contents
+of every readable text file (TXT, CSV, MD, JSON, etc.), the
+extracted text contents of every Excel workbook (XLSX/XLSM, one
+section per sheet), and -- when present -- every PDF attached as a
+multimodal document. Cite specific filenames when referencing facts.
+If a detail would only live in a non-text non-PDF file (image, CAD,
+Visio, Word, ...), say so explicitly and recommend the operator open
+that file directly.
 '@.Trim()
 
 # Force TLS 1.2+ on Windows PowerShell 5.1 for HTTPS to modern endpoints.
@@ -109,10 +135,13 @@ $Script:TextExt = @(
     '.py', '.sh', '.bat', '.cmd',
     '.run'
 )
+# Extensions we extract to text natively (XLSX/XLSM = ZIP of XML).
+$Script:OfficeExt = @('.xlsx', '.xlsm')
+# Extensions handled separately as multimodal PDF attachments.
+$Script:PdfExt = @('.pdf')
 # Extensions we never try to read as text.
 $Script:BinExt = @(
-    '.pdf',
-    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.doc', '.docx', '.xls', '.ppt', '.pptx',
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.svg', '.webp',
     '.vsd', '.vsdx', '.dwg', '.dxf', '.rvt', '.skp',
     '.zip', '.tar', '.gz', '.7z', '.rar',
@@ -130,27 +159,159 @@ function Format-Size {
     return ('{0:N1} GB' -f ($Bytes / 1GB))
 }
 
-function Test-IsTextFile {
+function Get-FileKind {
     param([System.IO.FileInfo]$File)
 
     $ext = $File.Extension.ToLowerInvariant()
-    if ($ext -and ($Script:BinExt  -contains $ext)) { return $false }
-    if ($ext -and ($Script:TextExt -contains $ext)) { return $true  }
+    if ($ext -and ($Script:PdfExt    -contains $ext)) { return 'pdf'    }
+    if ($ext -and ($Script:OfficeExt -contains $ext)) { return 'office' }
+    if ($ext -and ($Script:BinExt    -contains $ext)) { return 'binary' }
+    if ($ext -and ($Script:TextExt   -contains $ext)) { return 'text'   }
 
-    # Unknown extension: peek the first 8 KB and treat as binary if any
-    # null byte appears (heuristic but accurate for almost all cases).
-    if ($File.Length -gt $MaxFileBytes) { return $false }
+    # Unknown extension: peek the first 8 KB. If any null byte appears
+    # the file is almost certainly binary; otherwise treat as text.
+    if ($File.Length -gt $MaxFileBytes) { return 'binary' }
     try {
         $stream = [System.IO.File]::OpenRead($File.FullName)
         $buf = New-Object byte[] 8192
         $n = $stream.Read($buf, 0, $buf.Length)
         $stream.Close()
         for ($i = 0; $i -lt $n; $i++) {
-            if ($buf[$i] -eq 0) { return $false }
+            if ($buf[$i] -eq 0) { return 'binary' }
         }
-        return $true
+        return 'text'
     } catch {
-        return $false
+        return 'binary'
+    }
+}
+
+function Get-XlsxText {
+    <#
+    Extract text from an XLSX/XLSM workbook using only .NET BCL
+    (System.IO.Compression). Each sheet is rendered as a section
+    of CSV-style rows. Strings come from xl/sharedStrings.xml; cells
+    that reference shared-string indices, inline strings, and direct
+    numeric values are all handled.
+    #>
+    param(
+        [string]$Path,
+        [int]$MaxRowsPerSheet = 5000
+    )
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        # --- shared strings table ---
+        $shared = New-Object System.Collections.Generic.List[string]
+        $sst = $zip.Entries | Where-Object { $_.FullName -eq 'xl/sharedStrings.xml' } | Select-Object -First 1
+        if ($sst) {
+            $stream = $sst.Open()
+            try {
+                $rdr = New-Object System.IO.StreamReader($stream)
+                $sstXml = New-Object System.Xml.XmlDocument
+                $sstXml.LoadXml($rdr.ReadToEnd())
+            } finally {
+                $stream.Dispose()
+            }
+            $sstNs = New-Object System.Xml.XmlNamespaceManager($sstXml.NameTable)
+            $sstNs.AddNamespace('s', $ns)
+            foreach ($si in $sstXml.SelectNodes('//s:si', $sstNs)) {
+                # <si> contains either a single <t>...</t> or a sequence of
+                # rich-text runs <r><t>...</t></r>; concatenate all <t>.
+                $tnodes = $si.SelectNodes('.//s:t', $sstNs)
+                $val = ''
+                foreach ($t in $tnodes) { $val += $t.InnerText }
+                [void]$shared.Add($val)
+            }
+        }
+
+        # --- sheet name map (rId -> human name), best-effort ---
+        $sheetNames = @{}
+        $wbEntry = $zip.Entries | Where-Object { $_.FullName -eq 'xl/workbook.xml' } | Select-Object -First 1
+        if ($wbEntry) {
+            $s = $wbEntry.Open()
+            try {
+                $rdr = New-Object System.IO.StreamReader($s)
+                $wbXml = New-Object System.Xml.XmlDocument
+                $wbXml.LoadXml($rdr.ReadToEnd())
+            } finally { $s.Dispose() }
+            $wbNs = New-Object System.Xml.XmlNamespaceManager($wbXml.NameTable)
+            $wbNs.AddNamespace('s', $ns)
+            $idx = 1
+            foreach ($sh in $wbXml.SelectNodes('//s:sheets/s:sheet', $wbNs)) {
+                $sheetNames["sheet$idx"] = $sh.GetAttribute('name')
+                $idx++
+            }
+        }
+
+        # --- emit each sheet ---
+        $sb = [System.Text.StringBuilder]::new()
+        $sheetEntries = $zip.Entries |
+            Where-Object { $_.FullName -match '^xl/worksheets/sheet(\d+)\.xml$' } |
+            Sort-Object { [int]([regex]::Match($_.FullName, 'sheet(\d+)\.xml').Groups[1].Value) }
+
+        foreach ($sheet in $sheetEntries) {
+            $key = [System.IO.Path]::GetFileNameWithoutExtension($sheet.FullName)
+            $name = if ($sheetNames.ContainsKey($key)) { $sheetNames[$key] } else { $key }
+            [void]$sb.AppendLine("## Sheet: $name")
+
+            $stream = $sheet.Open()
+            try {
+                $rdr = New-Object System.IO.StreamReader($stream)
+                $shXml = New-Object System.Xml.XmlDocument
+                $shXml.LoadXml($rdr.ReadToEnd())
+            } finally {
+                $stream.Dispose()
+            }
+            $shNs = New-Object System.Xml.XmlNamespaceManager($shXml.NameTable)
+            $shNs.AddNamespace('s', $ns)
+
+            $rowCount = 0
+            foreach ($row in $shXml.SelectNodes('//s:sheetData/s:row', $shNs)) {
+                if ($rowCount -ge $MaxRowsPerSheet) {
+                    [void]$sb.AppendLine("... (truncated at $MaxRowsPerSheet rows)")
+                    break
+                }
+                $cells = New-Object System.Collections.Generic.List[string]
+                foreach ($c in $row.SelectNodes('s:c', $shNs)) {
+                    $t = $c.GetAttribute('t')
+                    $v = ''
+                    if ($t -eq 's') {
+                        $vNode = $c.SelectSingleNode('s:v', $shNs)
+                        if ($vNode) {
+                            $idx = 0
+                            if ([int]::TryParse($vNode.InnerText, [ref]$idx) -and
+                                $idx -ge 0 -and $idx -lt $shared.Count) {
+                                $v = $shared[$idx]
+                            }
+                        }
+                    } elseif ($t -eq 'inlineStr') {
+                        $tNode = $c.SelectSingleNode('s:is/s:t', $shNs)
+                        if ($tNode) { $v = $tNode.InnerText }
+                    } elseif ($t -eq 'str') {
+                        $vNode = $c.SelectSingleNode('s:v', $shNs)
+                        if ($vNode) { $v = $vNode.InnerText }
+                    } else {
+                        $vNode = $c.SelectSingleNode('s:v', $shNs)
+                        if ($vNode) { $v = $vNode.InnerText }
+                    }
+                    # CSV-quote if the value contains separators or quotes.
+                    if ($v -match '[,"\r\n]') {
+                        $v = '"' + ($v -replace '"', '""') + '"'
+                    }
+                    $cells.Add($v) | Out-Null
+                }
+                [void]$sb.AppendLine(($cells -join ','))
+                $rowCount++
+            }
+            [void]$sb.AppendLine()
+        }
+        return $sb.ToString()
+    } finally {
+        $zip.Dispose()
     }
 }
 
@@ -182,10 +343,22 @@ function Resolve-SiteFromQuestion {
 }
 
 function New-FileBundle {
+    <#
+    Walks $SiteDir. Returns a hashtable:
+        BundleText    -- all text-form content (TXT/CSV/MD/JSON/etc. plus
+                         extracted XLSX text) and a tail listing of
+                         non-text non-pdf binaries.
+        PdfsToAttach  -- FileInfo[] for PDFs the caller should ship as
+                         multimodal parts. Empty when -NoPdfs is set or
+                         no PDFs fit the size caps.
+    #>
     param(
         [string]$SiteDir,
         [int]$MaxBundleBytes,
-        [int]$MaxFileBytes
+        [int]$MaxFileBytes,
+        [int]$MaxPdfBytes,
+        [int]$MaxAllPdfsBytes,
+        [bool]$NoPdfs
     )
 
     $sb = [System.Text.StringBuilder]::new()
@@ -207,16 +380,29 @@ function New-FileBundle {
         }
     [void]$sb.AppendLine()
 
-    # 2) Classify and emit text content; collect binaries for a tail listing.
-    $textFiles   = New-Object System.Collections.ArrayList
-    $binaryFiles = New-Object System.Collections.ArrayList
+    # 2) Classify all files into buckets.
+    $textFiles   = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $officeFiles = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $pdfFiles    = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $binaryFiles = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+
     Get-ChildItem -LiteralPath $SiteDir -Recurse -File -Force |
         Sort-Object FullName |
         ForEach-Object {
-            if (Test-IsTextFile -File $_) { [void]$textFiles.Add($_) }
-            else                          { [void]$binaryFiles.Add($_) }
+            # Capture the FileInfo before entering the switch -- PowerShell's
+            # switch statement rebinds $_ inside each case to the matched
+            # value, so '$_' inside the case blocks would otherwise be the
+            # string 'text'/'office'/etc. instead of the FileInfo.
+            $fileInfo = $_
+            switch (Get-FileKind -File $fileInfo) {
+                'text'   { $textFiles.Add($fileInfo)   | Out-Null }
+                'office' { $officeFiles.Add($fileInfo) | Out-Null }
+                'pdf'    { $pdfFiles.Add($fileInfo)    | Out-Null }
+                default  { $binaryFiles.Add($fileInfo) | Out-Null }
+            }
         }
 
+    # 3) Embed text files.
     foreach ($f in $textFiles) {
         $r = $f.FullName.Substring($rel.Length).TrimStart('\','/')
         if ($f.Length -gt $MaxFileBytes) {
@@ -242,15 +428,74 @@ function New-FileBundle {
         $bytesUsed += [Text.Encoding]::UTF8.GetByteCount($content)
     }
 
+    # 4) Extract and embed XLSX/XLSM contents.
+    foreach ($f in $officeFiles) {
+        $r = $f.FullName.Substring($rel.Length).TrimStart('\','/')
+        if ($f.Length -gt (10 * 1MB)) {
+            [void]$sb.AppendLine("--- $r (skipped: workbook size $(Format-Size $f.Length) too large) ---")
+            [void]$sb.AppendLine()
+            continue
+        }
+        try {
+            $extracted = Get-XlsxText -Path $f.FullName
+        } catch {
+            [void]$sb.AppendLine("--- $r (XLSX extract error: $_) ---")
+            [void]$sb.AppendLine()
+            continue
+        }
+        $extractedBytes = [Text.Encoding]::UTF8.GetByteCount($extracted)
+        if (($bytesUsed + $extractedBytes) -gt $MaxBundleBytes) {
+            [void]$sb.AppendLine("--- $r (skipped: extracted $(Format-Size $extractedBytes) would exceed bundle cap) ---")
+            [void]$sb.AppendLine()
+            continue
+        }
+        [void]$sb.AppendLine("--- $r (Excel, extracted) ---")
+        [void]$sb.AppendLine($extracted)
+        $bytesUsed += $extractedBytes
+    }
+
+    # 5) Decide which PDFs to attach (or list, if -NoPdfs).
+    $attached = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    if (-not $NoPdfs -and $pdfFiles.Count -gt 0) {
+        $pdfBytesUsed = 0
+        [void]$sb.AppendLine('--- Attached PDFs (sent to the model as multimodal documents) ---')
+        foreach ($p in $pdfFiles) {
+            $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
+            if ($p.Length -gt $MaxPdfBytes) {
+                [void]$sb.AppendLine("  [skipped, too large]  $r  ($(Format-Size $p.Length) > MaxPdfBytes)")
+                continue
+            }
+            if (($pdfBytesUsed + $p.Length) -gt $MaxAllPdfsBytes) {
+                [void]$sb.AppendLine("  [skipped, total cap]   $r  ($(Format-Size $p.Length))")
+                continue
+            }
+            [void]$sb.AppendLine("  [attached]            $r  ($(Format-Size $p.Length))")
+            $attached.Add($p) | Out-Null
+            $pdfBytesUsed += $p.Length
+        }
+        [void]$sb.AppendLine()
+    } elseif ($pdfFiles.Count -gt 0) {
+        [void]$sb.AppendLine('--- PDFs in this site (filenames only; -NoPdfs is set) ---')
+        foreach ($p in $pdfFiles) {
+            $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
+            [void]$sb.AppendLine("  $r  ($(Format-Size $p.Length))")
+        }
+        [void]$sb.AppendLine()
+    }
+
+    # 6) Other binaries (images, CAD, Word/PPT, Visio, archives, ...).
     if ($binaryFiles.Count -gt 0) {
-        [void]$sb.AppendLine('--- Binary / non-text files in this site (filenames only) ---')
+        [void]$sb.AppendLine('--- Other binary / non-extractable files (filenames only) ---')
         foreach ($b in $binaryFiles) {
             $r = $b.FullName.Substring($rel.Length).TrimStart('\','/')
             [void]$sb.AppendLine("  $r  ($(Format-Size $b.Length))")
         }
     }
 
-    return $sb.ToString()
+    return @{
+        BundleText   = $sb.ToString()
+        PdfsToAttach = $attached.ToArray()
+    }
 }
 
 function Read-ApiKey {
@@ -264,15 +509,15 @@ function Read-ApiKey {
 function Invoke-LLM {
     param(
         [string]$ApiKey,
-        [string]$UserMessage
+        [object]$UserContent   # string OR array of content parts
     )
     $body = @{
         model    = $LLMModel
         messages = @(
             @{ role = 'system'; content = $SystemPrompt }
-            @{ role = 'user';   content = $UserMessage }
+            @{ role = 'user';   content = $UserContent }
         )
-    } | ConvertTo-Json -Depth 10 -Compress
+    } | ConvertTo-Json -Depth 20 -Compress
 
     $headers = @{
         Authorization = "Bearer $ApiKey"
@@ -287,6 +532,24 @@ function Invoke-LLM {
         -TimeoutSec 240
 
     return $resp.choices[0].message.content
+}
+
+function New-PdfContentPart {
+    <#
+    Read a PDF file and return an OpenAI-style multimodal content part
+    that base64-embeds it as a 'data:application/pdf' URL. Gemini and
+    several OpenAI-compatible gateways accept this shape; gateways that
+    do not should be invoked with -NoPdfs.
+    #>
+    param(
+        [System.IO.FileInfo]$File
+    )
+    $bytes = [System.IO.File]::ReadAllBytes($File.FullName)
+    $b64 = [Convert]::ToBase64String($bytes)
+    return @{
+        type      = 'image_url'
+        image_url = @{ url = "data:application/pdf;base64,$b64" }
+    }
 }
 
 # --- Main -----------------------------------------------------------------
@@ -346,21 +609,30 @@ $siteDir = Join-Path $BaseDir $resolvedSite
 Write-Verbose "Bundling site '$resolvedSite' from $siteDir"
 
 $bundle = New-FileBundle `
-    -SiteDir        $siteDir `
-    -MaxBundleBytes $MaxBundleBytes `
-    -MaxFileBytes   $MaxFileBytes
+    -SiteDir         $siteDir `
+    -MaxBundleBytes  $MaxBundleBytes `
+    -MaxFileBytes    $MaxFileBytes `
+    -MaxPdfBytes     $MaxPdfBytes `
+    -MaxAllPdfsBytes $MaxAllPdfsBytes `
+    -NoPdfs          $NoPdfs.IsPresent
+
+$bundleText  = $bundle.BundleText
+$pdfAttached = @($bundle.PdfsToAttach)
 
 $payload = @"
 Site: $resolvedSite
 Question: $qtext
 
-$bundle
+$bundleText
 "@
 
 if ($NoLLM) {
     Write-Host ''
     Write-Host ('#' * 78)
     Write-Host '# LLM call skipped. Bundle below -- copy from terminal or save to a file.'
+    if ($pdfAttached.Count -gt 0) {
+        Write-Host "# (Plus $($pdfAttached.Count) PDF attachment(s) -- not printed.)"
+    }
     Write-Host ('#' * 78)
     Write-Host ''
     Write-Output $payload
@@ -373,9 +645,30 @@ if (-not $apiKey) {
     exit 1
 }
 
-Write-Host ("Sending {0:N0} chars to {1} ({2}) ..." -f $payload.Length, $LLMEndpoint, $LLMModel)
+# Build the user message content. If we have PDFs, send a multimodal
+# content array (text part labelling each PDF, then the PDF part). If
+# no PDFs are attached, send a plain string -- the most compatible
+# shape for any OpenAI-style gateway.
+if ($pdfAttached.Count -gt 0) {
+    $parts = New-Object System.Collections.Generic.List[object]
+    [void]$parts.Add(@{ type = 'text'; text = $payload })
+    $rel = (Resolve-Path -LiteralPath $siteDir).ProviderPath
+    foreach ($p in $pdfAttached) {
+        $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
+        [void]$parts.Add(@{ type = 'text'; text = "Attached PDF: $r" })
+        [void]$parts.Add((New-PdfContentPart -File $p))
+    }
+    $userContent = $parts.ToArray()
+    Write-Host ("Sending {0:N0} chars + {1} PDF(s) to {2} ({3}) ..." -f
+        $payload.Length, $pdfAttached.Count, $LLMEndpoint, $LLMModel)
+} else {
+    $userContent = $payload
+    Write-Host ("Sending {0:N0} chars to {1} ({2}) ..." -f
+        $payload.Length, $LLMEndpoint, $LLMModel)
+}
+
 try {
-    $answer = Invoke-LLM -ApiKey $apiKey -UserMessage $payload
+    $answer = Invoke-LLM -ApiKey $apiKey -UserContent $userContent
 } catch {
     Write-Warning "LLM call failed: $_"
     Write-Host ''
