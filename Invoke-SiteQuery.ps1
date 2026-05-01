@@ -95,6 +95,7 @@ param(
     [int]$MaxAllPdfsBytes = 32MB,
 
     [switch]$NoPdfs,
+    [switch]$NoStream,
     [switch]$List,
     [switch]$NoLLM
 )
@@ -610,6 +611,81 @@ function Invoke-LLMWithMessages {
     return $resp.choices[0].message.content
 }
 
+function Invoke-LLMStream {
+    <#
+    Same contract as Invoke-LLMWithMessages but uses 'stream: true' --
+    delta tokens are written to the host as they arrive, and the full
+    accumulated reply is returned at the end.
+
+    Used for any user-facing answer (single-batch initial reply, the
+    final reduce reply, and same-site REPL follow-ups). Map-reduce
+    extract calls keep using the non-streaming version because their
+    output is internal-only and would just clutter the terminal.
+
+    Pure stdlib: System.Net.Http.HttpClient + line-based SSE parser.
+    Works on Windows PowerShell 5.1 and PowerShell 7+.
+    #>
+    param(
+        [string]$ApiKey,
+        [object[]]$Messages
+    )
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+
+    $bodyJson = @{
+        model    = $LLMModel
+        messages = $Messages
+        stream   = $true
+    } | ConvertTo-Json -Depth 20 -Compress
+
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(10)
+    try {
+        $req = [System.Net.Http.HttpRequestMessage]::new('POST', $LLMEndpoint)
+        [void]$req.Headers.TryAddWithoutValidation('Authorization', "Bearer $ApiKey")
+        [void]$req.Headers.TryAddWithoutValidation('Accept', 'text/event-stream')
+        $req.Content = [System.Net.Http.StringContent]::new(
+            $bodyJson, [System.Text.Encoding]::UTF8, 'application/json')
+
+        $resp = $client.SendAsync(
+            $req, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+
+        if (-not $resp.IsSuccessStatusCode) {
+            $errBody = ''
+            try { $errBody = $resp.Content.ReadAsStringAsync().Result } catch {}
+            throw "LLM API error: HTTP $([int]$resp.StatusCode) -- $errBody"
+        }
+
+        $stream = $resp.Content.ReadAsStreamAsync().Result
+        $reader = [System.IO.StreamReader]::new($stream)
+        $accumulated = [System.Text.StringBuilder]::new()
+        try {
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if (-not $line) { continue }
+                if ($line.StartsWith(':')) { continue }   # SSE comment / keep-alive
+                if (-not $line.StartsWith('data:')) { continue }
+                $data = $line.Substring(5).Trim()
+                if ($data -eq '[DONE]') { break }
+                try {
+                    $obj = $data | ConvertFrom-Json
+                } catch { continue }
+                $delta = $null
+                try { $delta = $obj.choices[0].delta.content } catch {}
+                if ($null -ne $delta -and $delta.Length -gt 0) {
+                    [Console]::Out.Write($delta)
+                    [void]$accumulated.Append($delta)
+                }
+            }
+        } finally {
+            $reader.Dispose()
+        }
+        Write-Host ''   # newline after the streamed answer
+        return $accumulated.ToString()
+    } finally {
+        $client.Dispose()
+    }
+}
+
 function New-PdfContentPart {
     <#
     Read a PDF file and return an OpenAI-style multimodal content part
@@ -843,7 +919,11 @@ function Send-WithBatching {
         $pdfs = if ($batches.Count -eq 1) { @($batches[0]) } else { @() }
         $userContent = Build-MultimodalContent -Text $BundleText -Pdfs $pdfs
         [void]$Messages.Add(@{ role = 'user'; content = $userContent })
-        return Invoke-LLMWithMessages -ApiKey $ApiKey -Messages $Messages.ToArray()
+        if ($Script:UseStreaming) {
+            return Invoke-LLMStream        -ApiKey $ApiKey -Messages $Messages.ToArray()
+        } else {
+            return Invoke-LLMWithMessages  -ApiKey $ApiKey -Messages $Messages.ToArray()
+        }
     }
 
     Write-Host ("  PDFs exceed per-request cap; processing in $($batches.Count) batches (map-reduce).")
@@ -877,7 +957,11 @@ function Send-WithBatching {
         "Now answer the original question using the text bundle above and the batch fact extracts: $Question"
 
     [void]$Messages.Add(@{ role = 'user'; content = $finalText })
-    return Invoke-LLMWithMessages -ApiKey $ApiKey -Messages $Messages.ToArray()
+    if ($Script:UseStreaming) {
+        return Invoke-LLMStream        -ApiKey $ApiKey -Messages $Messages.ToArray()
+    } else {
+        return Invoke-LLMWithMessages  -ApiKey $ApiKey -Messages $Messages.ToArray()
+    }
 }
 
 # Build the initial site context (used both for -NoLLM and the REPL).
@@ -908,6 +992,10 @@ if (-not $apiKey) {
     Write-Error 'No API key supplied'
     exit 1
 }
+
+# Single source of truth for streaming, so Send-WithBatching and the
+# REPL pick the same code path.
+$Script:UseStreaming = -not $NoStream.IsPresent
 
 # --- Conversation loop ----------------------------------------------------
 # The first user message carries the bundle (and PDFs); follow-up turns
@@ -969,7 +1057,11 @@ while ($true) {
     } else {
         Write-Host ("Sending [$sitesLabel, follow-up #$([math]::Floor(($messages.Count - 2) / 2))] to $LLMEndpoint ($LLMModel) ...")
         try {
-            $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
+            if ($Script:UseStreaming) {
+                $answer = Invoke-LLMStream       -ApiKey $apiKey -Messages $messages.ToArray()
+            } else {
+                $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
+            }
         } catch {
             Write-Host ''
             Write-Host ('#' * 78) -ForegroundColor Red
@@ -982,8 +1074,13 @@ while ($true) {
     }
 
     if ($answer) {
-        Write-Output ''
-        Write-Output $answer
+        # When streaming, the answer was already written to the host as
+        # tokens arrived; we only need a trailing blank line. When not
+        # streaming we still echo it.
+        if (-not $Script:UseStreaming) {
+            Write-Output ''
+            Write-Output $answer
+        }
         Write-Output ''
         [void]$messages.Add(@{ role = 'assistant'; content = $answer })
     }
