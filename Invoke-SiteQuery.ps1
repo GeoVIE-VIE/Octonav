@@ -944,16 +944,33 @@ while ($true) {
     # Enter does not nuke the conversation). The only ways out are:
     #   * Type 'exit' / 'quit' / 'q' / ':q'
     #   * Press Ctrl-C
-    #   * Send EOF (Read-Host returns $null on EOF -> we exit)
+    #   * Send EOF (stdin closed -> we exit with a diagnostic message)
     $followup = $null
     while ($true) {
         Write-Host ''
-        Write-Host ('-' * 78)
-        Write-Host "Sites in context: $($currentSites -join ', ')   (type 'exit' to quit)"
-        Write-Host ('-' * 78)
-        $line = Read-Host -Prompt 'Follow-up'
+        Write-Host ('=' * 78)
+        Write-Host "  Sites in context: $($currentSites -join ', ')"
+        Write-Host "  Type your next question, or 'exit' to quit."
+        Write-Host ('=' * 78)
+        # Use [Console]::ReadLine when available -- Read-Host has caused
+        # premature returns in some wrapped/non-default hosts. Fall back
+        # to Read-Host if Console is not usable (e.g. ISE).
+        [Console]::Out.Write('> ')
+        try {
+            [Console]::Out.Flush()
+        } catch { }
+        try {
+            $line = [Console]::In.ReadLine()
+        } catch {
+            Write-Host "[input read failed: $_]"
+            $line = $null
+        }
         if ($null -eq $line) {
-            # EOF (stdin closed / Ctrl-D)
+            # EOF -- stdin closed, terminal detached, or non-interactive host.
+            Write-Host ''
+            Write-Host '[end-of-input received -- exiting REPL]'
+            Write-Host '(if you did not type exit, your shell may not be running pwsh interactively;'
+            Write-Host ' try invoking the script directly from a real terminal session.)'
             $followup = $null
             break
         }
