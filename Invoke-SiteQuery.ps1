@@ -21,8 +21,10 @@
     The question to ask. If not given, you will be prompted.
 
 .PARAMETER Site
-    Explicit site code. If omitted, the script tries to find a token in
-    your question that matches one of the subdirectory names.
+    Explicit site code(s). Accepts a single value, a comma-separated
+    list, or the parameter repeated. If omitted, the script tokenises
+    your question and uses every token that matches a subdirectory
+    name -- so 'compare AAAA and BBBB' will pull both bundles.
 
 .PARAMETER BaseDir
     Directory containing the per-site subdirectories. Defaults to the
@@ -69,6 +71,12 @@
     PS> .\Invoke-SiteQuery.ps1 -Site AAAA "where is the fiber demarc?"
 
 .EXAMPLE
+    PS> .\Invoke-SiteQuery.ps1 "compare AAAA and BBBB IDF counts"
+
+.EXAMPLE
+    PS> .\Invoke-SiteQuery.ps1 -Site AAAA,BBBB,CCCC "which sites have a UPS in the MDF?"
+
+.EXAMPLE
     PS> .\Invoke-SiteQuery.ps1 -List
 #>
 
@@ -77,7 +85,7 @@ param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Question,
 
-    [string]$Site,
+    [string[]]$Site,
 
     [string]$BaseDir,
 
@@ -613,37 +621,47 @@ if (-not $qtext) {
     exit 1
 }
 
-# Resolve site code: explicit -Site wins, else parse from question.
-$resolvedSite = $null
-if ($Site) {
-    $match = $codes | Where-Object { $_ -ieq $Site } | Select-Object -First 1
-    if (-not $match) {
-        Write-Error "Site '$Site' not found. Available: $($codes -join ', ')"
-        exit 1
+# Resolve site codes: explicit -Site wins, else parse from question.
+# Multiple sites are allowed and bundled together.
+$resolvedSites = New-Object System.Collections.Generic.List[string]
+if ($Site -and $Site.Count -gt 0) {
+    foreach ($s in $Site) {
+        if (-not $s -or -not $s.Trim()) { continue }
+        # Allow comma-separated values inside a single -Site argument too.
+        foreach ($piece in ($s -split ',')) {
+            $piece = $piece.Trim()
+            if (-not $piece) { continue }
+            $match = $codes | Where-Object { $_ -ieq $piece } | Select-Object -First 1
+            if (-not $match) {
+                Write-Error "Site '$piece' not found. Available: $($codes -join ', ')"
+                exit 1
+            }
+            if (-not $resolvedSites.Contains($match)) {
+                [void]$resolvedSites.Add($match)
+            }
+        }
     }
-    $resolvedSite = $match
 } else {
     $hits = @(Resolve-SiteFromQuestion -Question $qtext -AvailableCodes $codes)
     if ($hits.Count -eq 0) {
         Write-Error ("Could not find a site code in your question. " +
-                     "Use -Site <CODE>. Available: $($codes -join ', ')")
+                     "Use -Site <CODE>[,<CODE>...]. Available: $($codes -join ', ')")
         exit 1
     }
-    if ($hits.Count -gt 1) {
-        Write-Error "Multiple site codes matched: $($hits -join ', '). Use -Site to disambiguate."
-        exit 1
-    }
-    $resolvedSite = $hits[0]
+    foreach ($h in $hits) { [void]$resolvedSites.Add($h) }
 }
+$resolvedSites = @($resolvedSites)
 
 function Build-SiteContext {
     <#
-    Bundle a site directory and return the first user-message content
-    plus diagnostics. The first user message in a conversation contains
-    the directory tree, all extracted text, and any attached PDFs.
+    Bundle one OR MORE site directories and return the first
+    user-message content plus diagnostics. Each site gets its own
+    banner section in the text bundle; PDFs from every site are
+    attached as multimodal parts whose labels are prefixed with the
+    site code so the model can correlate them.
     #>
     param(
-        [string]$SiteCode,
+        [string[]]$SiteCodes,
         [string]$BaseDir,
         [string]$Question,
         [int]$MaxBundleBytes,
@@ -653,33 +671,56 @@ function Build-SiteContext {
         [bool]$NoPdfs
     )
 
-    $siteDir = Join-Path $BaseDir $SiteCode
-    $bundle = New-FileBundle `
-        -SiteDir         $siteDir `
-        -MaxBundleBytes  $MaxBundleBytes `
-        -MaxFileBytes    $MaxFileBytes `
-        -MaxPdfBytes     $MaxPdfBytes `
-        -MaxAllPdfsBytes $MaxAllPdfsBytes `
-        -NoPdfs          $NoPdfs
+    $allText = [System.Text.StringBuilder]::new()
+    [void]$allText.AppendLine("Sites: $($SiteCodes -join ', ')")
+    [void]$allText.AppendLine("Question: $Question")
+    [void]$allText.AppendLine()
 
-    $bundleText  = $bundle.BundleText
-    $pdfAttached = @($bundle.PdfsToAttach)
+    # Track every PDF we plan to attach across all sites, with the
+    # owning site code so we can label it later.
+    $allPdfs = New-Object System.Collections.Generic.List[object]
+    $pdfBytesUsed = 0
 
-    $payload = @"
-Site: $SiteCode
-Question: $Question
+    foreach ($siteCode in $SiteCodes) {
+        $siteDir = Join-Path $BaseDir $siteCode
+        # Give each site whatever PDF budget is left.
+        $remainingPdfBudget = [Math]::Max(0, $MaxAllPdfsBytes - $pdfBytesUsed)
 
-$bundleText
-"@
+        $bundle = New-FileBundle `
+            -SiteDir         $siteDir `
+            -MaxBundleBytes  $MaxBundleBytes `
+            -MaxFileBytes    $MaxFileBytes `
+            -MaxPdfBytes     $MaxPdfBytes `
+            -MaxAllPdfsBytes $remainingPdfBudget `
+            -NoPdfs          $NoPdfs
 
-    if ($pdfAttached.Count -gt 0) {
+        $banner = "== $siteCode "
+        [void]$allText.AppendLine('=' * 80)
+        [void]$allText.AppendLine($banner + ('=' * [Math]::Max(0, 80 - $banner.Length)))
+        [void]$allText.AppendLine('=' * 80)
+        [void]$allText.AppendLine()
+        [void]$allText.Append($bundle.BundleText)
+        [void]$allText.AppendLine()
+
+        $rel = (Resolve-Path -LiteralPath $siteDir).ProviderPath
+        foreach ($pdf in @($bundle.PdfsToAttach)) {
+            $r = $pdf.FullName.Substring($rel.Length).TrimStart('\','/')
+            [void]$allPdfs.Add(@{
+                File  = $pdf
+                Label = "Attached PDF: $siteCode/$r"
+            })
+            $pdfBytesUsed += $pdf.Length
+        }
+    }
+
+    $payload = $allText.ToString()
+
+    if ($allPdfs.Count -gt 0) {
         $parts = New-Object System.Collections.Generic.List[object]
         [void]$parts.Add(@{ type = 'text'; text = $payload })
-        $rel = (Resolve-Path -LiteralPath $siteDir).ProviderPath
-        foreach ($p in $pdfAttached) {
-            $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
-            [void]$parts.Add(@{ type = 'text'; text = "Attached PDF: $r" })
-            [void]$parts.Add((New-PdfContentPart -File $p))
+        foreach ($p in $allPdfs) {
+            [void]$parts.Add(@{ type = 'text'; text = $p.Label })
+            [void]$parts.Add((New-PdfContentPart -File $p.File))
         }
         $userContent = $parts.ToArray()
     } else {
@@ -689,13 +730,13 @@ $bundleText
     return @{
         UserContent = $userContent
         PayloadText = $payload
-        PdfCount    = $pdfAttached.Count
+        PdfCount    = $allPdfs.Count
     }
 }
 
 # Build the initial site context (used both for -NoLLM and the REPL).
 $ctx = Build-SiteContext `
-    -SiteCode        $resolvedSite `
+    -SiteCodes       $resolvedSites `
     -BaseDir         $BaseDir `
     -Question        $qtext `
     -MaxBundleBytes  $MaxBundleBytes `
@@ -733,18 +774,30 @@ $messages = New-Object System.Collections.Generic.List[object]
 [void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
 [void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
 
-$currentSite = $resolvedSite
-$turnLabel   = "with bundle + $($ctx.PdfCount) PDF(s)"
+$currentSites = @($resolvedSites)
+$turnLabel    = "with bundle + $($ctx.PdfCount) PDF(s)"
+
+# Helper: do two site-code lists describe the SAME set, ignoring case
+# and order? Used in the REPL to decide same-site follow-up vs reset.
+function Test-SameSiteSet {
+    param([string[]]$A, [string[]]$B)
+    if ($A.Count -ne $B.Count) { return $false }
+    $aNorm = $A | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object
+    $bNorm = $B | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object
+    for ($i = 0; $i -lt $aNorm.Count; $i++) {
+        if ($aNorm[$i] -ne $bNorm[$i]) { return $false }
+    }
+    return $true
+}
 
 while ($true) {
-    Write-Host ("Sending [$currentSite, $turnLabel] to $LLMEndpoint ($LLMModel) ...")
+    $sitesLabel = $currentSites -join ','
+    Write-Host ("Sending [$sitesLabel, $turnLabel] to $LLMEndpoint ($LLMModel) ...")
     try {
         $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
     } catch {
         Write-Warning "LLM call failed: $_"
         if ($messages.Count -le 2) {
-            # No assistant turn yet -- print the bundle so the operator
-            # can take it elsewhere.
             Write-Host ''
             Write-Host ('#' * 78)
             Write-Host '# Bundle below so you can send it from a host that can reach the API:'
@@ -752,8 +805,6 @@ while ($true) {
             Write-Output $ctx.PayloadText
             exit 4
         }
-        # Mid-conversation failure: drop the last user turn so the next
-        # follow-up can replace it cleanly.
         $messages.RemoveAt($messages.Count - 1)
         Write-Host '(retry your question or press Enter to exit)'
     }
@@ -765,20 +816,21 @@ while ($true) {
         [void]$messages.Add(@{ role = 'assistant'; content = $answer })
     }
 
-    $followup = Read-Host -Prompt 'Follow-up (blank to exit; mention another site code to switch context)'
+    $followup = Read-Host -Prompt 'Follow-up (blank to exit; mention site code(s) to switch context)'
     if (-not $followup -or -not $followup.Trim()) { break }
 
-    # Detect a site change: any matched code that is NOT the current site.
+    # Detect site switch: if the follow-up names a different SET of
+    # sites than we are currently focused on, reset and re-bundle.
     $hits = @(Resolve-SiteFromQuestion -Question $followup -AvailableCodes $codes)
-    $newSite = $null
-    foreach ($h in $hits) {
-        if ($h -ine $currentSite) { $newSite = $h; break }
+    $shouldSwitch = $false
+    if ($hits.Count -gt 0 -and -not (Test-SameSiteSet -A $hits -B $currentSites)) {
+        $shouldSwitch = $true
     }
 
-    if ($newSite) {
-        Write-Host "Switching context to site '$newSite' (re-bundling, conversation reset)."
+    if ($shouldSwitch) {
+        Write-Host "Switching context to site(s) '$($hits -join ', ')' (re-bundling, conversation reset)."
         $ctx = Build-SiteContext `
-            -SiteCode        $newSite `
+            -SiteCodes       $hits `
             -BaseDir         $BaseDir `
             -Question        $followup `
             -MaxBundleBytes  $MaxBundleBytes `
@@ -789,10 +841,11 @@ while ($true) {
         $messages.Clear()
         [void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
         [void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
-        $currentSite = $newSite
-        $turnLabel   = "with bundle + $($ctx.PdfCount) PDF(s)"
+        $currentSites = @($hits)
+        $turnLabel    = "with bundle + $($ctx.PdfCount) PDF(s)"
     } else {
-        # Same-site follow-up: append a plain text turn.
+        # Same site set (or no codes mentioned) -- treat as same-context
+        # follow-up. Append a plain text user turn.
         [void]$messages.Add(@{ role = 'user'; content = $followup })
         $turnLabel = "follow-up #$([math]::Floor(($messages.Count - 2) / 2))"
     }
