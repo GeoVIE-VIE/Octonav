@@ -940,8 +940,36 @@ while ($true) {
         [void]$messages.Add(@{ role = 'assistant'; content = $answer })
     }
 
-    $followup = Read-Host -Prompt 'Follow-up (blank to exit; mention site code(s) to switch context)'
-    if (-not $followup -or -not $followup.Trim()) { break }
+    # Read the next input. Blank input simply re-prompts (so a stray
+    # Enter does not nuke the conversation). The only ways out are:
+    #   * Type 'exit' / 'quit' / 'q' / ':q'
+    #   * Press Ctrl-C
+    #   * Send EOF (Read-Host returns $null on EOF -> we exit)
+    $followup = $null
+    while ($true) {
+        Write-Host ''
+        Write-Host ('-' * 78)
+        Write-Host "Sites in context: $($currentSites -join ', ')   (type 'exit' to quit)"
+        Write-Host ('-' * 78)
+        $line = Read-Host -Prompt 'Follow-up'
+        if ($null -eq $line) {
+            # EOF (stdin closed / Ctrl-D)
+            $followup = $null
+            break
+        }
+        $trimmed = $line.Trim()
+        if (-not $trimmed) {
+            Write-Host '(blank input -- type a question, or type exit to quit)'
+            continue
+        }
+        if ($trimmed -in @('exit', 'quit', 'q', ':q', ':quit', ':exit')) {
+            $followup = $null
+            break
+        }
+        $followup = $trimmed
+        break
+    }
+    if (-not $followup) { break }
 
     $hits = @(Resolve-SiteFromQuestion -Question $followup -AvailableCodes $codes)
     $shouldSwitch = ($hits.Count -gt 0 -and -not (Test-SameSiteSet -A $hits -B $currentSites))
