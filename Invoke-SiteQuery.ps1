@@ -534,6 +534,37 @@ function Invoke-LLM {
     return $resp.choices[0].message.content
 }
 
+function Invoke-LLMWithMessages {
+    <#
+    Send a full message array (system + zero or more user/assistant
+    turns) and return the assistant's reply. Used by the REPL loop so
+    follow-up questions retain conversation history without re-sending
+    the file bundle on every turn.
+    #>
+    param(
+        [string]$ApiKey,
+        [object[]]$Messages
+    )
+    $body = @{
+        model    = $LLMModel
+        messages = $Messages
+    } | ConvertTo-Json -Depth 20 -Compress
+
+    $headers = @{
+        Authorization = "Bearer $ApiKey"
+        Accept        = 'application/json'
+    }
+
+    $resp = Invoke-RestMethod -Method Post `
+        -Uri $LLMEndpoint `
+        -Headers $headers `
+        -ContentType 'application/json' `
+        -Body $body `
+        -TimeoutSec 240
+
+    return $resp.choices[0].message.content
+}
+
 function New-PdfContentPart {
     <#
     Read a PDF file and return an OpenAI-style multimodal content part
@@ -605,37 +636,84 @@ if ($Site) {
     $resolvedSite = $hits[0]
 }
 
-$siteDir = Join-Path $BaseDir $resolvedSite
-Write-Verbose "Bundling site '$resolvedSite' from $siteDir"
+function Build-SiteContext {
+    <#
+    Bundle a site directory and return the first user-message content
+    plus diagnostics. The first user message in a conversation contains
+    the directory tree, all extracted text, and any attached PDFs.
+    #>
+    param(
+        [string]$SiteCode,
+        [string]$BaseDir,
+        [string]$Question,
+        [int]$MaxBundleBytes,
+        [int]$MaxFileBytes,
+        [int]$MaxPdfBytes,
+        [int]$MaxAllPdfsBytes,
+        [bool]$NoPdfs
+    )
 
-$bundle = New-FileBundle `
-    -SiteDir         $siteDir `
+    $siteDir = Join-Path $BaseDir $SiteCode
+    $bundle = New-FileBundle `
+        -SiteDir         $siteDir `
+        -MaxBundleBytes  $MaxBundleBytes `
+        -MaxFileBytes    $MaxFileBytes `
+        -MaxPdfBytes     $MaxPdfBytes `
+        -MaxAllPdfsBytes $MaxAllPdfsBytes `
+        -NoPdfs          $NoPdfs
+
+    $bundleText  = $bundle.BundleText
+    $pdfAttached = @($bundle.PdfsToAttach)
+
+    $payload = @"
+Site: $SiteCode
+Question: $Question
+
+$bundleText
+"@
+
+    if ($pdfAttached.Count -gt 0) {
+        $parts = New-Object System.Collections.Generic.List[object]
+        [void]$parts.Add(@{ type = 'text'; text = $payload })
+        $rel = (Resolve-Path -LiteralPath $siteDir).ProviderPath
+        foreach ($p in $pdfAttached) {
+            $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
+            [void]$parts.Add(@{ type = 'text'; text = "Attached PDF: $r" })
+            [void]$parts.Add((New-PdfContentPart -File $p))
+        }
+        $userContent = $parts.ToArray()
+    } else {
+        $userContent = $payload
+    }
+
+    return @{
+        UserContent = $userContent
+        PayloadText = $payload
+        PdfCount    = $pdfAttached.Count
+    }
+}
+
+# Build the initial site context (used both for -NoLLM and the REPL).
+$ctx = Build-SiteContext `
+    -SiteCode        $resolvedSite `
+    -BaseDir         $BaseDir `
+    -Question        $qtext `
     -MaxBundleBytes  $MaxBundleBytes `
     -MaxFileBytes    $MaxFileBytes `
     -MaxPdfBytes     $MaxPdfBytes `
     -MaxAllPdfsBytes $MaxAllPdfsBytes `
     -NoPdfs          $NoPdfs.IsPresent
 
-$bundleText  = $bundle.BundleText
-$pdfAttached = @($bundle.PdfsToAttach)
-
-$payload = @"
-Site: $resolvedSite
-Question: $qtext
-
-$bundleText
-"@
-
 if ($NoLLM) {
     Write-Host ''
     Write-Host ('#' * 78)
     Write-Host '# LLM call skipped. Bundle below -- copy from terminal or save to a file.'
-    if ($pdfAttached.Count -gt 0) {
-        Write-Host "# (Plus $($pdfAttached.Count) PDF attachment(s) -- not printed.)"
+    if ($ctx.PdfCount -gt 0) {
+        Write-Host "# (Plus $($ctx.PdfCount) PDF attachment(s) -- not printed.)"
     }
     Write-Host ('#' * 78)
     Write-Host ''
-    Write-Output $payload
+    Write-Output $ctx.PayloadText
     return
 }
 
@@ -645,38 +723,77 @@ if (-not $apiKey) {
     exit 1
 }
 
-# Build the user message content. If we have PDFs, send a multimodal
-# content array (text part labelling each PDF, then the PDF part). If
-# no PDFs are attached, send a plain string -- the most compatible
-# shape for any OpenAI-style gateway.
-if ($pdfAttached.Count -gt 0) {
-    $parts = New-Object System.Collections.Generic.List[object]
-    [void]$parts.Add(@{ type = 'text'; text = $payload })
-    $rel = (Resolve-Path -LiteralPath $siteDir).ProviderPath
-    foreach ($p in $pdfAttached) {
-        $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
-        [void]$parts.Add(@{ type = 'text'; text = "Attached PDF: $r" })
-        [void]$parts.Add((New-PdfContentPart -File $p))
+# --- Conversation loop ----------------------------------------------------
+# The first user message carries the bundle (and PDFs); follow-up turns
+# are plain text appended to the conversation. If a follow-up names a
+# different site code, the conversation is reset with that site's
+# bundle as a fresh first user message.
+
+$messages = New-Object System.Collections.Generic.List[object]
+[void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
+[void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
+
+$currentSite = $resolvedSite
+$turnLabel   = "with bundle + $($ctx.PdfCount) PDF(s)"
+
+while ($true) {
+    Write-Host ("Sending [$currentSite, $turnLabel] to $LLMEndpoint ($LLMModel) ...")
+    try {
+        $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
+    } catch {
+        Write-Warning "LLM call failed: $_"
+        if ($messages.Count -le 2) {
+            # No assistant turn yet -- print the bundle so the operator
+            # can take it elsewhere.
+            Write-Host ''
+            Write-Host ('#' * 78)
+            Write-Host '# Bundle below so you can send it from a host that can reach the API:'
+            Write-Host ('#' * 78)
+            Write-Output $ctx.PayloadText
+            exit 4
+        }
+        # Mid-conversation failure: drop the last user turn so the next
+        # follow-up can replace it cleanly.
+        $messages.RemoveAt($messages.Count - 1)
+        Write-Host '(retry your question or press Enter to exit)'
     }
-    $userContent = $parts.ToArray()
-    Write-Host ("Sending {0:N0} chars + {1} PDF(s) to {2} ({3}) ..." -f
-        $payload.Length, $pdfAttached.Count, $LLMEndpoint, $LLMModel)
-} else {
-    $userContent = $payload
-    Write-Host ("Sending {0:N0} chars to {1} ({2}) ..." -f
-        $payload.Length, $LLMEndpoint, $LLMModel)
-}
 
-try {
-    $answer = Invoke-LLM -ApiKey $apiKey -UserContent $userContent
-} catch {
-    Write-Warning "LLM call failed: $_"
-    Write-Host ''
-    Write-Host ('#' * 78)
-    Write-Host '# Bundle below so you can send it from a host that can reach the API:'
-    Write-Host ('#' * 78)
-    Write-Output $payload
-    exit 4
-}
+    if ($answer) {
+        Write-Output ''
+        Write-Output $answer
+        Write-Output ''
+        [void]$messages.Add(@{ role = 'assistant'; content = $answer })
+    }
 
-Write-Output $answer
+    $followup = Read-Host -Prompt 'Follow-up (blank to exit; mention another site code to switch context)'
+    if (-not $followup -or -not $followup.Trim()) { break }
+
+    # Detect a site change: any matched code that is NOT the current site.
+    $hits = @(Resolve-SiteFromQuestion -Question $followup -AvailableCodes $codes)
+    $newSite = $null
+    foreach ($h in $hits) {
+        if ($h -ine $currentSite) { $newSite = $h; break }
+    }
+
+    if ($newSite) {
+        Write-Host "Switching context to site '$newSite' (re-bundling, conversation reset)."
+        $ctx = Build-SiteContext `
+            -SiteCode        $newSite `
+            -BaseDir         $BaseDir `
+            -Question        $followup `
+            -MaxBundleBytes  $MaxBundleBytes `
+            -MaxFileBytes    $MaxFileBytes `
+            -MaxPdfBytes     $MaxPdfBytes `
+            -MaxAllPdfsBytes $MaxAllPdfsBytes `
+            -NoPdfs          $NoPdfs.IsPresent
+        $messages.Clear()
+        [void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
+        [void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
+        $currentSite = $newSite
+        $turnLabel   = "with bundle + $($ctx.PdfCount) PDF(s)"
+    } else {
+        # Same-site follow-up: append a plain text turn.
+        [void]$messages.Add(@{ role = 'user'; content = $followup })
+        $turnLabel = "follow-up #$([math]::Floor(($messages.Count - 2) / 2))"
+    }
+}
