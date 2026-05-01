@@ -944,7 +944,7 @@ while ($true) {
     # Enter does not nuke the conversation). The only ways out are:
     #   * Type 'exit' / 'quit' / 'q' / ':q'
     #   * Press Ctrl-C
-    #   * Send EOF (stdin closed -> we exit with a diagnostic message)
+    #   * Stdin closes (we exit with a diagnostic message)
     $followup = $null
     while ($true) {
         Write-Host ''
@@ -952,21 +952,28 @@ while ($true) {
         Write-Host "  Sites in context: $($currentSites -join ', ')"
         Write-Host "  Type your next question, or 'exit' to quit."
         Write-Host ('=' * 78)
-        # Use [Console]::ReadLine when available -- Read-Host has caused
-        # premature returns in some wrapped/non-default hosts. Fall back
-        # to Read-Host if Console is not usable (e.g. ISE).
-        [Console]::Out.Write('> ')
+        Write-Host '> ' -NoNewline
+
+        # Try reading via the host UI first (the PowerShell-native path
+        # that integrates with ConsoleHost / pwsh / ISE). If that throws
+        # or returns nothing, fall back to [Console]::In which works
+        # against the underlying stdin handle even when the host UI
+        # cannot prompt (e.g., piped input, non-interactive launches).
+        $line = $null
         try {
-            [Console]::Out.Flush()
-        } catch { }
-        try {
-            $line = [Console]::In.ReadLine()
+            $line = $Host.UI.ReadLine()
         } catch {
-            Write-Host "[input read failed: $_]"
             $line = $null
         }
         if ($null -eq $line) {
-            # EOF -- stdin closed, terminal detached, or non-interactive host.
+            try {
+                $line = [Console]::In.ReadLine()
+            } catch {
+                $line = $null
+            }
+        }
+
+        if ($null -eq $line) {
             Write-Host ''
             Write-Host '[end-of-input received -- exiting REPL]'
             Write-Host '(if you did not type exit, your shell may not be running pwsh interactively;'
