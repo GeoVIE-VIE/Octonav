@@ -356,16 +356,16 @@ function New-FileBundle {
         BundleText    -- all text-form content (TXT/CSV/MD/JSON/etc. plus
                          extracted XLSX text) and a tail listing of
                          non-text non-pdf binaries.
-        PdfsToAttach  -- FileInfo[] for PDFs the caller should ship as
-                         multimodal parts. Empty when -NoPdfs is set or
-                         no PDFs fit the size caps.
+        PdfsToAttach  -- FileInfo[] for every PDF the caller should ship
+                         as a multimodal part. Per-PDF cap is applied
+                         here; the total / per-request cap is applied
+                         later by the batch packer in Send-WithBatching.
     #>
     param(
         [string]$SiteDir,
         [int]$MaxBundleBytes,
         [int]$MaxFileBytes,
         [int]$MaxPdfBytes,
-        [int]$MaxAllPdfsBytes,
         [bool]$NoPdfs
     )
 
@@ -462,24 +462,23 @@ function New-FileBundle {
         $bytesUsed += $extractedBytes
     }
 
-    # 5) Decide which PDFs to attach (or list, if -NoPdfs).
+    # 5) Collect every eligible PDF. The total size cap is no longer
+    #    applied here -- chunking happens in Send-WithBatching, which
+    #    splits the PDFs into batches each under MaxAllPdfsBytes and
+    #    runs a map-reduce across batches when needed. Per-PDF cap
+    #    (MaxPdfBytes) still applies because a single PDF that exceeds
+    #    a single-request budget cannot be sent at all.
     $attached = New-Object System.Collections.Generic.List[System.IO.FileInfo]
     if (-not $NoPdfs -and $pdfFiles.Count -gt 0) {
-        $pdfBytesUsed = 0
-        [void]$sb.AppendLine('--- Attached PDFs (sent to the model as multimodal documents) ---')
+        [void]$sb.AppendLine('--- PDFs to attach (will be split into batches if total exceeds per-request cap) ---')
         foreach ($p in $pdfFiles) {
             $r = $p.FullName.Substring($rel.Length).TrimStart('\','/')
             if ($p.Length -gt $MaxPdfBytes) {
-                [void]$sb.AppendLine("  [skipped, too large]  $r  ($(Format-Size $p.Length) > MaxPdfBytes)")
+                [void]$sb.AppendLine("  [skipped, single PDF too large]  $r  ($(Format-Size $p.Length) > MaxPdfBytes)")
                 continue
             }
-            if (($pdfBytesUsed + $p.Length) -gt $MaxAllPdfsBytes) {
-                [void]$sb.AppendLine("  [skipped, total cap]   $r  ($(Format-Size $p.Length))")
-                continue
-            }
-            [void]$sb.AppendLine("  [attached]            $r  ($(Format-Size $p.Length))")
+            [void]$sb.AppendLine("  [attached]                       $r  ($(Format-Size $p.Length))")
             $attached.Add($p) | Out-Null
-            $pdfBytesUsed += $p.Length
         }
         [void]$sb.AppendLine()
     } elseif ($pdfFiles.Count -gt 0) {
@@ -654,11 +653,14 @@ $resolvedSites = @($resolvedSites)
 
 function Build-SiteContext {
     <#
-    Bundle one OR MORE site directories and return the first
-    user-message content plus diagnostics. Each site gets its own
-    banner section in the text bundle; PDFs from every site are
-    attached as multimodal parts whose labels are prefixed with the
-    site code so the model can correlate them.
+    Bundle one OR MORE site directories. Returns:
+      BundleText  -- text-only payload with per-site banners and the
+                     question prefix. Goes into every request, with or
+                     without PDFs.
+      PdfList     -- @{File; Label} for every PDF to ship.
+      PdfCount    -- convenience.
+    Chunking into batches happens later in Send-WithBatching using
+    MaxAllPdfsBytes as the per-request cap.
     #>
     param(
         [string[]]$SiteCodes,
@@ -667,7 +669,6 @@ function Build-SiteContext {
         [int]$MaxBundleBytes,
         [int]$MaxFileBytes,
         [int]$MaxPdfBytes,
-        [int]$MaxAllPdfsBytes,
         [bool]$NoPdfs
     )
 
@@ -676,22 +677,16 @@ function Build-SiteContext {
     [void]$allText.AppendLine("Question: $Question")
     [void]$allText.AppendLine()
 
-    # Track every PDF we plan to attach across all sites, with the
-    # owning site code so we can label it later.
-    $allPdfs = New-Object System.Collections.Generic.List[object]
-    $pdfBytesUsed = 0
+    $allPdfs = New-Object System.Collections.ArrayList
 
     foreach ($siteCode in $SiteCodes) {
         $siteDir = Join-Path $BaseDir $siteCode
-        # Give each site whatever PDF budget is left.
-        $remainingPdfBudget = [Math]::Max(0, $MaxAllPdfsBytes - $pdfBytesUsed)
 
         $bundle = New-FileBundle `
             -SiteDir         $siteDir `
             -MaxBundleBytes  $MaxBundleBytes `
             -MaxFileBytes    $MaxFileBytes `
             -MaxPdfBytes     $MaxPdfBytes `
-            -MaxAllPdfsBytes $remainingPdfBudget `
             -NoPdfs          $NoPdfs
 
         $banner = "== $siteCode "
@@ -709,29 +704,142 @@ function Build-SiteContext {
                 File  = $pdf
                 Label = "Attached PDF: $siteCode/$r"
             })
-            $pdfBytesUsed += $pdf.Length
         }
-    }
-
-    $payload = $allText.ToString()
-
-    if ($allPdfs.Count -gt 0) {
-        $parts = New-Object System.Collections.Generic.List[object]
-        [void]$parts.Add(@{ type = 'text'; text = $payload })
-        foreach ($p in $allPdfs) {
-            [void]$parts.Add(@{ type = 'text'; text = $p.Label })
-            [void]$parts.Add((New-PdfContentPart -File $p.File))
-        }
-        $userContent = $parts.ToArray()
-    } else {
-        $userContent = $payload
     }
 
     return @{
-        UserContent = $userContent
-        PayloadText = $payload
-        PdfCount    = $allPdfs.Count
+        BundleText = $allText.ToString()
+        PdfList    = @($allPdfs)
+        PdfCount   = $allPdfs.Count
     }
+}
+
+function Get-PdfBatches {
+    <#
+    Greedily pack PDFs into batches each <= $BatchByteCap. Returns an
+    array of arrays of @{File; Label} items.
+    #>
+    param(
+        $PdfList,
+        [int]$BatchByteCap
+    )
+    $batches = New-Object System.Collections.ArrayList
+    if (-not $PdfList -or @($PdfList).Count -eq 0) { return @() }
+
+    $current = New-Object System.Collections.ArrayList
+    $used = 0
+    foreach ($p in $PdfList) {
+        $sz = $p.File.Length
+        if ($current.Count -gt 0 -and ($used + $sz) -gt $BatchByteCap) {
+            [void]$batches.Add(@($current))
+            $current = New-Object System.Collections.ArrayList
+            $used = 0
+        }
+        [void]$current.Add($p)
+        $used += $sz
+    }
+    if ($current.Count -gt 0) { [void]$batches.Add(@($current)) }
+    return @($batches)
+}
+
+function Build-MultimodalContent {
+    <#
+    Build an OpenAI chat-completions user message from a text payload
+    plus zero or more PDFs. If no PDFs, returns the text directly so
+    the simplest possible content shape is sent.
+    #>
+    param(
+        [string]$Text,
+        $Pdfs
+    )
+    if (-not $Pdfs -or @($Pdfs).Count -eq 0) { return $Text }
+    $parts = New-Object System.Collections.ArrayList
+    [void]$parts.Add(@{ type = 'text'; text = $Text })
+    foreach ($p in $Pdfs) {
+        [void]$parts.Add(@{ type = 'text'; text = $p.Label })
+        [void]$parts.Add((New-PdfContentPart -File $p.File))
+    }
+    return ,@($parts)
+}
+
+function Send-WithBatching {
+    <#
+    Send the initial query for a site context and return the assistant's
+    answer.
+
+    If the site's PDFs all fit in a single request (MaxAllPdfsBytes),
+    one chat-completions call is made. Otherwise the PDFs are split
+    into batches and a map-reduce is performed:
+
+      * For each batch: an isolated call (system + bundle text + that
+        batch's PDFs) extracts a precise list of relevant facts.
+      * A final call sends the bundle text + all per-batch fact extracts
+        and asks for the actual answer.
+
+    The map-reduce design avoids the trap of letting a multi-turn
+    conversation grow past the gateway's per-request cap as more
+    batches accumulate. The trade-off is that the final answer is
+    produced from the per-batch summaries rather than the original
+    PDF bytes -- for visual-only details (floor plans, etc.) the
+    summary may be lossy. Lower the per-PDF size or raise
+    MaxAllPdfsBytes to avoid chunking when possible.
+
+    The REPL's $Messages list is updated so that subsequent same-site
+    follow-ups can carry on naturally:
+      * Single-batch: appends user(bundle+pdfs) and assistant(answer).
+      * Map-reduce: appends user(bundle+summaries+question) and
+        assistant(answer). Original PDFs are NOT in the REPL history.
+    #>
+    param(
+        [string]$ApiKey,
+        $Messages,         # System.Collections.Generic.List[object] (loose type to avoid PS5.1 binding glitches)
+        [string]$BundleText,
+        $PdfList,          # array of @{File; Label}, may be empty
+        [int]$BatchByteCap,
+        [string]$Question
+    )
+
+    $batches = @(Get-PdfBatches -PdfList $PdfList -BatchByteCap $BatchByteCap)
+
+    if ($batches.Count -le 1) {
+        $pdfs = if ($batches.Count -eq 1) { @($batches[0]) } else { @() }
+        $userContent = Build-MultimodalContent -Text $BundleText -Pdfs $pdfs
+        [void]$Messages.Add(@{ role = 'user'; content = $userContent })
+        return Invoke-LLMWithMessages -ApiKey $ApiKey -Messages $Messages.ToArray()
+    }
+
+    Write-Host ("  PDFs exceed per-request cap; processing in $($batches.Count) batches (map-reduce).")
+    $summaries = New-Object System.Collections.ArrayList
+
+    for ($i = 0; $i -lt $batches.Count; $i++) {
+        $batch = @($batches[$i])
+        $bytes = ($batch | ForEach-Object { $_.File.Length } | Measure-Object -Sum).Sum
+        Write-Host ("  Batch $($i+1) of $($batches.Count): $($batch.Count) PDF(s), $(Format-Size $bytes) -- extracting facts...")
+        $extractText = $BundleText + "`n`n" +
+            "[BATCH $($i+1) of $($batches.Count) -- the question is held until the final round]`n" +
+            "Original question: $Question`n`n" +
+            "The PDFs attached to THIS message are batch $($i+1) of $($batches.Count). " +
+            "Read them and output a precise, self-contained list of facts " +
+            "from these PDFs that may be relevant to the question. Include " +
+            "specific names, numbers, room/jack IDs, and explicitly cite the " +
+            "PDF each fact came from. Do NOT attempt a final answer yet."
+        $userContent = Build-MultimodalContent -Text $extractText -Pdfs $batch
+        $msgs = @(
+            @{ role = 'system'; content = $SystemPrompt }
+            @{ role = 'user';   content = $userContent }
+        )
+        $summary = Invoke-LLMWithMessages -ApiKey $ApiKey -Messages $msgs
+        [void]$summaries.Add("=== Batch $($i+1) of $($batches.Count) ===`n$summary")
+    }
+
+    Write-Host '  Combining batch fact extracts for the final answer...'
+    $finalText = $BundleText + "`n`n" +
+        "[Per-batch PDF fact extracts -- used in lieu of resending the PDFs:]`n`n" +
+        ($summaries -join "`n`n") + "`n`n" +
+        "Now answer the original question using the text bundle above and the batch fact extracts: $Question"
+
+    [void]$Messages.Add(@{ role = 'user'; content = $finalText })
+    return Invoke-LLMWithMessages -ApiKey $ApiKey -Messages $Messages.ToArray()
 }
 
 # Build the initial site context (used both for -NoLLM and the REPL).
@@ -742,7 +850,6 @@ $ctx = Build-SiteContext `
     -MaxBundleBytes  $MaxBundleBytes `
     -MaxFileBytes    $MaxFileBytes `
     -MaxPdfBytes     $MaxPdfBytes `
-    -MaxAllPdfsBytes $MaxAllPdfsBytes `
     -NoPdfs          $NoPdfs.IsPresent
 
 if ($NoLLM) {
@@ -754,7 +861,7 @@ if ($NoLLM) {
     }
     Write-Host ('#' * 78)
     Write-Host ''
-    Write-Output $ctx.PayloadText
+    Write-Output $ctx.BundleText
     return
 }
 
@@ -770,16 +877,8 @@ if (-not $apiKey) {
 # different site code, the conversation is reset with that site's
 # bundle as a fresh first user message.
 
-$messages = New-Object System.Collections.Generic.List[object]
-[void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
-[void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
-
-$currentSites = @($resolvedSites)
-$turnLabel    = "with bundle + $($ctx.PdfCount) PDF(s)"
-
-# Helper: do two site-code lists describe the SAME set, ignoring case
-# and order? Used in the REPL to decide same-site follow-up vs reset.
 function Test-SameSiteSet {
+    # Two site-code lists describe the same set, ignoring case/order.
     param([string[]]$A, [string[]]$B)
     if ($A.Count -ne $B.Count) { return $false }
     $aNorm = $A | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object
@@ -790,23 +889,48 @@ function Test-SameSiteSet {
     return $true
 }
 
+$messages = New-Object System.Collections.ArrayList
+[void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
+
+$currentSites    = @($resolvedSites)
+$currentBundle   = $ctx.BundleText
+$currentPdfList  = $ctx.PdfList
+$currentQuestion = $qtext
+$initialTurn     = $true
+
 while ($true) {
     $sitesLabel = $currentSites -join ','
-    Write-Host ("Sending [$sitesLabel, $turnLabel] to $LLMEndpoint ($LLMModel) ...")
-    try {
-        $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
-    } catch {
-        Write-Warning "LLM call failed: $_"
-        if ($messages.Count -le 2) {
+
+    if ($initialTurn) {
+        Write-Host ("Sending [$sitesLabel, bundle + $($ctx.PdfCount) PDF(s)] to $LLMEndpoint ($LLMModel) ...")
+        try {
+            $answer = Send-WithBatching `
+                -ApiKey       $apiKey `
+                -Messages     $messages `
+                -BundleText   $currentBundle `
+                -PdfList      $currentPdfList `
+                -BatchByteCap $MaxAllPdfsBytes `
+                -Question     $currentQuestion
+        } catch {
+            Write-Warning "LLM call failed: $_"
             Write-Host ''
             Write-Host ('#' * 78)
             Write-Host '# Bundle below so you can send it from a host that can reach the API:'
             Write-Host ('#' * 78)
-            Write-Output $ctx.PayloadText
+            Write-Output $currentBundle
             exit 4
         }
-        $messages.RemoveAt($messages.Count - 1)
-        Write-Host '(retry your question or press Enter to exit)'
+        $initialTurn = $false
+    } else {
+        Write-Host ("Sending [$sitesLabel, follow-up #$([math]::Floor(($messages.Count - 2) / 2))] to $LLMEndpoint ($LLMModel) ...")
+        try {
+            $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
+        } catch {
+            Write-Warning "LLM call failed: $_"
+            $messages.RemoveAt($messages.Count - 1)
+            Write-Host '(retry your question or press Enter to exit)'
+            $answer = $null
+        }
     }
 
     if ($answer) {
@@ -819,13 +943,8 @@ while ($true) {
     $followup = Read-Host -Prompt 'Follow-up (blank to exit; mention site code(s) to switch context)'
     if (-not $followup -or -not $followup.Trim()) { break }
 
-    # Detect site switch: if the follow-up names a different SET of
-    # sites than we are currently focused on, reset and re-bundle.
     $hits = @(Resolve-SiteFromQuestion -Question $followup -AvailableCodes $codes)
-    $shouldSwitch = $false
-    if ($hits.Count -gt 0 -and -not (Test-SameSiteSet -A $hits -B $currentSites)) {
-        $shouldSwitch = $true
-    }
+    $shouldSwitch = ($hits.Count -gt 0 -and -not (Test-SameSiteSet -A $hits -B $currentSites))
 
     if ($shouldSwitch) {
         Write-Host "Switching context to site(s) '$($hits -join ', ')' (re-bundling, conversation reset)."
@@ -836,17 +955,17 @@ while ($true) {
             -MaxBundleBytes  $MaxBundleBytes `
             -MaxFileBytes    $MaxFileBytes `
             -MaxPdfBytes     $MaxPdfBytes `
-            -MaxAllPdfsBytes $MaxAllPdfsBytes `
             -NoPdfs          $NoPdfs.IsPresent
         $messages.Clear()
         [void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
-        [void]$messages.Add(@{ role = 'user';   content = $ctx.UserContent })
-        $currentSites = @($hits)
-        $turnLabel    = "with bundle + $($ctx.PdfCount) PDF(s)"
+        $currentSites    = @($hits)
+        $currentBundle   = $ctx.BundleText
+        $currentPdfList  = $ctx.PdfList
+        $currentQuestion = $followup
+        $initialTurn     = $true
     } else {
-        # Same site set (or no codes mentioned) -- treat as same-context
-        # follow-up. Append a plain text user turn.
+        # Same site set (or no codes mentioned) -- append a plain text
+        # user turn, no PDFs needed.
         [void]$messages.Add(@{ role = 'user'; content = $followup })
-        $turnLabel = "follow-up #$([math]::Floor(($messages.Count - 2) / 2))"
     }
 }
