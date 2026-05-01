@@ -562,12 +562,50 @@ function Invoke-LLMWithMessages {
         Accept        = 'application/json'
     }
 
-    $resp = Invoke-RestMethod -Method Post `
-        -Uri $LLMEndpoint `
-        -Headers $headers `
-        -ContentType 'application/json' `
-        -Body $body `
-        -TimeoutSec 240
+    try {
+        $resp = Invoke-RestMethod -Method Post `
+            -Uri $LLMEndpoint `
+            -Headers $headers `
+            -ContentType 'application/json' `
+            -Body $body `
+            -TimeoutSec 240
+    } catch {
+        # Invoke-RestMethod swallows the HTTP response body on error.
+        # Pull it out so the operator sees what the gateway actually
+        # said. PowerShell exposes it differently on each version:
+        #   PS 7+      : $_.ErrorDetails.Message holds the response body.
+        #   WinPS 5.1  : $_.Exception.Response.GetResponseStream() reads it.
+        $err = $_
+        $ex  = $err.Exception
+        $status   = $null
+        $respBody = $null
+
+        # PS 7+ path
+        if ($err.ErrorDetails -and $err.ErrorDetails.Message) {
+            $respBody = $err.ErrorDetails.Message
+        }
+        if ($ex.Response) {
+            try { $status = [int]$ex.Response.StatusCode } catch { }
+            if (-not $respBody) {
+                # WinPS 5.1 path
+                try {
+                    $stream = $ex.Response.GetResponseStream()
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $respBody = $reader.ReadToEnd()
+                } catch { }
+            }
+        }
+        $detail = if ($status -and $respBody) {
+            "HTTP $status -- $respBody"
+        } elseif ($status) {
+            "HTTP $status"
+        } elseif ($respBody) {
+            $respBody
+        } else {
+            $ex.Message
+        }
+        throw "LLM API error: $detail"
+    }
 
     return $resp.choices[0].message.content
 }
@@ -912,12 +950,19 @@ while ($true) {
                 -BatchByteCap $MaxAllPdfsBytes `
                 -Question     $currentQuestion
         } catch {
-            Write-Warning "LLM call failed: $_"
             Write-Host ''
-            Write-Host ('#' * 78)
-            Write-Host '# Bundle below so you can send it from a host that can reach the API:'
-            Write-Host ('#' * 78)
-            Write-Output $currentBundle
+            Write-Host ('#' * 78) -ForegroundColor Red
+            Write-Host '#  LLM CALL FAILED'                     -ForegroundColor Red
+            Write-Host ('#' * 78) -ForegroundColor Red
+            Write-Host ''
+            Write-Host ($_ | Out-String) -ForegroundColor Red
+            Write-Host ('#' * 78) -ForegroundColor Red
+            Write-Host '#  Common causes:'                      -ForegroundColor Red
+            Write-Host '#    HTTP 4xx -- check the API key, model name, or endpoint.' -ForegroundColor Red
+            Write-Host '#    HTTP 413 -- payload too large; lower -MaxAllPdfsBytes or use -NoPdfs.' -ForegroundColor Red
+            Write-Host '#    Timeout / refused -- gateway unreachable from this host.' -ForegroundColor Red
+            Write-Host '#  The bundle was NOT printed. Pass -NoLLM to dump it for offline relay.' -ForegroundColor Red
+            Write-Host ('#' * 78) -ForegroundColor Red
             exit 4
         }
         $initialTurn = $false
@@ -926,9 +971,12 @@ while ($true) {
         try {
             $answer = Invoke-LLMWithMessages -ApiKey $apiKey -Messages $messages.ToArray()
         } catch {
-            Write-Warning "LLM call failed: $_"
+            Write-Host ''
+            Write-Host ('#' * 78) -ForegroundColor Red
+            Write-Host '#  LLM CALL FAILED (this turn) -- conversation kept; retry or switch sites.' -ForegroundColor Red
+            Write-Host ('#' * 78) -ForegroundColor Red
+            Write-Host ($_ | Out-String) -ForegroundColor Red
             $messages.RemoveAt($messages.Count - 1)
-            Write-Host '(retry your question or press Enter to exit)'
             $answer = $null
         }
     }
