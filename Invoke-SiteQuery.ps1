@@ -54,10 +54,15 @@
 
 .PARAMETER Reindex
     Run an indexing pass that walks every -Site directory in full,
-    asks the LLM to produce a structured Markdown summary, and writes
-    it to '.site-summary.md' inside each site directory. Subsequent
-    queries against that site automatically use the summary instead
-    of re-bundling all the raw files.
+    asks the LLM to produce a structured Markdown summary AND a
+    JSON metadata block, and writes them to '.site-summary.md' and
+    '.site-data.json' inside each site directory. The master index
+    '.sites-index.json' at the base dir is rebuilt afterwards.
+
+.PARAMETER RebuildIndex
+    Re-aggregate the master '.sites-index.json' from the existing
+    per-site '.site-data.json' files. No LLM calls; cheap and fast.
+    Run this after manually editing a site's data.json.
 
 .PARAMETER Full
     Bypass any pre-built '.site-summary.md' and bundle the raw site
@@ -66,7 +71,10 @@
     specific question.
 
 .PARAMETER List
-    List all available site codes and exit.
+    List all available site codes and exit. If '.sites-index.json'
+    exists at the base dir, prints a tabular view with site name,
+    summary length, and key facts. Otherwise just lists directory
+    names.
 
 .PARAMETER NoLLM
     Bundle the files and print to the terminal; skip the API call. Useful
@@ -110,6 +118,7 @@ param(
     [switch]$NoPdfs,
     [switch]$NoStream,
     [switch]$Reindex,
+    [switch]$RebuildIndex,
     [switch]$Full,
     [switch]$List,
     [switch]$NoLLM
@@ -133,19 +142,35 @@ Visio, Word, ...), say so explicitly and recommend the operator open
 that file directly.
 '@.Trim()
 
-# Filename the indexer writes (and the query path looks for) inside
-# each site directory. A site that has this file uses it as the bundle;
-# otherwise the script falls back to walking the raw site contents.
-$Script:SummaryFileName = '.site-summary.md'
+# Filenames the indexer writes inside each site directory and at the
+# base dir. A site with .site-summary.md uses it as the bundle; the
+# master .sites-index.json is rebuilt during -Reindex / -RebuildIndex.
+$Script:SummaryFileName  = '.site-summary.md'
+$Script:DataFileName     = '.site-data.json'
+$Script:MasterIndexName  = '.sites-index.json'
+
+# Delimiters the LLM response is split on during -Reindex. They must
+# appear verbatim and on their own line in the model output so the
+# response can be reliably parsed into the Markdown and JSON parts.
+$Script:DelimSummary = '<<<SITE-SUMMARY-MARKDOWN>>>'
+$Script:DelimData    = '<<<SITE-DATA-JSON>>>'
 
 # Prompt used during -Reindex to drive the summary-generation call.
-$Script:IndexingPrompt = @'
+$Script:IndexingPrompt = @"
 You are an expert network and physical-site indexer. The operator has
 provided the complete contents of one site's documentation directory
-(text files, extracted Excel content, and any PDFs). Produce a single
-comprehensive Markdown document that captures every fact relevant to
-operating, troubleshooting, or describing this site. Use this skeleton,
-omitting sections that have no content:
+(text files, extracted Excel content, and any PDFs). You must produce
+TWO outputs in a single response, in the exact order shown below,
+each preceded by its own delimiter line on a line by itself:
+
+$($Script:DelimSummary)
+<a comprehensive Markdown summary of the site, structured per the
+skeleton below; cite specific filenames inline; do NOT invent>
+$($Script:DelimData)
+<a single JSON object on one or more lines; valid JSON only; no
+prose around it; schema also below>
+
+Markdown skeleton (omit sections that have no content):
 
 # Site <CODE> -- <human name if known>
 
@@ -170,16 +195,31 @@ omitting sections that have no content:
 
 ## Files referenced
 - One concise line per non-text file (PDF / Visio / CAD / image)
-  describing what the file shows, so a future operator knows when
-  to open it.
+  describing what the file shows.
 
 ## Open questions / undocumented
-- Anything you noticed but could not confirm.
 
-Cite specific filenames inline when stating facts. Prefer bulleted
-lists and tables to prose. Be exhaustive but do NOT invent details.
-Output ONLY the Markdown document with no preamble or commentary.
-'@.Trim()
+JSON schema (use null for unknowns; arrays may be empty; do NOT
+include keys not in this list):
+
+{
+  "site_code":   string,
+  "name":        string|null,
+  "address":     string|null,
+  "site_type":   string|null,         // 'office', 'data center', 'retail', etc.
+  "idf_count":   integer|null,
+  "ap_count":    integer|null,
+  "key_devices": [string],            // model names: 'Cisco Cat 9300', 'ICX 7450-48P', ...
+  "key_facts":   [string],            // 5-15 short factual one-liners
+  "tags":        [string],            // 3-10 lowercase short tags
+  "carriers":    [string],            // ISP / WAN provider names
+  "files_referenced": [string]        // important non-text filenames
+}
+
+Be exhaustive in the Markdown, concise in the JSON. Do NOT wrap the
+JSON in markdown code fences. Do NOT add preamble or commentary
+before the first delimiter or after the JSON.
+"@.Trim()
 
 # Force TLS 1.2+ on Windows PowerShell 5.1 for HTTPS to modern endpoints.
 try {
@@ -767,6 +807,43 @@ function New-PdfContentPart {
     }
 }
 
+function Update-MasterIndex {
+    <#
+    Walk every subdirectory of $BaseDir, read each '.site-data.json'
+    that exists, and write an aggregated '.sites-index.json' at
+    $BaseDir. No LLM calls -- just file I/O.
+    #>
+    param([string]$BaseDir)
+    $entries = New-Object System.Collections.ArrayList
+    $dirs = Get-ChildItem -LiteralPath $BaseDir -Directory |
+        Where-Object { -not $_.Name.StartsWith('.') } |
+        Sort-Object Name
+    foreach ($d in $dirs) {
+        $dataPath = Join-Path $d.FullName $Script:DataFileName
+        if (-not (Test-Path -LiteralPath $dataPath)) { continue }
+        try {
+            $obj = Get-Content -LiteralPath $dataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        } catch {
+            Write-Warning "Skipping $dataPath (invalid JSON: $_)"
+            continue
+        }
+        # Stamp the directory name in case the file's site_code drifted
+        # from the folder name.
+        if (-not $obj.site_code) {
+            $obj | Add-Member -NotePropertyName site_code -NotePropertyValue $d.Name -Force
+        }
+        [void]$entries.Add($obj)
+    }
+    $index = [ordered]@{
+        indexed_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        site_count = $entries.Count
+        sites      = @($entries)
+    }
+    $masterPath = Join-Path $BaseDir $Script:MasterIndexName
+    $index | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $masterPath -Encoding UTF8
+    return @{ Path = $masterPath; SiteCount = $entries.Count }
+}
+
 # --- Main -----------------------------------------------------------------
 
 if (-not (Test-Path -LiteralPath $BaseDir)) {
@@ -780,21 +857,100 @@ if ($codes.Count -eq 0) {
     exit 1
 }
 
-if ($List) {
-    Write-Host "Available site codes under ${BaseDir}:"
-    $codes | ForEach-Object { Write-Host "  $_" }
+# --- RebuildIndex short-circuit (no LLM, no -Site needed) ----------------
+if ($RebuildIndex) {
+    $r = Update-MasterIndex -BaseDir $BaseDir
+    Write-Host ("Rebuilt master index: {0}  ({1} site(s))" -f $r.Path, $r.SiteCount)
     return
 }
 
-# Assemble the question text. -Reindex does not need a user question.
+if ($List) {
+    $masterPath = Join-Path $BaseDir $Script:MasterIndexName
+    if (Test-Path -LiteralPath $masterPath) {
+        try {
+            $idx = Get-Content -LiteralPath $masterPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        } catch {
+            Write-Warning "Master index unreadable ($_) -- falling back to dir listing."
+            $idx = $null
+        }
+        if ($idx -and $idx.sites) {
+            Write-Host ("Available sites under {0} (from {1}):" -f $BaseDir, $Script:MasterIndexName)
+            Write-Host ''
+            # Build a fixed-width manual table -- piping Format-Table
+            # through Out-String + Write-Host loses rows on some hosts.
+            $sites = @($idx.sites)
+            function _f($v) { if ($null -eq $v) { '' } else { [string]$v } }
+            $rows = foreach ($s in $sites) {
+                [pscustomobject]@{
+                    Code    = _f $s.site_code
+                    Name    = _f $s.name
+                    Type    = _f $s.site_type
+                    IDFs    = _f $s.idf_count
+                    APs     = _f $s.ap_count
+                    Devices = if ($s.key_devices) { ($s.key_devices -join '; ') } else { '' }
+                    Tags    = if ($s.tags)        { ($s.tags -join ', ') }        else { '' }
+                }
+            }
+            $cols = @('Code','Name','Type','IDFs','APs','Devices','Tags')
+            $widths = @{}
+            foreach ($c in $cols) {
+                $w = $c.Length
+                foreach ($r in $rows) {
+                    $v = [string]$r.$c
+                    if ($v.Length -gt $w) { $w = $v.Length }
+                }
+                $widths[$c] = [Math]::Min($w, 60)
+            }
+            # Build a format string with INDEXED placeholders ({0}, {1}, ...)
+            # so each column gets the right value. The earlier
+            # all-{0} version made every column show the first value.
+            $placeholders = for ($i = 0; $i -lt $cols.Count; $i++) {
+                '{' + $i + ',-' + $widths[$cols[$i]] + '}'
+            }
+            $fmt = $placeholders -join '  '
+            $headerVals = foreach ($c in $cols) { $c }
+            $sepVals    = foreach ($c in $cols) { '-' * $widths[$c] }
+            Write-Host ($fmt -f $headerVals)
+            Write-Host ($fmt -f $sepVals)
+            foreach ($r in $rows) {
+                $vals = foreach ($c in $cols) {
+                    $v = [string]$r.$c
+                    if ($v.Length -gt $widths[$c]) {
+                        $v = $v.Substring(0, $widths[$c] - 1) + [char]0x2026
+                    }
+                    $v
+                }
+                Write-Host ($fmt -f $vals)
+            }
+
+            # Mention any sites that exist on disk but aren't indexed.
+            $indexed = @($sites | ForEach-Object { ([string]$_.site_code).ToLowerInvariant() })
+            $unindexed = $codes | Where-Object { $indexed -notcontains $_.ToLowerInvariant() }
+            if ($unindexed) {
+                Write-Host ''
+                Write-Host 'Not indexed yet (run -Reindex):'
+                $unindexed | ForEach-Object { Write-Host "  $_" }
+            }
+            return
+        }
+    }
+    # No master index -- fall back to plain dir listing with a hint.
+    Write-Host "Available site codes under ${BaseDir}:"
+    $codes | ForEach-Object { Write-Host "  $_" }
+    Write-Host ''
+    Write-Host "Tip: run with -Site <CODE>[,<CODE>...] -Reindex to build $($Script:MasterIndexName)"
+    return
+}
+
+# Assemble the question text. -Reindex / -RebuildIndex do not need a question.
 $qtext = if ($Question -and $Question.Count -gt 0) {
     ($Question -join ' ').Trim()
-} elseif ($Reindex) {
+} elseif ($Reindex -or $RebuildIndex) {
     ''
 } else {
     Read-Host -Prompt 'Question'
 }
-if (-not $qtext -and -not $Reindex) {
+if (-not $qtext -and -not ($Reindex -or $RebuildIndex)) {
     Write-Error 'No question provided.'
     exit 1
 }
@@ -844,6 +1000,34 @@ function Get-SiteSummaryPath {
         if (Test-Path -LiteralPath $p) { return $p }
     }
     return $null
+}
+
+function Split-IndexerResponse {
+    <#
+    Split a -Reindex LLM response into its Markdown and JSON parts.
+    Returns @{ Markdown = '<text>'; Data = <object|null> }. The JSON
+    parse is best-effort -- if the model emitted slightly invalid
+    JSON we return $null for Data and let the caller fall back.
+    #>
+    param([string]$Response)
+
+    $sumIdx  = $Response.IndexOf($Script:DelimSummary)
+    $dataIdx = $Response.IndexOf($Script:DelimData)
+    if ($sumIdx -lt 0 -or $dataIdx -lt 0 -or $dataIdx -lt $sumIdx) {
+        return @{ Markdown = $Response.Trim(); Data = $null }
+    }
+    $mdStart = $sumIdx + $Script:DelimSummary.Length
+    $md      = $Response.Substring($mdStart, $dataIdx - $mdStart).Trim()
+    $jsonRaw = $Response.Substring($dataIdx + $Script:DelimData.Length).Trim()
+
+    # Some models still wrap JSON in fences -- strip them.
+    if ($jsonRaw.StartsWith('```')) {
+        $jsonRaw = ($jsonRaw -replace '^```(?:json)?\s*', '') -replace '```\s*$', ''
+        $jsonRaw = $jsonRaw.Trim()
+    }
+    $data = $null
+    try { $data = $jsonRaw | ConvertFrom-Json -ErrorAction Stop } catch { $data = $null }
+    return @{ Markdown = $md; Data = $data }
 }
 
 function Build-SiteContext {
@@ -1084,15 +1268,18 @@ function Send-WithBatching {
 
 # --- Reindex short-circuit -----------------------------------------------
 # For -Reindex we need the API key now, walk every -Site in -Full mode,
-# run the indexing pass with the indexing system prompt, and write the
-# result to '<site>/.site-summary.md'. Then exit -- no REPL.
+# run the indexing pass with the indexing system prompt, split the
+# model's response into Markdown + JSON parts, write both per-site
+# files, and refresh the master '.sites-index.json' at the end.
 if ($Reindex) {
     $apiKey = Read-ApiKey
     if (-not $apiKey) {
         Write-Error 'No API key supplied'
         exit 1
     }
-    $Script:UseStreaming = -not $NoStream.IsPresent
+    # Indexing must NOT stream -- we need the full response to split on
+    # delimiters before writing the two output files.
+    $Script:UseStreaming = $false
     $savedSystemPrompt = $SystemPrompt
     $SystemPrompt = $Script:IndexingPrompt
     try {
@@ -1112,24 +1299,55 @@ if ($Reindex) {
             $rmsgs = New-Object System.Collections.ArrayList
             [void]$rmsgs.Add(@{ role = 'system'; content = $Script:IndexingPrompt })
             try {
-                $summary = Send-WithBatching `
+                $raw = Send-WithBatching `
                     -ApiKey       $apiKey `
                     -Messages     $rmsgs `
                     -BundleText   $rctx.BundleText `
                     -PdfList      $rctx.PdfList `
                     -BatchByteCap $MaxAllPdfsBytes `
-                    -Question     'Produce the .site-summary.md for the site above as instructed.'
+                    -Question     'Produce the indexer output for the site above as instructed.'
             } catch {
                 Write-Warning "Indexing $siteCode failed: $_"
                 continue
             }
+
+            $split   = Split-IndexerResponse -Response $raw
+            $summary = $split.Markdown
+            $data    = $split.Data
+            if (-not $data) {
+                Write-Warning "${siteCode}: could not parse JSON metadata; saving Markdown only."
+            } else {
+                # Stamp / fix up canonical fields.
+                $data | Add-Member -NotePropertyName site_code  -NotePropertyValue $siteCode -Force
+                $data | Add-Member -NotePropertyName indexed_at -NotePropertyValue (
+                    (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -Force
+                $data | Add-Member -NotePropertyName summary_chars -NotePropertyValue $summary.Length -Force
+            }
+
             $summaryPath = Join-Path $siteDir $Script:SummaryFileName
             Set-Content -LiteralPath $summaryPath -Value $summary -Encoding UTF8
             Write-Host ("  wrote {0}  ({1:N0} chars)" -f $summaryPath, $summary.Length)
+
+            if ($data) {
+                $dataPath = Join-Path $siteDir $Script:DataFileName
+                $data | ConvertTo-Json -Depth 10 |
+                    Set-Content -LiteralPath $dataPath -Encoding UTF8
+                Write-Host ("  wrote {0}" -f $dataPath)
+            }
         }
     } finally {
         $SystemPrompt = $savedSystemPrompt
     }
+
+    # Refresh the master index from the freshly-written per-site data.
+    try {
+        $idx = Update-MasterIndex -BaseDir $BaseDir
+        Write-Host ''
+        Write-Host ("Master index updated: {0}  ({1} site(s))" -f $idx.Path, $idx.SiteCount)
+    } catch {
+        Write-Warning "Could not update master index: $_"
+    }
+
     Write-Host ''
     Write-Host 'Indexing complete. Run again without -Reindex to query against the summaries.'
     return
