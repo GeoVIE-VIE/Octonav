@@ -52,6 +52,19 @@
     Total cap on all attached PDFs combined (default 32MB). Once this
     is hit, remaining PDFs are listed but not attached.
 
+.PARAMETER Reindex
+    Run an indexing pass that walks every -Site directory in full,
+    asks the LLM to produce a structured Markdown summary, and writes
+    it to '.site-summary.md' inside each site directory. Subsequent
+    queries against that site automatically use the summary instead
+    of re-bundling all the raw files.
+
+.PARAMETER Full
+    Bypass any pre-built '.site-summary.md' and bundle the raw site
+    contents (the legacy behaviour). Useful when the summary is
+    stale or you want the model to look at original files for a
+    specific question.
+
 .PARAMETER List
     List all available site codes and exit.
 
@@ -96,6 +109,8 @@ param(
 
     [switch]$NoPdfs,
     [switch]$NoStream,
+    [switch]$Reindex,
+    [switch]$Full,
     [switch]$List,
     [switch]$NoLLM
 )
@@ -116,6 +131,54 @@ multimodal document. Cite specific filenames when referencing facts.
 If a detail would only live in a non-text non-PDF file (image, CAD,
 Visio, Word, ...), say so explicitly and recommend the operator open
 that file directly.
+'@.Trim()
+
+# Filename the indexer writes (and the query path looks for) inside
+# each site directory. A site that has this file uses it as the bundle;
+# otherwise the script falls back to walking the raw site contents.
+$Script:SummaryFileName = '.site-summary.md'
+
+# Prompt used during -Reindex to drive the summary-generation call.
+$Script:IndexingPrompt = @'
+You are an expert network and physical-site indexer. The operator has
+provided the complete contents of one site's documentation directory
+(text files, extracted Excel content, and any PDFs). Produce a single
+comprehensive Markdown document that captures every fact relevant to
+operating, troubleshooting, or describing this site. Use this skeleton,
+omitting sections that have no content:
+
+# Site <CODE> -- <human name if known>
+
+## Identity
+- Address, site code, building type, owner, key contacts.
+
+## Network architecture
+### Demarcs (carrier handoff points)
+### MDF (main distribution frame)
+### IDFs (intermediate distribution frames)
+### Wireless (controllers, AP counts, SSIDs)
+
+## Power, HVAC, physical
+- UPS, generator, cooling, rack inventory, security/access notes.
+
+## Devices and inventory
+- Switches, routers, firewalls, APs, with model and serial when known.
+- Servers, storage, voice gear if present.
+
+## Notable cabling / fiber
+- Strand counts, conduit paths, fiber demarc, key cross-connects.
+
+## Files referenced
+- One concise line per non-text file (PDF / Visio / CAD / image)
+  describing what the file shows, so a future operator knows when
+  to open it.
+
+## Open questions / undocumented
+- Anything you noticed but could not confirm.
+
+Cite specific filenames inline when stating facts. Prefer bulleted
+lists and tables to prose. Be exhaustive but do NOT invent details.
+Output ONLY the Markdown document with no preamble or commentary.
 '@.Trim()
 
 # Force TLS 1.2+ on Windows PowerShell 5.1 for HTTPS to modern endpoints.
@@ -723,13 +786,15 @@ if ($List) {
     return
 }
 
-# Assemble the question text.
+# Assemble the question text. -Reindex does not need a user question.
 $qtext = if ($Question -and $Question.Count -gt 0) {
     ($Question -join ' ').Trim()
+} elseif ($Reindex) {
+    ''
 } else {
     Read-Host -Prompt 'Question'
 }
-if (-not $qtext) {
+if (-not $qtext -and -not $Reindex) {
     Write-Error 'No question provided.'
     exit 1
 }
@@ -765,6 +830,22 @@ if ($Site -and $Site.Count -gt 0) {
 }
 $resolvedSites = @($resolvedSites)
 
+function Get-SiteSummaryPath {
+    <#
+    Return the path to a site's pre-built summary if one exists,
+    else $null. The presence of this file is the signal that a site
+    has been indexed and queries should send the summary instead of
+    re-bundling raw files.
+    #>
+    param([string]$SiteDir)
+    $candidates = @($Script:SummaryFileName, '.site-summary.txt', 'SITE-SUMMARY.md')
+    foreach ($name in $candidates) {
+        $p = Join-Path $SiteDir $name
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    return $null
+}
+
 function Build-SiteContext {
     <#
     Bundle one OR MORE site directories. Returns:
@@ -773,6 +854,14 @@ function Build-SiteContext {
                      without PDFs.
       PdfList     -- @{File; Label} for every PDF to ship.
       PdfCount    -- convenience.
+      UsedSummary -- $true if any site contributed via .site-summary.md.
+
+    If a site has a pre-built '.site-summary.md' (and -Full was not
+    set), that file's content is used instead of walking the raw
+    directory. PDFs are NOT attached for summary-backed sites; the
+    operator can pass -Full to force a raw-file bundle when the
+    summary does not have the answer.
+
     Chunking into batches happens later in Send-WithBatching using
     MaxAllPdfsBytes as the per-request cap.
     #>
@@ -783,7 +872,8 @@ function Build-SiteContext {
         [int]$MaxBundleBytes,
         [int]$MaxFileBytes,
         [int]$MaxPdfBytes,
-        [bool]$NoPdfs
+        [bool]$NoPdfs,
+        [bool]$Full
     )
 
     $allText = [System.Text.StringBuilder]::new()
@@ -792,10 +882,37 @@ function Build-SiteContext {
     [void]$allText.AppendLine()
 
     $allPdfs = New-Object System.Collections.ArrayList
+    $usedSummary = $false
 
     foreach ($siteCode in $SiteCodes) {
         $siteDir = Join-Path $BaseDir $siteCode
 
+        # Prefer a pre-built summary unless -Full was passed.
+        $summaryPath = $null
+        if (-not $Full) { $summaryPath = Get-SiteSummaryPath -SiteDir $siteDir }
+
+        if ($summaryPath) {
+            $usedSummary = $true
+            try {
+                $summaryText = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8
+            } catch {
+                Write-Warning "Failed to read $summaryPath -- falling back to raw bundle. ($_)"
+                $summaryPath = $null
+            }
+        }
+
+        if ($summaryPath) {
+            $banner = "== $siteCode  (using $($Script:SummaryFileName)) "
+            [void]$allText.AppendLine('=' * 80)
+            [void]$allText.AppendLine($banner + ('=' * [Math]::Max(0, 80 - $banner.Length)))
+            [void]$allText.AppendLine('=' * 80)
+            [void]$allText.AppendLine()
+            [void]$allText.AppendLine($summaryText)
+            [void]$allText.AppendLine()
+            continue   # do NOT walk raw files or attach PDFs for this site
+        }
+
+        # No summary -> walk the raw site directory.
         $bundle = New-FileBundle `
             -SiteDir         $siteDir `
             -MaxBundleBytes  $MaxBundleBytes `
@@ -822,9 +939,10 @@ function Build-SiteContext {
     }
 
     return @{
-        BundleText = $allText.ToString()
-        PdfList    = @($allPdfs)
-        PdfCount   = $allPdfs.Count
+        BundleText  = $allText.ToString()
+        PdfList     = @($allPdfs)
+        PdfCount    = $allPdfs.Count
+        UsedSummary = $usedSummary
     }
 }
 
@@ -964,6 +1082,59 @@ function Send-WithBatching {
     }
 }
 
+# --- Reindex short-circuit -----------------------------------------------
+# For -Reindex we need the API key now, walk every -Site in -Full mode,
+# run the indexing pass with the indexing system prompt, and write the
+# result to '<site>/.site-summary.md'. Then exit -- no REPL.
+if ($Reindex) {
+    $apiKey = Read-ApiKey
+    if (-not $apiKey) {
+        Write-Error 'No API key supplied'
+        exit 1
+    }
+    $Script:UseStreaming = -not $NoStream.IsPresent
+    $savedSystemPrompt = $SystemPrompt
+    $SystemPrompt = $Script:IndexingPrompt
+    try {
+        foreach ($siteCode in $resolvedSites) {
+            $siteDir = Join-Path $BaseDir $siteCode
+            Write-Host ''
+            Write-Host ("Indexing site '$siteCode' (this may take a while if there are many PDFs) ...")
+            $rctx = Build-SiteContext `
+                -SiteCodes       @($siteCode) `
+                -BaseDir         $BaseDir `
+                -Question        '(indexing pass)' `
+                -MaxBundleBytes  $MaxBundleBytes `
+                -MaxFileBytes    $MaxFileBytes `
+                -MaxPdfBytes     $MaxPdfBytes `
+                -NoPdfs          $NoPdfs.IsPresent `
+                -Full            $true
+            $rmsgs = New-Object System.Collections.ArrayList
+            [void]$rmsgs.Add(@{ role = 'system'; content = $Script:IndexingPrompt })
+            try {
+                $summary = Send-WithBatching `
+                    -ApiKey       $apiKey `
+                    -Messages     $rmsgs `
+                    -BundleText   $rctx.BundleText `
+                    -PdfList      $rctx.PdfList `
+                    -BatchByteCap $MaxAllPdfsBytes `
+                    -Question     'Produce the .site-summary.md for the site above as instructed.'
+            } catch {
+                Write-Warning "Indexing $siteCode failed: $_"
+                continue
+            }
+            $summaryPath = Join-Path $siteDir $Script:SummaryFileName
+            Set-Content -LiteralPath $summaryPath -Value $summary -Encoding UTF8
+            Write-Host ("  wrote {0}  ({1:N0} chars)" -f $summaryPath, $summary.Length)
+        }
+    } finally {
+        $SystemPrompt = $savedSystemPrompt
+    }
+    Write-Host ''
+    Write-Host 'Indexing complete. Run again without -Reindex to query against the summaries.'
+    return
+}
+
 # Build the initial site context (used both for -NoLLM and the REPL).
 $ctx = Build-SiteContext `
     -SiteCodes       $resolvedSites `
@@ -972,7 +1143,8 @@ $ctx = Build-SiteContext `
     -MaxBundleBytes  $MaxBundleBytes `
     -MaxFileBytes    $MaxFileBytes `
     -MaxPdfBytes     $MaxPdfBytes `
-    -NoPdfs          $NoPdfs.IsPresent
+    -NoPdfs          $NoPdfs.IsPresent `
+    -Full            $Full.IsPresent
 
 if ($NoLLM) {
     Write-Host ''
@@ -1152,7 +1324,8 @@ while ($true) {
             -MaxBundleBytes  $MaxBundleBytes `
             -MaxFileBytes    $MaxFileBytes `
             -MaxPdfBytes     $MaxPdfBytes `
-            -NoPdfs          $NoPdfs.IsPresent
+            -NoPdfs          $NoPdfs.IsPresent `
+            -Full            $Full.IsPresent
         $messages.Clear()
         [void]$messages.Add(@{ role = 'system'; content = $SystemPrompt })
         $currentSites    = @($hits)
