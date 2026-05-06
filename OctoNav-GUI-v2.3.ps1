@@ -228,8 +228,8 @@ function Group-DHCPScopesByScopeId {
     .DESCRIPTION
         When the same scope exists on multiple servers (load balance or failover),
         this function groups them by Scope ID and uses correct math:
-        - For balanced/failover: Uses MAX(InUse) and first server's pool size (not sum)
-        - This prevents double-counting when both servers report the same scope
+        - For balanced/failover: Uses MAX pool size and MAX InUse across ALL servers
+        - This prevents double/triple-counting when 2, 3, or more servers report the same scope
     .PARAMETER ScopeData
         Array of scope objects with properties: ScopeId, DHCPServer, Description,
         AddressesFree, AddressesInUse, PercentageInUse, DNSServers (optional)
@@ -255,14 +255,16 @@ function Group-DHCPScopesByScopeId {
         $combinedServers = ($scopes | ForEach-Object { $_.DHCPServer }) -join ', '
 
         # For balanced/failover DHCP: Don't sum - use proper math
-        # Each server reports the FULL scope, so summing doubles the count
-        # Use: Total pool from first server, MAX of InUse (most conservative/accurate)
+        # Each server reports the FULL scope, so summing doubles/triples the count
         if ($scopes.Count -gt 1) {
-            # Multiple servers = balanced/failover - use MAX InUse, first server's pool size
-            $totalAddresses = $firstScope.AddressesFree + $firstScope.AddressesInUse
+            # Multiple servers (2, 3, or more) = balanced/failover
+            # Take MAX pool size across all servers (in case of slight config differences)
+            # Take MAX InUse (most conservative/accurate)
+            $maxPool = ($scopes | ForEach-Object { $_.AddressesFree + $_.AddressesInUse } | Measure-Object -Maximum).Maximum
             $maxInUse = ($scopes | Measure-Object -Property AddressesInUse -Maximum).Maximum
-            $totalFree = $totalAddresses - $maxInUse
+            $totalAddresses = $maxPool
             $totalInUse = $maxInUse
+            $totalFree = $totalAddresses - $totalInUse
         } else {
             # Single server - use values directly
             $totalFree = $firstScope.AddressesFree
