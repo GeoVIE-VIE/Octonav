@@ -147,6 +147,9 @@ function Get-DHCPScopeStatistics {
     .PARAMETER IncludeOption43
         Boolean flag to include Vendor-Specific information (Option ID 43) for each scope.
 
+    .PARAMETER ShowAllOptions
+        Boolean flag to show all configured options for each scope (comma-separated list of OptionId:Value pairs).
+
     .PARAMETER LogBox
         Optional RichTextBox control for logging output.
 
@@ -185,6 +188,9 @@ function Get-DHCPScopeStatistics {
 
         [Parameter(Mandatory = $false)]
         [bool]$IncludeOption43 = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ShowAllOptions = $false,
 
         [Parameter(Mandatory = $false)]
         [System.Windows.Forms.RichTextBox]$LogBox,
@@ -408,7 +414,8 @@ function Get-DHCPScopeStatistics {
                 [bool]$IncludeDNS,
                 [string[]]$SelectedScopeIds = @(),
                 [bool]$IncludeOption60 = $false,
-                [bool]$IncludeOption43 = $false
+                [bool]$IncludeOption43 = $false,
+                [bool]$ShowAllOptions = $false
             )
 
             $ErrorActionPreference = 'Stop'
@@ -667,6 +674,69 @@ function Get-DHCPScopeStatistics {
                     $scriptDebug += "[SB-$ServerName] Option 43 retrieved in $([math]::Round($opt43Duration, 2))s - $($Option43Map.Count) values"
                 }
 
+                # Optional: Build All Options map if requested
+                $AllOptionsMap = @{}
+                if ($ShowAllOptions) {
+                    $scriptDebug += "[SB-$ServerName] Retrieving All Options..."
+                    $allOptStart = Get-Date
+
+                    # Use runspace pool for parallel scope processing
+                    $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 10)
+                    $RunspacePool.Open()
+                    $Jobs = @()
+
+                    foreach ($Scope in $Scopes) {
+                        $PowerShell = [powershell]::Create()
+                        $PowerShell.RunspacePool = $RunspacePool
+                        [void]$PowerShell.AddScript({
+                            param($ServerName, $ScopeId)
+                            try {
+                                $AllOptions = Get-DhcpServerv4OptionValue -ComputerName $ServerName -ScopeId $ScopeId -ErrorAction SilentlyContinue
+                                $optionsList = @()
+                                foreach ($opt in $AllOptions) {
+                                    $optValue = if ($opt.Value) { ($opt.Value -join ';') } else { '' }
+                                    $optionsList += "$($opt.OptionId):$optValue"
+                                }
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = ($optionsList -join ' | ')
+                                    Success = $true
+                                }
+                            } catch {
+                                return [PSCustomObject]@{
+                                    ScopeId = $ScopeId
+                                    Value = $null
+                                    Success = $false
+                                }
+                            }
+                        }).AddArgument($ServerName).AddArgument($Scope.ScopeId)
+
+                        $Jobs += [PSCustomObject]@{
+                            PowerShell = $PowerShell
+                            Handle = $PowerShell.BeginInvoke()
+                            ScopeId = $Scope.ScopeId
+                        }
+                    }
+
+                    # Collect results
+                    foreach ($Job in $Jobs) {
+                        $resultArray = $Job.PowerShell.EndInvoke($Job.Handle)
+                        if ($resultArray -and $resultArray.Count -gt 0) {
+                            $result = $resultArray[0]
+                            if ($result.Value) {
+                                $AllOptionsMap[$result.ScopeId] = $result.Value
+                            }
+                        }
+                        $Job.PowerShell.Dispose()
+                    }
+
+                    $RunspacePool.Close()
+                    $RunspacePool.Dispose()
+
+                    $allOptDuration = ((Get-Date) - $allOptStart).TotalSeconds
+                    $scriptDebug += "[SB-$ServerName] All Options retrieved in $([math]::Round($allOptDuration, 2))s - $($AllOptionsMap.Count) scopes with options"
+                }
+
                 # Match filtered scopes with their statistics
                 $ServerStats = @()
                 foreach ($Scope in $Scopes) {
@@ -683,6 +753,7 @@ function Get-DHCPScopeStatistics {
                         $dnsServers = $DNSServerMap[$Scope.ScopeId]
                         $option60Info = $Option60Map[$Scope.ScopeId]
                         $option43Info = $Option43Map[$Scope.ScopeId]
+                        $allOptionsInfo = $AllOptionsMap[$Scope.ScopeId]
 
                         # Calculate percentage if not provided or if null
                         $percentageValue = if ($null -ne $Stats.Percentage) {
@@ -717,6 +788,7 @@ function Get-DHCPScopeStatistics {
                             DNSServers = $dnsServers
                             Option60 = $option60Info
                             Option43 = $option43Info
+                            AllOptions = $allOptionsInfo
                         }
                     } else {
                         $scriptDebug += "[SB-$ServerName] WARNING: No statistics found for scope $($Scope.ScopeId)"
@@ -770,7 +842,7 @@ function Get-DHCPScopeStatistics {
                 ,@()
             }
 
-            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
+            $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43, $ShowAllOptions
             $Jobs += @{
                 Job = $Job
                 ServerName = $Server
@@ -841,7 +913,7 @@ function Get-DHCPScopeStatistics {
                         ,@()
                     }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43, $ShowAllOptions
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server
@@ -876,7 +948,7 @@ function Get-DHCPScopeStatistics {
                         ,@()
                     }
 
-                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43
+                    $Job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $Server, $filtersArg, $IncludeDNS, $selectedScopeIdsArg, $IncludeOption60, $IncludeOption43, $ShowAllOptions
                     $Jobs += @{
                         Job = $Job
                         ServerName = $Server
