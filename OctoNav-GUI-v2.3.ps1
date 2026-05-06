@@ -224,15 +224,17 @@ function Invoke-BackgroundOperation
 function Group-DHCPScopesByScopeId {
     <#
     .SYNOPSIS
-        Groups DHCP scope statistics by Scope ID and aggregates redundant scopes
+        Groups DHCP scope statistics by Scope ID and handles balanced/failover scopes
     .DESCRIPTION
-        When the same scope exists on multiple servers (for redundancy),
-        this function groups them by Scope ID and aggregates the statistics.
+        When the same scope exists on multiple servers (load balance or failover),
+        this function groups them by Scope ID and uses correct math:
+        - For balanced/failover: Uses MAX(InUse) and first server's pool size (not sum)
+        - This prevents double-counting when both servers report the same scope
     .PARAMETER ScopeData
         Array of scope objects with properties: ScopeId, DHCPServer, Description,
         AddressesFree, AddressesInUse, PercentageInUse, DNSServers (optional)
     .OUTPUTS
-        Array of grouped scope objects with combined servers and aggregated statistics
+        Array of grouped scope objects with combined servers and correct statistics
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -252,10 +254,21 @@ function Group-DHCPScopesByScopeId {
         # Combine server names
         $combinedServers = ($scopes | ForEach-Object { $_.DHCPServer }) -join ', '
 
-        # Aggregate statistics
-        $totalFree = ($scopes | Measure-Object -Property AddressesFree -Sum).Sum
-        $totalInUse = ($scopes | Measure-Object -Property AddressesInUse -Sum).Sum
-        $totalAddresses = $totalFree + $totalInUse
+        # For balanced/failover DHCP: Don't sum - use proper math
+        # Each server reports the FULL scope, so summing doubles the count
+        # Use: Total pool from first server, MAX of InUse (most conservative/accurate)
+        if ($scopes.Count -gt 1) {
+            # Multiple servers = balanced/failover - use MAX InUse, first server's pool size
+            $totalAddresses = $firstScope.AddressesFree + $firstScope.AddressesInUse
+            $maxInUse = ($scopes | Measure-Object -Property AddressesInUse -Maximum).Maximum
+            $totalFree = $totalAddresses - $maxInUse
+            $totalInUse = $maxInUse
+        } else {
+            # Single server - use values directly
+            $totalFree = $firstScope.AddressesFree
+            $totalInUse = $firstScope.AddressesInUse
+            $totalAddresses = $totalFree + $totalInUse
+        }
 
         # Calculate percentage
         $percentageInUse = 0
