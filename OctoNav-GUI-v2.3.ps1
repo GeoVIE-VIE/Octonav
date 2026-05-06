@@ -1659,13 +1659,20 @@ $chkIncludeOption43.Location = New-Object System.Drawing.Point(455, 25)
 $chkIncludeOption43.Checked = $false
 $dhcpOptionsGroupBox.Controls.Add($chkIncludeOption43)
 
-# Row 2: Group by Scope and Concurrency
+# Row 2: Group by Scope, Show All Options, and Concurrency
 $script:chkGroupByScope = New-Object System.Windows.Forms.CheckBox
 $script:chkGroupByScope.Text = "Group by Scope ID on Export"
-$script:chkGroupByScope.Size = New-Object System.Drawing.Size(210, 20)
+$script:chkGroupByScope.Size = New-Object System.Drawing.Size(180, 20)
 $script:chkGroupByScope.Location = New-Object System.Drawing.Point(15, 55)
 $script:chkGroupByScope.Checked = $false
 $dhcpOptionsGroupBox.Controls.Add($script:chkGroupByScope)
+
+$script:chkShowAllOptions = New-Object System.Windows.Forms.CheckBox
+$script:chkShowAllOptions.Text = "Show All Configured Options"
+$script:chkShowAllOptions.Size = New-Object System.Drawing.Size(200, 20)
+$script:chkShowAllOptions.Location = New-Object System.Drawing.Point(210, 55)
+$script:chkShowAllOptions.Checked = $false
+$dhcpOptionsGroupBox.Controls.Add($script:chkShowAllOptions)
 
 $lblConcurrency = New-Object System.Windows.Forms.Label
 $lblConcurrency.Text = "Parallel Operations:"
@@ -1923,6 +1930,7 @@ $btnCollectDHCP.Add_Click({
         $script:includeDNS = $chkIncludeDNS.Checked
         $script:includeOption60 = $chkIncludeOption60.Checked
         $script:includeOption43 = $chkIncludeOption43.Checked
+        $script:showAllOptions = $script:chkShowAllOptions.Checked
 
         # Call DHCP collection function in background to keep UI responsive
         Write-Log -Message "Starting DHCP statistics collection in background..." -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
@@ -1933,10 +1941,11 @@ $btnCollectDHCP.Add_Click({
         Write-Log -Message "DEBUG: Include DNS: $($script:includeDNS)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: Include Option 60: $($script:includeOption60)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         Write-Log -Message "DEBUG: Include Option 43: $($script:includeOption43)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        Write-Log -Message "DEBUG: Show All Options: $($script:showAllOptions)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
         # Run collection in background
         $script:dhcpBackgroundTimer = Invoke-BackgroundOperation -ScriptBlock {
-            param($selectedScopes, $filters, $servers, $dns, $opt60, $opt43, $stopRef, $scriptRoot)
+            param($selectedScopes, $filters, $servers, $dns, $opt60, $opt43, $showAll, $stopRef, $scriptRoot)
 
             $debugLog = @()
 
@@ -2018,8 +2027,9 @@ $btnCollectDHCP.Add_Click({
                 $debugLog += "Background:   - IncludeDNS: $dns"
                 $debugLog += "Background:   - IncludeOption60: $opt60"
                 $debugLog += "Background:   - IncludeOption43: $opt43"
+                $debugLog += "Background:   - ShowAllOptions: $showAll"
 
-                $result = Get-DHCPScopeStatistics -SelectedScopes $selectedScopes -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -IncludeOption60 $opt60 -IncludeOption43 $opt43 -StopToken $stopRef
+                $result = Get-DHCPScopeStatistics -SelectedScopes $selectedScopes -ScopeFilters $filters -SpecificServers $servers -IncludeDNS $dns -IncludeOption60 $opt60 -IncludeOption43 $opt43 -ShowAllOptions $showAll -StopToken $stopRef
 
                 $debugLog += "Background: Collection completed"
                 $debugLog += "Background: Result Success = $($result.Success)"
@@ -2051,7 +2061,7 @@ $btnCollectDHCP.Add_Click({
                 }
             }
 
-        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $script:includeDNS, $script:includeOption60, $script:includeOption43, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
+        } -ArgumentList @((,$selectedScopes), (,$scopeFilters), (,$specificServers), $script:includeDNS, $script:includeOption60, $script:includeOption43, $script:showAllOptions, ([ref]$script:dhcpStopRequested), $scriptPath) -OnComplete {
             param($result)
 
             # Re-enable buttons
@@ -2167,7 +2177,7 @@ $btnCollectDHCP.Add_Click({
                     $exportColumns = @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')
 
                     # Debug: Log checkbox states during auto-export
-                    Write-Log -Message "DEBUG AUTO-EXPORT: includeDNS=$($script:includeDNS), includeOption60=$($script:includeOption60), includeOption43=$($script:includeOption43)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                    Write-Log -Message "DEBUG AUTO-EXPORT: includeDNS=$($script:includeDNS), includeOption60=$($script:includeOption60), includeOption43=$($script:includeOption43), showAllOptions=$($script:showAllOptions)" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                     if ($dataToExport.Count -gt 0) {
                         $firstItem = $dataToExport[0]
@@ -2179,7 +2189,8 @@ $btnCollectDHCP.Add_Click({
                         $hasDNS = $firstItem.PSObject.Properties.Name -contains 'DNSServers'
                         $hasOpt60 = $firstItem.PSObject.Properties.Name -contains 'Option60'
                         $hasOpt43 = $firstItem.PSObject.Properties.Name -contains 'Option43'
-                        Write-Log -Message "DEBUG AUTO-EXPORT: hasDNS=$hasDNS, hasOpt60=$hasOpt60, hasOpt43=$hasOpt43" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        $hasAllOpt = $firstItem.PSObject.Properties.Name -contains 'AllOptions'
+                        Write-Log -Message "DEBUG AUTO-EXPORT: hasDNS=$hasDNS, hasOpt60=$hasOpt60, hasOpt43=$hasOpt43, hasAllOpt=$hasAllOpt" -Color "Debug" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
 
                         if ($hasDNS -and $script:includeDNS) {
                             $exportColumns += 'DNSServers'
@@ -2194,6 +2205,11 @@ $btnCollectDHCP.Add_Click({
                         if ($hasOpt43 -and $script:includeOption43) {
                             $exportColumns += 'Option43'
                             Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+                        }
+
+                        if ($hasAllOpt -and $script:showAllOptions) {
+                            $exportColumns += 'AllOptions'
+                            Write-Log -Message "Including All Options information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
                         }
                     }
 
@@ -2709,6 +2725,11 @@ function Export-DHCPResultsToPath {
         if ($firstItem.PSObject.Properties.Name -contains 'Option43') {
             $exportColumns += 'Option43'
             Write-Log -Message "Including Option 43 information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
+        }
+
+        if ($firstItem.PSObject.Properties.Name -contains 'AllOptions') {
+            $exportColumns += 'AllOptions'
+            Write-Log -Message "Including All Options information in export" -Color "Info" -LogBox $dhcpLogBox -Theme $script:CurrentTheme
         }
     }
 
