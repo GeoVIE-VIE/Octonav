@@ -7,7 +7,7 @@
     Usage:
     1. Place your .RDOX files in the 'resources' folder
     2. Run this script
-    3. The files will be embedded into OctoNav-GUI-v2.3.ps1
+    3. The files will be embedded into OctoNav.ps1
 .EXAMPLE
     .\Package-Resources.ps1
 .EXAMPLE
@@ -17,7 +17,7 @@
 param(
     [string]$ResourceFolder = "$PSScriptRoot\resources",
     [string[]]$FileTypes = @("*.rdox", "*.xml", "*.txt"),
-    [string]$TargetScript = "$PSScriptRoot\OctoNav-GUI-v2.3.ps1"
+    [string]$TargetScript = "$PSScriptRoot\OctoNav.ps1"
 )
 
 Write-Host "================================================" -ForegroundColor Cyan
