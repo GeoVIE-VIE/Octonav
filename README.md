@@ -10,6 +10,63 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 
 ---
 
+## OctoNav.ps1 (single file)
+
+`OctoNav.ps1` is the whole tool in one Windows PowerShell 5.1 script. It replaces
+`OctoNav-GUI-v2.3.ps1` and the `modules` folder, which have been removed.
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\OctoNav.ps1
+```
+
+- **No administrator rights needed.** Only the Network Configuration tab (it changes
+  adapter IP settings) needs "Run as Administrator"; every other tab works as a
+  standard user.
+- **Settings and caches** (`octonav_settings.json`, the encrypted DHCP caches,
+  `PortTemplates.json`) stay next to the script, as before. When that folder is
+  read-only for the user, they go to `%LOCALAPPDATA%\OctoNav` instead.
+- **Resources:** `Package-Resources.ps1` now embeds files into `OctoNav.ps1`.
+
+### DHCP numbers with and without redundancy
+
+Some scopes run on a failover pair and some on a single server. The totals now
+account for both:
+
+| Scope setup | How it is counted |
+|---|---|
+| Failover pair (load balance or hot standby) | Both partners report the whole scope, so it is counted **once** |
+| Single server | Counted once |
+| Same scope ID on several servers without failover (split scope) | Each server's part of the pool is **added** |
+| Copies without failover whose pools overlap (each hands out the same addresses) | Added, but never more than the scope's address range, and marked `OVERLAPPING POOLS` |
+| Inactive copy of a scope | Not counted in the totals |
+| Failover information unavailable | Counted once, as before, and marked `Unknown` |
+
+Percentage in use = in use / (in use + free), rounded to 2 decimals.
+The export has these extra columns: `TotalAddresses`, `ScopeState`, `Redundancy`,
+`FailoverPartner`, `FailoverState` and `Notes` (for example a degraded failover
+relationship, or pool sizes that differ between partners). "Group by Scope ID on
+Export" writes one row per scope, plus `ServerCount`.
+
+### Speed
+
+- DHCP servers are queried in parallel inside the same process (runspace pool)
+  instead of one `powershell.exe` per server. Each server needs 3 bulk calls plus
+  one option call per scope, only when options are requested. You can set how
+  many servers run at once, and Stop keeps the results collected so far.
+- DNA Center device queries run in parallel (6 at a time). When the server rate
+  limits (HTTP 429), the request waits and retries. Stop cancels a running report.
+- Large device and scope lists filter as you type without freezing the window,
+  and your selections are kept when the filter changes.
+- CSV export is written directly and is about twice as fast as `Export-Csv`.
+
+### File Compare
+
+The report now uses a minimal line diff (longest common subsequence). Repeated
+lines such as `!` in switch configs no longer make unrelated lines show as changed.
+Empty files, one-line files and lines containing `</script>` are handled correctly.
+
+---
+
 ## Files in Repository
 
 ### Main Application
