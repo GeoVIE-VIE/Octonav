@@ -3098,6 +3098,100 @@ function Get-DhcpCacheCheckLines {
     return $lines.ToArray()
 }
 
+function Get-DhcpScopeFilterKeys {
+    <#
+    .SYNOPSIS
+        What the scope filter searches: the scope name (upper case) and the scope ID
+        with a dot on each side, so number terms match whole octets.
+    .DESCRIPTION
+        The DHCP server name is not searched. One server often serves several sites,
+        so a site code in its name would match the scopes of every site on it.
+    .OUTPUTS
+        @{ Names; Ids } - string arrays in the same order as -Scopes
+    #>
+    param([AllowEmptyCollection()][object[]]$Scopes)
+    if ($null -eq $Scopes) { $Scopes = @() }
+    $names = [string[]]::new($Scopes.Count)
+    $ids = [string[]]::new($Scopes.Count)
+    for ($i = 0; $i -lt $Scopes.Count; $i++) {
+        $s = $Scopes[$i]
+        $name = [string]$s.Name
+        $id = [string]$s.ScopeId
+        if ((-not $name -or -not $id) -and [string]$s.DisplayName -match '^(.*) \(([0-9.]+)\) - ') {
+            # entry without Name / ScopeId: read them from "Name (ScopeId) - Server"
+            if (-not $name) { $name = $Matches[1] }
+            if (-not $id) { $id = $Matches[2] }
+        }
+        $names[$i] = $name.ToUpperInvariant()
+        $ids[$i] = '.' + $id.Trim() + '.'
+    }
+    return @{ Names = $names; Ids = $ids }
+}
+
+function Split-DhcpScopeFilterTerms {
+    <#
+    .SYNOPSIS
+        Sorts filter terms into name terms and scope ID terms.
+    .DESCRIPTION
+        Letters: searched in the scope name. Digits with dots (10.20, 10.20.x.x): scope
+        ID only, as whole octets. A plain number (100): both the name and the scope ID.
+    #>
+    param([AllowEmptyCollection()][string[]]$Terms)
+    $name = [System.Collections.Generic.List[string]]::new()
+    $id = [System.Collections.Generic.List[string]]::new()
+    foreach ($raw in $Terms) {
+        $t = ([string]$raw).Trim().ToUpperInvariant()
+        $octets = ($t -replace '(\.(X|\*))+$', '').Trim('.')
+        if ($octets -match '^[0-9]+(\.[0-9]+)*$') {
+            $id.Add('.' + $octets + '.')
+            if ($t.Contains('.')) { continue }
+        }
+        if ($t) { $name.Add($t) }
+    }
+    return @{ Name = $name.ToArray(); Id = $id.ToArray() }
+}
+
+function Find-DhcpScopeMatches {
+    <#
+    .SYNOPSIS
+        Indexes of the scopes that pass the filter boxes (comma = OR inside a box,
+        both boxes = AND).
+    .DESCRIPTION
+        Contains: the scope name contains the text, or the scope ID contains the numbers
+        as whole octets - 10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x.
+        Prefix: the scope name starts with the text, or the scope ID starts with the numbers.
+    .PARAMETER Keys
+        Output of Get-DhcpScopeFilterKeys
+    #>
+    param($Keys, [AllowEmptyCollection()][string[]]$ContainsTerms = @(), [AllowEmptyCollection()][string[]]$PrefixTerms = @())
+    $contains = Split-DhcpScopeFilterTerms -Terms $ContainsTerms
+    $prefix = Split-DhcpScopeFilterTerms -Terms $PrefixTerms
+    $nameIn = $contains.Name; $idIn = $contains.Id
+    $nameStart = $prefix.Name; $idStart = $prefix.Id
+    $usePrefix = ($nameStart.Count + $idStart.Count) -gt 0
+    $useContains = ($nameIn.Count + $idIn.Count) -gt 0
+    $ordinal = [System.StringComparison]::Ordinal
+    $names = $Keys.Names
+    $ids = $Keys.Ids
+    $hits = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        if ($usePrefix) {
+            $ok = $false
+            foreach ($t in $nameStart) { if ($names[$i].StartsWith($t, $ordinal)) { $ok = $true; break } }
+            if (-not $ok) { foreach ($t in $idStart) { if ($ids[$i].StartsWith($t, $ordinal)) { $ok = $true; break } } }
+            if (-not $ok) { continue }
+        }
+        if ($useContains) {
+            $ok = $false
+            foreach ($t in $nameIn) { if ($names[$i].Contains($t)) { $ok = $true; break } }
+            if (-not $ok) { foreach ($t in $idIn) { if ($ids[$i].Contains($t)) { $ok = $true; break } } }
+            if (-not $ok) { continue }
+        }
+        $hits.Add($i)
+    }
+    return ,$hits.ToArray()
+}
+
 function Get-DhcpExportColumns {
     param([hashtable]$Options, [switch]$Grouped)
     $cols = [System.Collections.Generic.List[string]]::new()
@@ -4851,7 +4945,7 @@ $script:dhcpState = $null
 $script:dhcpCacheJob = $null
 $script:allDHCPScopes = @()
 $script:scopeByDisplayName = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-$script:scopeNamesUpper = @()
+$script:scopeFilterKeys = @{ Names = [string[]]@(); Ids = [string[]]@() }
 $script:selectedScopeNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $script:suppressScopeItemCheck = $false
 $script:scopeCacheUpdated = $null
@@ -5337,16 +5431,16 @@ $dhcpScopeCard = New-OctoCard -Bounds @(16, 228, 700, 314) -Title 'Scopes (Optio
 $script:lblScopeCacheStatus = New-OctoControl Label @(162, 19, 380, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Tag = 'Muted' }) $dhcpScopeCard
 $script:btnRefreshScopeCache = New-OctoControl Button @(554, 12, 130, 28) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeCard
 [void](New-OctoControl Label @(16, 55, 40, 20) ([ordered]@{ Text = 'Filter' }) $dhcpScopeCard)
-$script:ScopeFilterPlaceholder = 'e.g., SITE1, SITE2 (min 3 chars)'
-$script:PrefixFilterPlaceholder = 'e.g., ZA (2+ chars)'
+$script:ScopeFilterPlaceholder = 'Scope name or ID, e.g., SITE1, 10.20'
+$script:PrefixFilterPlaceholder = 'e.g., ZA or 10.20'
 $script:txtScopeListFilter = New-OctoControl TextBox @(60, 52, 290, 23) ([ordered]@{ MaxLength = 500; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeCard
 [void](New-OctoControl Label @(366, 55, 40, 20) ([ordered]@{ Text = 'Prefix' }) $dhcpScopeCard)
 $script:txtPrefixFilter = New-OctoControl TextBox @(410, 52, 136, 23) ([ordered]@{ MaxLength = 10; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeCard
-$script:lstDHCPScopes = New-OctoControl CheckedListBox @(16, 86, 530, 184) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dhcpScopeCard
+$script:lstDHCPScopes = New-OctoControl CheckedListBox @(16, 86, 530, 168) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dhcpScopeCard
 $btnSelectAllScopes = New-OctoControl Button @(558, 86, 126, 28) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeCard
 $btnSelectNoneScopes = New-OctoControl Button @(558, 120, 126, 28) ([ordered]@{ Text = 'Select None' }) $dhcpScopeCard
 $script:lblVisibleScopes = New-OctoControl Label @(558, 156, 126, 40) ([ordered]@{ Tag = 'Muted' }) $dhcpScopeCard
-[void](New-OctoControl Label @(16, 280, 668, 20) ([ordered]@{ Text = 'Refresh Cache, filter (comma = OR), then Select All Visible. Selections are kept when the filter changes.'; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
+[void](New-OctoControl Label @(16, 262, 668, 38) ([ordered]@{ Text = "Searches scope names and IDs, not server names. 10.1 finds 10.1.x.x, not 10.10.x.x.`nComma = OR. Select All Visible checks every match; selections stay when the filter changes."; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
 
 # --- Actions (bottom left)
 $btnCollectDHCP = New-OctoControl Button @(16, 554, 220, 40) ([ordered]@{ Text = 'Collect DHCP Statistics'; Tag = 'Primary'; Anchor = 'Bottom,Left' }) $tab2
@@ -5365,6 +5459,8 @@ try { if ([int]$script:Settings.DHCPParallelServers -ge 1 -and [int]$script:Sett
 $script:numConcurrency = New-OctoControl NumericUpDown @(328, 97, 60, 23) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsCard
 $toolTip.SetToolTip($script:chkGroupByScope, "One row per Scope ID:`n- failover partners report the whole scope, so they are counted once`n- split scopes (same ID, no failover) have their pools added together`n- inactive copies are not counted")
 $toolTip.SetToolTip($script:numConcurrency, 'How many DHCP servers (and option lookups) are queried at the same time.')
+$toolTip.SetToolTip($script:txtScopeListFilter, "Finds scopes whose name contains the text, or whose scope ID contains the numbers as whole octets:`n  SITE1 - scopes with SITE1 in their name`n  10.20 - 10.20.5.0 yes; 10.200.5.0 and 110.20.5.0 no`nComma = OR. The DHCP server name is not searched.")
+$toolTip.SetToolTip($script:txtPrefixFilter, "Finds scopes whose name starts with the text, or whose scope ID starts with the numbers:`n  ZA - names starting with ZA`n  10 - every 10.x.x.x scope`nComma = OR. With a Filter as well, both must match.")
 
 # --- Log and export (right column)
 $dhcpLogCard = New-OctoCard -Bounds @(728, 164, 436, 430) -Title 'Collection Log' -Parent $tab2 -Anchor 'Top,Bottom,Left,Right'
@@ -5420,7 +5516,7 @@ function Set-DhcpScopeList {
     $keys = [string[]]@(foreach ($s in $sorted) { [string]$s.DisplayName })
     [Array]::Sort($keys, $sorted, [System.StringComparer]::OrdinalIgnoreCase)
     $script:allDHCPScopes = $sorted
-    $script:scopeNamesUpper = [string[]]@(foreach ($k in $keys) { $k.ToUpperInvariant() })
+    $script:scopeFilterKeys = Get-DhcpScopeFilterKeys -Scopes $sorted
     $script:scopeByDisplayName.Clear()
     foreach ($s in $sorted) { $script:scopeByDisplayName[[string]$s.DisplayName] = $s }
     $script:selectedScopeNames.Clear()
@@ -5455,6 +5551,7 @@ function Update-ScopeListView {
     .SYNOPSIS
         Applies the Contains filter (3+ chars, comma = OR) and Prefix filter (2+ chars)
         to the cached scopes and shows the matches, keeping earlier selections.
+        Scope names and scope IDs are searched, server names are not (Find-DhcpScopeMatches).
     #>
     $containsText = $script:txtScopeListFilter.Text.Trim()
     if ($containsText -eq $script:ScopeFilterPlaceholder) { $containsText = '' }
@@ -5470,20 +5567,8 @@ function Update-ScopeListView {
     if ($prefixWaiting) { $script:lblVisibleScopes.Text = '(type 2+ chars for prefix)'; return }
 
     $matchesList = [System.Collections.Generic.List[object]]::new()
-    $names = $script:scopeNamesUpper
     $scopes = $script:allDHCPScopes
-    for ($i = 0; $i -lt $names.Count; $i++) {
-        $upper = $names[$i]
-        if ($prefixTerms.Count -gt 0) {
-            $ok = $false
-            foreach ($p in $prefixTerms) { if ($upper.StartsWith($p, [System.StringComparison]::Ordinal)) { $ok = $true; break } }
-            if (-not $ok) { continue }
-        }
-        if ($containsTerms.Count -gt 0) {
-            $ok = $false
-            foreach ($t in $containsTerms) { if ($upper.Contains($t)) { $ok = $true; break } }
-            if (-not $ok) { continue }
-        }
+    foreach ($i in (Find-DhcpScopeMatches -Keys $script:scopeFilterKeys -ContainsTerms $containsTerms -PrefixTerms $prefixTerms)) {
         $matchesList.Add([string]$scopes[$i].DisplayName)
     }
 
@@ -7133,7 +7218,9 @@ Collects scope usage from your Windows DHCP servers, many servers at once.
   - Nothing selected = all domain DHCP servers
 2. Optional - select specific scopes:
   - "Refresh Cache" loads all scopes
-  - Filter (3+ characters, comma = OR) and Prefix (2+ characters)
+  - Filter (3+ characters, comma = OR): the scope name contains the text, or the scope ID contains the numbers as whole octets - 10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x
+  - Prefix (2+ characters): the scope name starts with the text, or the scope ID starts with the numbers - 10 finds every 10.x.x.x scope
+  - The DHCP server name is not searched, so a site code in a server name does not bring in the other sites that server serves
   - "Select All Visible"; selections are kept when you change the filter
   - The server and scope caches are encrypted with ONE password. If a cache does not open, you can type its password again or skip it; after a skip, "Refresh Cache" rebuilds it with your current password.
 3. Options:

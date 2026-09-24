@@ -59,6 +59,21 @@ The export has these extra columns: `TotalAddresses`, `ScopeState`, `Redundancy`
 relationship, or pool sizes that differ between partners). "Group by Scope ID on
 Export" writes one row per scope, plus `ServerCount`.
 
+### Scope filter
+
+The Filter and Prefix boxes search the scope name and the scope ID. They do not
+search the DHCP server name. One server often serves several sites, so a site code
+in a server name used to match the scopes of every site on that server.
+
+| You type | Filter finds | Prefix finds |
+|---|---|---|
+| `SITE1` | scopes with SITE1 in their name | scopes whose name starts with SITE1 |
+| `10.1` | scope IDs that contain 10.1 as whole octets: 10.1.5.0, not 10.10.5.0 or 110.1.5.0 | scope IDs 10.1.x.x |
+| `10.1.x.x` | the same as `10.1` | the same as `10.1` |
+| `100` | names that contain 100, and scope IDs with an octet of 100 | names that start with 100, and scope IDs 100.x.x.x |
+
+A comma means OR inside a box. When both boxes are filled, a scope has to match both.
+
 ### Speed
 
 - No scope goes missing silently: a server that fails is tried once more, a scope
