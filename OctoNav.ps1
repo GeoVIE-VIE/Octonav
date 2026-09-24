@@ -1659,10 +1659,12 @@ function Get-DhcpScopeAnalysis {
     $notes = [System.Collections.Generic.List[string]]::new()
     $clusters = [System.Collections.Generic.List[object]]::new()
     $unknown = [System.Collections.Generic.List[object]]::new()
+    $scopeNames = [System.Collections.Generic.List[string]]::new()
+    $noStatsRows = 0
 
     $groups = [System.Collections.Generic.List[object]]::new()
     $stats = @{
-        Failover = 0; FailoverDegraded = 0; Single = 0; Split = 0; Unknown = 0; Mixed = 0; Overlap = 0
+        Failover = 0; FailoverDegraded = 0; Single = 0; Split = 0; Unknown = 0; Mixed = 0; Overlap = 0; NameConflict = 0
         Active = 0; Inactive = 0; Total = [long]0; InUse = [long]0; Free = [long]0; Over80 = 0; Over90 = 0
     }
     $top = [System.Collections.Generic.List[object]]::new()
@@ -1683,6 +1685,10 @@ function Get-DhcpScopeAnalysis {
             }
             $members.Add($m)
             $servers.Add($server)
+            if ($m.StatsMissing) {
+                $notes.Add("No statistics returned by $server - its numbers are unknown (shown as 0)")
+                $noStatsRows++
+            }
             $u = [long]$m.AddressesInUse
             $t = [long]$m.AddressesFree + $u
             $m.TotalAddresses = $t
@@ -1798,14 +1804,26 @@ function Get-DhcpScopeAnalysis {
         }
         # --- 4b. summed pools cannot hold more addresses than the scope range: copies
         # that hand out the same addresses without failover are capped at the range
-        $overlap = $false
+        # Copies with different scope names are usually separate networks (sites)
+        # that reuse the same subnet: they keep their own pools and are flagged.
+        $overlap = $false; $nameConflict = $false
         if ($clusters.Count -gt 1) {
-            $rangeSize = Get-DhcpRangeSize -Rows $contributing
-            if ($rangeSize -gt 0 -and $total -gt $rangeSize) {
-                $notes.Add("Copies overlap: the pools add up to $total addresses but the scope range holds $rangeSize - counted as $rangeSize (use failover, or exclusions that do not overlap)")
-                $total = $rangeSize
-                if ($inUse -gt $total) { $inUse = $total }
-                $overlap = $true
+            $scopeNames.Clear()
+            foreach ($m in $contributing) {
+                $n = ([string]$m.Name).Trim()
+                if ($n.Length -gt 0 -and -not ($scopeNames -contains $n)) { $scopeNames.Add($n) }
+            }
+            if ($scopeNames.Count -gt 1) {
+                $nameConflict = $true
+                $notes.Add("Scope names differ ('" + ($scopeNames -join "' / '") + "') - probably separate networks reusing this subnet; each pool is counted")
+            } else {
+                $rangeSize = Get-DhcpRangeSize -Rows $contributing
+                if ($rangeSize -gt 0 -and $total -gt $rangeSize) {
+                    $notes.Add("Copies overlap: the pools add up to $total addresses but the scope range holds $rangeSize - counted as $rangeSize (use failover, or exclusions that do not overlap)")
+                    $total = $rangeSize
+                    if ($inUse -gt $total) { $inUse = $total }
+                    $overlap = $true
+                }
             }
         }
         $free = $total - $inUse
@@ -1834,6 +1852,7 @@ function Get-DhcpScopeAnalysis {
         }
 
         if ($overlap) { $redundancy += ' - OVERLAPPING POOLS (capped at scope range)' }
+        if ($nameConflict) { $redundancy += ' - DIFFERENT SCOPE NAMES (separate networks?)' }
         $notesText = $notes -join '; '
         foreach ($m in $all) {
             $m.Redundancy = $redundancy
@@ -1870,6 +1889,7 @@ function Get-DhcpScopeAnalysis {
             if ($category -eq 'Failover' -and $badStates.Count -gt 0) { $stats.FailoverDegraded++ }
             $stats.Active++
             if ($overlap) { $stats.Overlap++ }
+            if ($nameConflict) { $stats.NameConflict++ }
             $stats.Total += $total
             $stats.InUse += $inUse
             $stats.Free += $free
@@ -1902,6 +1922,8 @@ function Get-DhcpScopeAnalysis {
         MixedScopes      = $stats.Mixed
         UnknownScopes    = $stats.Unknown
         OverlapScopes    = $stats.Overlap
+        DifferentNameScopes = $stats.NameConflict
+        NoStatsRows      = $noStatsRows
         TotalAddresses   = $stats.Total
         AddressesInUse   = $stats.InUse
         AddressesFree    = $stats.Free
@@ -1925,7 +1947,7 @@ function New-DhcpScopeRow {
     param(
         [string]$ScopeId, [string]$DHCPServer, [string]$Name, [string]$Description,
         [string]$SubnetMask, [string]$StartRange, [string]$EndRange, [string]$ScopeState = 'Active',
-        [long]$AddressesFree, [long]$AddressesInUse, [long]$Reserved, [long]$Pending,
+        [long]$AddressesFree, [long]$AddressesInUse, [long]$Reserved, [long]$Pending, [bool]$StatsMissing = $false,
         [bool]$FailoverInfoAvailable = $true, [string]$FailoverRelationship, [string]$FailoverPartner,
         [string]$FailoverMode, [string]$FailoverState, [string]$FailoverServerRole
     )
@@ -1942,6 +1964,7 @@ function New-DhcpScopeRow {
         AddressesInUse        = $AddressesInUse
         Reserved              = $Reserved
         Pending               = $Pending
+        StatsMissing          = $StatsMissing
         FailoverInfoAvailable = $FailoverInfoAvailable
         FailoverRelationship  = $FailoverRelationship
         FailoverPartner       = $FailoverPartner
@@ -1968,20 +1991,25 @@ function New-DhcpScopeRow {
 function Test-DhcpServerReachable {
     <#
     .SYNOPSIS
-        Fast reachability check that needs no admin rights: ICMP echo (1 s), then
-        TCP 135 (RPC endpoint mapper used by the DHCP management API, 1.5 s).
-        A server that blocks ping but answers RPC is still queried.
+        Fast reachability check that needs no admin rights: ICMP echo, then TCP 135
+        (RPC endpoint mapper used by the DHCP management API). A server that blocks
+        ping but answers RPC is still queried.
+    .DESCRIPTION
+        One lost packet must not drop a server (and all of its scopes) from a run,
+        so a failed check is repeated once with twice the timeouts.
     #>
-    param([string]$ComputerName, [int]$PingTimeoutMs = 1000, [int]$TcpTimeoutMs = 1500)
-    $ping = [System.Net.NetworkInformation.Ping]::new()
-    try {
-        if ($ping.Send($ComputerName, $PingTimeoutMs).Status -eq [System.Net.NetworkInformation.IPStatus]::Success) { return $true }
-    } catch { } finally { $ping.Dispose() }
-    $tcp = [System.Net.Sockets.TcpClient]::new()
-    try {
-        $ar = $tcp.BeginConnect($ComputerName, 135, $null, $null)
-        if ($ar.AsyncWaitHandle.WaitOne($TcpTimeoutMs) -and $tcp.Connected) { return $true }
-    } catch { } finally { $tcp.Close() }
+    param([string]$ComputerName, [int]$PingTimeoutMs = 1000, [int]$TcpTimeoutMs = 1500, [int]$Attempts = 2)
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $ping = [System.Net.NetworkInformation.Ping]::new()
+        try {
+            if ($ping.Send($ComputerName, $PingTimeoutMs * $attempt).Status -eq [System.Net.NetworkInformation.IPStatus]::Success) { return $true }
+        } catch { } finally { $ping.Dispose() }
+        $tcp = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $ar = $tcp.BeginConnect($ComputerName, 135, $null, $null)
+            if ($ar.AsyncWaitHandle.WaitOne($TcpTimeoutMs * $attempt) -and $tcp.Connected) { return $true }
+        } catch { } finally { $tcp.Close() }
+    }
     return $false
 }
 
@@ -2012,12 +2040,18 @@ $ProgressPreference = 'SilentlyContinue'
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $server = [string]$Item.Server
 $out = [ordered]@{
-    Server = $server; Success = $false; Reachable = $true; Message = ''
-    Rows = @(); ScopeCount = 0; MissingScopeIds = @(); RelationshipCount = 0
+    Server = $server; Success = $false; Reachable = $true; Cancelled = $false; Message = ''
+    Rows = @(); ScopeCount = 0; MissingScopeIds = @(); NoStatsCount = 0; RelationshipCount = 0
     FailoverInfoAvailable = $false; FailoverError = ''; ElapsedMs = 0
 }
 try {
+    # Second attempt after an error: give a busy server / network a moment first
+    if ($Item.Retry) {
+        $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
+        while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+    }
     if ($Shared.Stop) {
+        $out.Cancelled = $true
         $out.Message = 'Cancelled'
     } elseif (-not (Test-DhcpServerReachable -ComputerName $server)) {
         $out.Reachable = $false
@@ -2052,6 +2086,16 @@ try {
             foreach ($st in @(Get-DhcpServerv4ScopeStatistics -ComputerName $server -ErrorAction Stop)) {
                 if ($null -ne $st) { $statsById[$st.ScopeId.ToString()] = $st }
             }
+            # A scope missing from the bulk answer is asked for on its own before
+            # it is reported without numbers (it is never dropped silently)
+            foreach ($sc in $scopes) {
+                $id = $sc.ScopeId.ToString()
+                if ($statsById.ContainsKey($id)) { continue }
+                try {
+                    $one = @(Get-DhcpServerv4ScopeStatistics -ComputerName $server -ScopeId $id -ErrorAction Stop)
+                    if ($one.Count -gt 0 -and $null -ne $one[0]) { $statsById[$id] = $one[0] }
+                } catch { }
+            }
 
             # 1 call: failover relationships = which scopes are replicated, and with whom
             $foById = @{}
@@ -2078,11 +2122,16 @@ try {
             foreach ($sc in $scopes) {
                 $id = $sc.ScopeId.ToString()
                 $st = $statsById[$id]
-                if ($null -eq $st) { $noStats++; continue }
-                $free = $st.AddressesFree; if ($null -eq $free) { $free = $st.Free }
-                $used = $st.AddressesInUse; if ($null -eq $used) { $used = $st.InUse }
-                $resv = $st.ReservedAddress; if ($null -eq $resv) { $resv = $st.Reserved }
-                $pend = $st.PendingOffers; if ($null -eq $pend) { $pend = $st.Pending }
+                $statsMissing = ($null -eq $st)
+                if ($statsMissing) {
+                    $noStats++
+                    $free = 0; $used = 0; $resv = 0; $pend = 0
+                } else {
+                    $free = $st.AddressesFree; if ($null -eq $free) { $free = $st.Free }
+                    $used = $st.AddressesInUse; if ($null -eq $used) { $used = $st.InUse }
+                    $resv = $st.ReservedAddress; if ($null -eq $resv) { $resv = $st.Reserved }
+                    $pend = $st.PendingOffers; if ($null -eq $pend) { $pend = $st.Pending }
+                }
                 $rel = $foById[$id]
                 $desc = [string]$sc.Description
                 if ([string]::IsNullOrWhiteSpace($desc)) { $desc = [string]$sc.Name }
@@ -2100,6 +2149,7 @@ try {
                     AddressesInUse        = [long]$used
                     Reserved              = [long]$resv
                     Pending               = [long]$pend
+                    StatsMissing          = $statsMissing
                     FailoverInfoAvailable = [bool]$out.FailoverInfoAvailable
                     FailoverRelationship  = $(if ($rel) { [string]$rel.Name } else { '' })
                     FailoverPartner       = $(if ($rel) { [string]$rel.PartnerServer } else { '' })
@@ -2118,7 +2168,8 @@ try {
             }
             $out.Rows = $rows.ToArray()
             $out.ScopeCount = $rows.Count
-            if ($noStats -gt 0) { $out.Message = "$noStats scope(s) returned no statistics" }
+            $out.NoStatsCount = $noStats
+            if ($noStats -gt 0) { $out.Message = "$noStats scope(s) returned no statistics (listed with 0 / 0, see Notes)" }
         }
         $out.Success = $true
     }
@@ -2217,6 +2268,7 @@ function New-DhcpCollectionState {
     param([hashtable]$Request)
     if (-not $Request.OptionBatchSize) { $Request.OptionBatchSize = 25 }
     if (-not $Request.Throttle) { $Request.Throttle = 20 }
+    if ($null -eq $Request.RetryDelayMs) { $Request.RetryDelayMs = 3000 }
     return @{
         Request           = $Request
         Rows              = [System.Collections.Generic.List[object]]::new()
@@ -2225,6 +2277,8 @@ function New-DhcpCollectionState {
         ServerResults     = [System.Collections.Generic.List[object]]::new()
         ServersDone       = 0
         ServersFailed     = 0
+        Retries           = 0
+        RetryRecovered    = 0
         OptionBatches     = 0
         OptionBatchesDone = 0
         OptionScopes      = 0
@@ -2298,9 +2352,27 @@ function Receive-DhcpTaskResult {
             }
         }
         'Server' {
-            $State.ServersDone++
             $server = [string]$Descriptor.Item.Server
+            $isRetry = [bool]$Descriptor.Item.Retry
+            $failed = ($null -eq $out) -or (-not $out.Success)
+            $cancelled = ($null -ne $out) -and [bool]$out.Cancelled
+            if ($failed -and -not $cancelled -and -not $isRetry) {
+                # One lost packet, busy server or RPC hiccup must not drop a server
+                # (and every scope only it serves): try once more after a pause
+                $reason = if ($null -ne $out) { $out.Message } elseif ($Result.Error) { $Result.Error } else { 'No result returned' }
+                $retryItem = @{}
+                foreach ($k in $Descriptor.Item.Keys) { $retryItem[$k] = $Descriptor.Item[$k] }
+                $retryItem.Retry = 1
+                $retryItem.RetryDelayMs = $req.RetryDelayMs
+                $next.Add(@{ Kind = 'Server'; Item = $retryItem })
+                $State.Retries++
+                Add-DhcpLog $State 'Warning' ('{0} - {1} - trying again' -f $server, $reason)
+                return $next.ToArray()
+            }
+            $State.ServersDone++
+            if ($isRetry -and -not $failed) { $State.RetryRecovered++ }
             $prefix = '[{0}/{1}] {2}' -f $State.ServersDone, $State.Servers.Count, $server
+            if ($isRetry) { $prefix += ' (2nd try)' }
             $status = 'OK'; $message = ''; $scopeCount = 0; $seconds = 0
             if ($null -eq $out) {
                 $status = 'Failed'
@@ -2386,12 +2458,27 @@ function Get-DhcpSummaryLines {
     if ($State) {
         $ok = $State.ServersDone - $State.ServersFailed
         $lines.Add(@{ Color = 'Info'; Message = ('Collected {0} scope row(s) from {1}/{2} server(s) in {3:N1}s' -f $s.ServerRows, $ok, $State.Servers.Count, $State.Stopwatch.Elapsed.TotalSeconds) })
+        if ($State.Retries -gt 0) {
+            $lines.Add(@{ Color = 'Info'; Message = ('{0} server(s) needed a second try - {1} succeeded on it' -f $State.Retries, $State.RetryRecovered) })
+        }
+        $failedServers = @($State.ServerResults | Where-Object { $_.Status -ne 'OK' })
+        if ($failedServers.Count -gt 0) {
+            $names = @($failedServers | Select-Object -First 10 | ForEach-Object { $_.Server })
+            $more = if ($failedServers.Count -gt 10) { " and $($failedServers.Count - 10) more" } else { '' }
+            $lines.Add(@{ Color = 'Error'; Message = ('{0} server(s) could not be read: {1}{2} - scopes that only they serve are missing (failover partners still report theirs)' -f $failedServers.Count, ($names -join ', '), $more) })
+        }
         if ($State.OptionScopes -gt 0 -and $State.OptionFailures -gt 0) {
             $lines.Add(@{ Color = 'Warning'; Message = ('Options: {0} of {1} scope lookups failed' -f $State.OptionFailures, $State.OptionScopes) })
         }
     }
     $lines.Add(@{ Color = 'Info'; Message = ('Unique scopes: {0} (active {1}, inactive {2})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes) })
     $lines.Add(@{ Color = 'Info'; Message = ('Redundancy: failover {0} (degraded {1}) | single server {2} | split {3} | mixed {4} | unknown {5}' -f $s.FailoverScopes, $s.DegradedFailover, $s.SingleServer, $s.SplitScopes, $s.MixedScopes, $s.UnknownScopes) })
+    if ($s.NoStatsRows -gt 0) {
+        $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) returned no statistics, even when asked one by one - listed with 0 / 0 (see Notes)' -f $s.NoStatsRows) })
+    }
+    if ($s.DifferentNameScopes -gt 0) {
+        $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope ID(s) exist on several servers under different scope names - probably separate networks reusing the subnet. The per-server export lists each one; the grouped export shows each scope ID once (see Notes)' -f $s.DifferentNameScopes) })
+    }
     if ($s.OverlapScopes -gt 0) {
         $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) run on several servers without failover and their pools overlap - counted at most once per address (see Notes)' -f $s.OverlapScopes) })
     }
@@ -2403,6 +2490,60 @@ function Get-DhcpSummaryLines {
         foreach ($g in $s.Top) {
             $lines.Add(@{ Color = $(if ($g.PercentageInUse -ge 90) { 'Warning' } else { 'Info' }); Message = ('  {0,6}%  {1,-15} {2}' -f $g.PercentageInUse, $g.ScopeId, $g.Description) })
         }
+    }
+    return $lines.ToArray()
+}
+
+function Compare-DhcpScopeCache {
+    <#
+    .SYNOPSIS
+        Explains "missing" scopes: every cached scope on a server queried in this run
+        that the run did not return, with the reason (server failed / scope removed).
+    .OUTPUTS
+        @{ Checked; Missing = Server, ScopeId, Name, Reason; NotInCache }
+    #>
+    param($State, [AllowEmptyCollection()][object[]]$CachedScopes)
+    $results = @{}
+    foreach ($r in $State.ServerResults) { $results[(Get-DhcpServerShortName -Name ([string]$r.Server))] = $r }
+    $ignoreCase = [System.StringComparer]::OrdinalIgnoreCase
+    $collected = [System.Collections.Generic.HashSet[string]]::new($ignoreCase)
+    foreach ($row in $State.Rows) { [void]$collected.Add((Get-DhcpServerShortName -Name ([string]$row.DHCPServer)) + '|' + [string]$row.ScopeId) }
+    $cached = [System.Collections.Generic.HashSet[string]]::new($ignoreCase)
+    $missing = [System.Collections.Generic.List[object]]::new()
+    foreach ($c in $CachedScopes) {
+        if ($null -eq $c -or -not $c.Server -or -not $c.ScopeId) { continue }
+        $short = Get-DhcpServerShortName -Name ([string]$c.Server)
+        $r = $results[$short]
+        if ($null -eq $r) { continue }   # server was not part of this run
+        $key = $short + '|' + [string]$c.ScopeId
+        if (-not $cached.Add($key) -or $collected.Contains($key)) { continue }
+        $reason = if ($r.Status -ne 'OK') { "$($r.Server) $($r.Status.ToLower()): $($r.Message)" } else { "no longer on $($r.Server) (deleted or moved)" }
+        $missing.Add([pscustomobject]@{ Server = [string]$c.Server; ScopeId = [string]$c.ScopeId; Name = [string]$c.Name; Reason = $reason })
+    }
+    $notInCache = 0
+    foreach ($k in $collected) { if (-not $cached.Contains($k)) { $notInCache++ } }
+    return @{ Checked = $cached.Count; Missing = $missing.ToArray(); NotInCache = $notInCache }
+}
+
+function Get-DhcpCacheCheckLines {
+    param($Comparison, [int]$MaxListed = 25)
+    $lines = [System.Collections.Generic.List[object]]::new()
+    if ($Comparison.Checked -eq 0) { return $lines.ToArray() }
+    $miss = @($Comparison.Missing)
+    if ($miss.Count -eq 0) {
+        $lines.Add(@{ Color = 'Success'; Message = ('Scope cache check: all {0} cached scope(s) on the queried servers were collected' -f $Comparison.Checked) })
+    } else {
+        $lines.Add(@{ Color = 'Warning'; Message = ('Scope cache check: {0} of {1} cached scope(s) were NOT collected:' -f $miss.Count, $Comparison.Checked) })
+        foreach ($grp in @($miss | Group-Object -Property Reason | Sort-Object -Property Count -Descending)) {
+            $lines.Add(@{ Color = 'Warning'; Message = ('  {0} x {1}' -f $grp.Count, $grp.Name) })
+        }
+        foreach ($m in @($miss | Select-Object -First $MaxListed)) {
+            $lines.Add(@{ Color = 'Info'; Message = ('    {0,-15} {1} ({2})' -f $m.ScopeId, $m.Name, $m.Server) })
+        }
+        if ($miss.Count -gt $MaxListed) { $lines.Add(@{ Color = 'Info'; Message = ('    ... and {0} more' -f ($miss.Count - $MaxListed)) }) }
+    }
+    if ($Comparison.NotInCache -gt 0) {
+        $lines.Add(@{ Color = 'Info'; Message = ('{0} collected scope(s) are not in the scope cache yet - Refresh Cache to be able to select them' -f $Comparison.NotInCache) })
     }
     return $lines.ToArray()
 }
@@ -4079,6 +4220,8 @@ $script:scopeByDisplayName = [System.Collections.Generic.Dictionary[string,objec
 $script:scopeNamesUpper = @()
 $script:selectedScopeNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $script:suppressScopeItemCheck = $false
+$script:scopeCacheUpdated = $null
+$script:dhcpRunUsedSelection = $false
 
 # DNA Center tab
 $script:dnaVisibleDevices = [System.Collections.Generic.List[object]]::new()
@@ -4716,6 +4859,7 @@ function Start-DhcpScopeCacheRefresh {
         }
         $scopes = $data.Scopes.ToArray()
         Set-DhcpScopeList -Scopes $scopes
+        $script:scopeCacheUpdated = Get-Date
         $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
         $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
         Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) in $([math]::Round($data.Stopwatch.Elapsed.TotalSeconds, 1))s" -Color 'Success' -LogBox $dhcpLogBox
@@ -4749,8 +4893,19 @@ function Start-DhcpCollection {
         OptionBatchSize  = 25
     }
 
-    if ($script:selectedScopeNames.Count -gt 0) {
+    $script:dhcpRunUsedSelection = $false
+    $allCachedSelected = ($script:selectedScopeNames.Count -gt 0 -and $script:selectedScopeNames.Count -ge $script:scopeByDisplayName.Count)
+    if ($allCachedSelected) {
+        # Everything in the cache is selected: read every scope on those servers, so
+        # scopes created after the cache was saved are not silently left out
+        $request.Servers = @(Merge-DhcpServerList -Entries @($script:allDHCPScopes | ForEach-Object { [string]$_.Server } | Where-Object { $_ }))
+        Write-Log -Message "All $($script:selectedScopeNames.Count) cached scope(s) are selected - collecting every scope on their $($request.Servers.Count) server(s)" -Color 'Info' -LogBox $dhcpLogBox
+    } elseif ($script:selectedScopeNames.Count -gt 0) {
         # Selected scopes take precedence: only their servers are queried, only those scope IDs
+        $script:dhcpRunUsedSelection = $true
+        if ($script:scopeCacheUpdated) {
+            Write-Log -Message "Selected scopes come from the scope cache saved $($script:scopeCacheUpdated.ToString('yyyy-MM-dd HH:mm')) - newer scopes are not included" -Color 'Info' -LogBox $dhcpLogBox
+        }
         $map = @{}
         $missing = 0
         foreach ($name in $script:selectedScopeNames) {
@@ -4855,6 +5010,13 @@ function Complete-DhcpCollection {
     $script:dhcpAnalysis = Get-DhcpScopeAnalysis -Rows $rows
     foreach ($line in @(Get-DhcpSummaryLines -Analysis $script:dhcpAnalysis -State $state)) {
         Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+    }
+    # Name every cached scope this run did not return, with the reason
+    if (-not $script:dhcpRunUsedSelection -and @($script:allDHCPScopes).Count -gt 0 -and -not $Job.Stopped) {
+        $comparison = Compare-DhcpScopeCache -State $state -CachedScopes @($script:allDHCPScopes)
+        foreach ($line in @(Get-DhcpCacheCheckLines -Comparison $comparison)) {
+            Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+        }
     }
     $btnExportDHCPWorkDir.Enabled = $true
     $btnExportDHCPFolder.Enabled = $true
@@ -6252,6 +6414,10 @@ HOW TO USE IT:
 
    STEP 4: Click "Collect DHCP Statistics" (Stop keeps what is collected)
       - A summary is written to the log and a CSV is exported automatically
+      - A server that fails is tried once more; servers that still fail are
+        named in the summary (scopes only they serve are missing)
+      - After a full collection the log compares the result with the scope
+        cache and lists every cached scope that was not collected, and why
 
 HOW THE NUMBERS ARE CALCULATED (redundancy-aware):
    - Failover partners (load balance or hot standby) both report the WHOLE
@@ -6261,6 +6427,9 @@ HOW THE NUMBERS ARE CALCULATED (redundancy-aware):
    - Added-up pools can never exceed the scope's address range: copies that
      hand out the same addresses without failover are capped at the range and
      marked "OVERLAPPING POOLS".
+   - The same scope ID under different scope names on different servers is
+     treated as separate networks (each pool counted), marked "DIFFERENT SCOPE
+     NAMES". The per-server export lists each one.
    - Inactive copies of a scope are not counted.
    - "Group by Scope ID on Export" writes one row per scope with the columns
      Redundancy, FailoverPartner, FailoverState and Notes (for example a
@@ -6369,6 +6538,7 @@ try {
     if (@($scopeCache.Items).Count -gt 0) {
         Set-DhcpScopeList -Scopes @($scopeCache.Items)
         $updated = ConvertTo-OctoDateTime $scopeCache.LastUpdated
+        $script:scopeCacheUpdated = $updated
         $when = if ($updated) { " ($($updated.ToString('MM/dd HH:mm')))" } else { '' }
         $script:lblScopeCacheStatus.Text = "Cache: $($script:allDHCPScopes.Count) scope(s) loaded$when"
         $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
