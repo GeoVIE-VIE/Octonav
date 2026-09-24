@@ -1,7 +1,7 @@
-# OctoNav - Complete Network Management Tool
+# NetGUI - Complete Network Management Tool
 
 ## Overview
-OctoNav is a comprehensive Windows PowerShell GUI application for network management, combining:
+NetGUI (previously OctoNav) is a comprehensive Windows PowerShell GUI application for network management, combining:
 - Network adapter configuration (XFER functionality)
 - DHCP scope statistics collection
 - Cisco DNA Center API integration
@@ -10,26 +10,32 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 
 ---
 
-## OctoNav.ps1 (single file)
+## NetGUI.ps1 (single file)
 
-`OctoNav.ps1` is the whole tool in one Windows PowerShell 5.1 script. It replaces
-`OctoNav-GUI-v2.3.ps1` and the `modules` folder, which have been removed.
+`NetGUI.ps1` is the whole tool in one Windows PowerShell 5.1 script. It was called
+`OctoNav.ps1` before, and it replaces `OctoNav-GUI-v2.3.ps1` and the `modules`
+folder, which have been removed.
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\OctoNav.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\NetGUI.ps1
 ```
 
 - **No administrator rights needed.** Only the Network Configuration tab (it changes
   adapter IP settings) needs "Run as Administrator"; every other tab works as a
   standard user.
-- **Settings and caches** (`octonav_settings.json`, the encrypted DHCP caches,
+- **Settings and caches** (`netgui_settings.json`, the encrypted DHCP caches,
   `PortTemplates.json`) stay next to the script, as before. When that folder is
-  read-only for the user, they go to `%LOCALAPPDATA%\OctoNav` instead.
+  read-only for the user, they go to `%LOCALAPPDATA%\NetGUI` instead.
+- **Coming from OctoNav:** your settings, caches and startup password carry over.
+  `octonav_settings.json` is read until NetGUI saves its own settings file, and
+  `%LOCALAPPDATA%\OctoNav` is copied to `%LOCALAPPDATA%\NetGUI` the first time that
+  folder is created (the old folder is left as it is). Shortcuts that start
+  `OctoNav.ps1` need to point to `NetGUI.ps1`.
 - **Cache password:** both encrypted DHCP caches use one password. A newly typed
   password is checked against your existing caches (or typed twice the first time),
   so a typo cannot lock a cache. If a cache was saved with a different password,
-  OctoNav asks for that password and can re-save the cache with your main one.
-- **Resources:** `Package-Resources.ps1` now embeds files into `OctoNav.ps1`.
+  NetGUI asks for that password and can re-save the cache with your main one.
+- **Resources:** `Package-Resources.ps1` now embeds files into `NetGUI.ps1`.
 
 ### DHCP numbers with and without redundancy
 
@@ -123,7 +129,8 @@ Empty files, one-line files and lines containing `</script>` are handled correct
 ## Files in Repository
 
 ### Main Application
-- **OctoNav-CompleteGUI-FIXED.ps1** - Main GUI application (~3,300 lines)
+- **NetGUI.ps1** - Main GUI application, everything in one file (see above)
+- **OctoNav-CompleteGUI-FIXED.ps1** - Older version of the GUI (~3,300 lines), kept for reference
   - ✅ Merged: XFER network configuration (Tab 1)
   - ✅ Merged: DHCP statistics collection (Tab 2 - Redesigned UI)
   - ✅ Merged: DNA Center API functions (Tab 3 - 25 functions)
@@ -218,8 +225,10 @@ $env:DNAC_SERVER2_URL = "https://dnac-dev.example.com"
 
 ### 2. Configure Output Directory (Optional)
 ```powershell
-$env:OCTONAV_OUTPUT_DIR = "D:\Reports\OctoNav"
+$env:NETGUI_OUTPUT_DIR = "D:\Reports\NetGUI"
 ```
+
+`OCTONAV_OUTPUT_DIR` (the earlier name) is still read when `NETGUI_OUTPUT_DIR` is not set.
 
 Default: `C:\DNACenter_Reports`
 
@@ -234,7 +243,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ### Launch the GUI
 ```powershell
-.\OctoNav-CompleteGUI-FIXED.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\NetGUI.ps1
 ```
 
 ### Tab 1: Network Configuration
@@ -390,7 +399,7 @@ All exports are CSV files saved to the configured output directory:
 
 ### Output directory errors
 - Check write permissions on `C:\DNACenter_Reports`
-- Set `OCTONAV_OUTPUT_DIR` to writable location
+- Set `NETGUI_OUTPUT_DIR` to writable location
 - Script will fall back to temp directory if needed
 
 ---

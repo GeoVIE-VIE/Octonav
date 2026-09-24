@@ -1,8 +1,8 @@
 # OctoNav v2.3 - Enhanced Network Management Tool
 
 > **Note:** The modular layout described below (`OctoNav-GUI-v2.3.ps1` plus the
-> `modules` folder) has been merged into a single script, `OctoNav.ps1`.
-> See README.md for how to run it.
+> `modules` folder) has been merged into a single script, `NetGUI.ps1` (the tool is
+> now called NetGUI). See README.md for how to run it.
 
 ## What's New in Version 2.3
 

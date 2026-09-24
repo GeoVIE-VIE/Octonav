@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Packages .RDOX files (or any files) into OctoNav as embedded Base64 resources
+    Packages .RDOX files (or any files) into NetGUI as embedded Base64 resources
 .DESCRIPTION
     Run this script after modifying your .RDOX files to repackage them into the tool.
 
     Usage:
     1. Place your .RDOX files in the 'resources' folder
     2. Run this script
-    3. The files will be embedded into OctoNav.ps1
+    3. The files will be embedded into NetGUI.ps1
 .EXAMPLE
     .\Package-Resources.ps1
 .EXAMPLE
@@ -17,11 +17,11 @@
 param(
     [string]$ResourceFolder = "$PSScriptRoot\resources",
     [string[]]$FileTypes = @("*.rdox", "*.xml", "*.txt"),
-    [string]$TargetScript = "$PSScriptRoot\OctoNav.ps1"
+    [string]$TargetScript = "$PSScriptRoot\NetGUI.ps1"
 )
 
 Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "  OctoNav Resource Packager" -ForegroundColor Cyan
+Write-Host "  NetGUI Resource Packager" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
 
