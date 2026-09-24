@@ -74,11 +74,25 @@ in a server name used to match the scopes of every site on that server.
 | You type | Filter finds | Prefix finds |
 |---|---|---|
 | `SITE1` | scopes with SITE1 in their name | scopes whose name starts with SITE1 |
-| `10.1` | scope IDs that contain 10.1 as whole octets: 10.1.5.0, not 10.10.5.0 or 110.1.5.0 | scope IDs 10.1.x.x |
-| `10.1.x.x` | the same as `10.1` | the same as `10.1` |
-| `100` | names that contain 100, and scope IDs with an octet of 100 | names that start with 100, and scope IDs 100.x.x.x |
+| `10.1` or `10.1.x.x` | scope IDs 10.1.x.x (not 10.10.x.x or 110.1.x.x) | the same |
+| `10.1.0.0/20` | scope IDs in that subnet (10.1.0.x to 10.1.15.x) | the same |
+| `100` | names that contain 100, and scope IDs 100.x.x.x | names that start with 100, and scope IDs 100.x.x.x |
 
 A comma means OR inside a box. When both boxes are filled, a scope has to match both.
+
+**Scopes that are not named after their site:** type the site code in Filter and
+click **Add Subnets**. NetGUI works out the subnets the matching scopes sit in and
+adds them to the filter, for example `SITE1, 10.45.0.0/20`. The list then also shows
+the scopes in those subnets that have other names, and the log names each of them.
+
+How the subnets are chosen:
+- Each matching scope starts with its own subnet.
+- A subnet is widened, up to a /16, only while the differently named scopes in it
+  stay fewer than the matching ones.
+- So a badly named scope inside a site's block is found, and a neighbouring site's
+  block is not added.
+
+The subnets in the filter are plain text, so you can edit or remove them.
 
 ### Speed
 

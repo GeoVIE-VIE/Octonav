@@ -3113,16 +3113,75 @@ function Get-DhcpCacheCheckLines {
     return $lines.ToArray()
 }
 
+function Get-DhcpPrefixMask {
+    # 24 -> 4294967040 (255.255.255.0)
+    param([int]$Length)
+    return ([long]4294967295 -bxor (([long]1 -shl (32 - $Length)) - 1))
+}
+
+function ConvertTo-DhcpIPv4Text {
+    # 167838208 -> "10.1.0.0"
+    param([long]$Number)
+    return ('{0}.{1}.{2}.{3}' -f (($Number -shr 24) -band 255), (($Number -shr 16) -band 255), (($Number -shr 8) -band 255), ($Number -band 255))
+}
+
+function ConvertFrom-DhcpSubnetText {
+    <#
+    .SYNOPSIS
+        "10.20.0.0/22" (or "10.20/22") -> @{ Network; Length; Mask; Cidr }.
+        $null when the text is not a subnet, or is wider than a /8.
+    #>
+    param([string]$Text)
+    if ($Text.Trim() -notmatch '^(\d{1,3}(?:\.\d{1,3}){0,3})\.?/(\d{1,2})$') { return $null }
+    $length = [int]$Matches[2]
+    $octets = [System.Collections.Generic.List[long]]::new()
+    foreach ($o in $Matches[1].Split('.')) { $octets.Add([long]$o) }
+    if ($length -lt 8 -or $length -gt 32) { return $null }
+    foreach ($o in $octets) { if ($o -gt 255) { return $null } }
+    while ($octets.Count -lt 4) { $octets.Add(0) }
+    $mask = Get-DhcpPrefixMask -Length $length
+    $network = (($octets[0] -shl 24) -bor ($octets[1] -shl 16) -bor ($octets[2] -shl 8) -bor $octets[3]) -band $mask
+    return @{ Network = $network; Length = $length; Mask = $mask; Cidr = ('{0}/{1}' -f (ConvertTo-DhcpIPv4Text -Number $network), $length) }
+}
+
+function Sort-DhcpScopesByDisplayName {
+    <#
+    .SYNOPSIS
+        The scopes in display-name order (ordinal, ignoring case).
+    .DESCRIPTION
+        The names are sorted together with an index array. [Array]::Sort(names, objects)
+        can sort a converted copy of the object array and leave the original unsorted,
+        which made the scope filter show the wrong scopes. The result is checked, and
+        Sort-Object is used if the index array did not move with the names.
+    #>
+    param([AllowEmptyCollection()][object[]]$Scopes)
+    if ($null -eq $Scopes -or $Scopes.Count -eq 0) { return ,[object[]]@() }
+    $count = $Scopes.Count
+    $keys = [string[]]::new($count)
+    $order = [int[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) { $keys[$i] = [string]$Scopes[$i].DisplayName; $order[$i] = $i }
+    [Array]::Sort($keys, $order, [System.StringComparer]::OrdinalIgnoreCase)
+    $sorted = [object[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) {
+        $sorted[$i] = $Scopes[$order[$i]]
+        if (-not [string]::Equals([string]$sorted[$i].DisplayName, $keys[$i], [System.StringComparison]::Ordinal)) {
+            return ,[object[]]@($Scopes | Sort-Object -Property { [string]$_.DisplayName })
+        }
+    }
+    return ,$sorted
+}
+
 function Get-DhcpScopeFilterKeys {
     <#
     .SYNOPSIS
-        What the scope filter searches: the scope name (upper case) and the scope ID
-        with a dot on each side, so number terms match whole octets.
+        What the scope filter searches: the scope name (upper case) and the scope ID.
     .DESCRIPTION
         The DHCP server name is not searched. One server often serves several sites,
         so a site code in its name would match the scopes of every site on it.
+        Numbers and PrefixLengths (for subnets) are filled in the first time a subnet
+        is used - see Initialize-DhcpScopeFilterNumbers.
     .OUTPUTS
-        @{ Names; Ids } - string arrays in the same order as -Scopes
+        @{ Names; Ids; Numbers; PrefixLengths; Scopes } - arrays in the same order as -Scopes
     #>
     param([AllowEmptyCollection()][object[]]$Scopes)
     if ($null -eq $Scopes) { $Scopes = @() }
@@ -3131,39 +3190,84 @@ function Get-DhcpScopeFilterKeys {
     for ($i = 0; $i -lt $Scopes.Count; $i++) {
         $s = $Scopes[$i]
         $name = [string]$s.Name
-        $id = [string]$s.ScopeId
-        if ((-not $name -or -not $id) -and [string]$s.DisplayName -match '^(.*) \(([0-9.]+)\) - ') {
+        $id = ([string]$s.ScopeId).Trim()
+        if ((-not $name -or -not $id) -and [string]$s.DisplayName -match '^(.*) \((\d{1,3}(?:\.\d{1,3}){3})\) - ') {
             # entry without Name / ScopeId: read them from "Name (ScopeId) - Server"
             if (-not $name) { $name = $Matches[1] }
             if (-not $id) { $id = $Matches[2] }
         }
         $names[$i] = $name.ToUpperInvariant()
-        $ids[$i] = '.' + $id.Trim() + '.'
+        $ids[$i] = '.' + $id + '.'
     }
-    return @{ Names = $names; Ids = $ids }
+    return @{ Names = $names; Ids = $ids; Numbers = $null; PrefixLengths = $null; Scopes = $Scopes }
+}
+
+function Initialize-DhcpScopeFilterNumbers {
+    <#
+    .SYNOPSIS
+        Fills in Keys.Numbers (the scope ID as a number, -1 when it is not IPv4) and
+        Keys.PrefixLengths (the subnet mask length, 24 when unknown). Done once, the
+        first time a subnet is used, so loading the scope cache stays fast.
+    #>
+    param($Keys)
+    if ($null -ne $Keys.Numbers) { return }
+    $maskLengths = @{}
+    for ($len = 0; $len -le 32; $len++) { $maskLengths[(ConvertTo-DhcpIPv4Text -Number (Get-DhcpPrefixMask -Length $len))] = $len }
+    $ids = $Keys.Ids
+    $scopes = $Keys.Scopes
+    $count = $ids.Count
+    $withMask = [Math]::Min($count, $scopes.Count)
+    $numbers = [long[]]::new($count)
+    $lengths = [int[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) {
+        $ip = $null
+        $numbers[$i] = -1
+        if ([System.Net.IPAddress]::TryParse($ids[$i].Trim('.'), [ref]$ip)) {
+            $b = $ip.GetAddressBytes()
+            if ($b.Length -eq 4) { $numbers[$i] = (([long]$b[0] * 256 + $b[1]) * 256 + $b[2]) * 256 + $b[3] }
+        }
+        $mask = if ($i -lt $withMask) { [string]$scopes[$i].SubnetMask } else { '' }
+        $len = if ($mask -eq '255.255.255.0') { 24 } else { $maskLengths[$mask.Trim()] }
+        $lengths[$i] = if ($null -ne $len) { $len } else { 24 }
+    }
+    $Keys.Numbers = $numbers
+    $Keys.PrefixLengths = $lengths
 }
 
 function Split-DhcpScopeFilterTerms {
     <#
     .SYNOPSIS
-        Sorts filter terms into name terms and scope ID terms.
+        Sorts filter terms into name terms, scope ID terms and subnets.
     .DESCRIPTION
-        Letters: searched in the scope name. Digits with dots (10.20, 10.20.x.x): scope
-        ID only, as whole octets. A plain number (100): both the name and the scope ID.
+        10.20 or 10.20.x.x - scope IDs that start with 10.20 (whole octets)
+        10.20.0.0/22       - scope IDs in that subnet (/8 or narrower)
+        100                - names containing 100, and scope IDs that start with 100
+        anything else      - a name term
+        Count includes terms that cannot match anything (a half-typed subnet), so they
+        show no scopes instead of all of them.
     #>
     param([AllowEmptyCollection()][string[]]$Terms)
     $name = [System.Collections.Generic.List[string]]::new()
     $id = [System.Collections.Generic.List[string]]::new()
+    $nets = [System.Collections.Generic.List[long]]::new()
+    $masks = [System.Collections.Generic.List[long]]::new()
+    $count = 0
     foreach ($raw in $Terms) {
         $t = ([string]$raw).Trim().ToUpperInvariant()
+        if (-not $t) { continue }
+        $count++
+        if ($t.Contains('/')) {
+            $subnet = ConvertFrom-DhcpSubnetText -Text $t
+            if ($subnet) { $nets.Add($subnet.Network); $masks.Add($subnet.Mask); continue }
+        }
         $octets = ($t -replace '(\.(X|\*))+$', '').Trim('.')
         if ($octets -match '^[0-9]+(\.[0-9]+)*$') {
             $id.Add('.' + $octets + '.')
             if ($t.Contains('.')) { continue }
         }
-        if ($t) { $name.Add($t) }
+        $name.Add($t)
     }
-    return @{ Name = $name.ToArray(); Id = $id.ToArray() }
+    return @{ Name = $name.ToArray(); Id = $id.ToArray(); Net = $nets.ToArray(); Mask = $masks.ToArray(); Count = $count }
 }
 
 function Find-DhcpScopeMatches {
@@ -3172,39 +3276,156 @@ function Find-DhcpScopeMatches {
         Indexes of the scopes that pass the filter boxes (comma = OR inside a box,
         both boxes = AND).
     .DESCRIPTION
-        Contains: the scope name contains the text, or the scope ID contains the numbers
-        as whole octets - 10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x.
-        Prefix: the scope name starts with the text, or the scope ID starts with the numbers.
+        Contains box: the scope name contains the text. Prefix box: the name starts with it.
+        In both boxes, numbers match the scope ID from the first octet (10.1 finds
+        10.1.x.x but not 10.10.x.x or 110.1.x.x) and a subnet (10.1.0.0/20) matches the
+        scope IDs inside it.
     .PARAMETER Keys
         Output of Get-DhcpScopeFilterKeys
     #>
     param($Keys, [AllowEmptyCollection()][string[]]$ContainsTerms = @(), [AllowEmptyCollection()][string[]]$PrefixTerms = @())
     $contains = Split-DhcpScopeFilterTerms -Terms $ContainsTerms
     $prefix = Split-DhcpScopeFilterTerms -Terms $PrefixTerms
-    $nameIn = $contains.Name; $idIn = $contains.Id
-    $nameStart = $prefix.Name; $idStart = $prefix.Id
-    $usePrefix = ($nameStart.Count + $idStart.Count) -gt 0
-    $useContains = ($nameIn.Count + $idIn.Count) -gt 0
+    $nameIn = $contains.Name; $idIn = $contains.Id; $netIn = $contains.Net; $maskIn = $contains.Mask
+    $nameStart = $prefix.Name; $idStart = $prefix.Id; $netStart = $prefix.Net; $maskStart = $prefix.Mask
+    $usePrefix = $prefix.Count -gt 0
+    $useContains = $contains.Count -gt 0
+    $subnetIn = $netIn.Count -gt 0
+    $subnetStart = $netStart.Count -gt 0
+    if ($subnetIn -or $subnetStart) { Initialize-DhcpScopeFilterNumbers -Keys $Keys }
     $ordinal = [System.StringComparison]::Ordinal
     $names = $Keys.Names
     $ids = $Keys.Ids
+    $numbers = $Keys.Numbers
     $hits = [System.Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $names.Count; $i++) {
         if ($usePrefix) {
             $ok = $false
             foreach ($t in $nameStart) { if ($names[$i].StartsWith($t, $ordinal)) { $ok = $true; break } }
             if (-not $ok) { foreach ($t in $idStart) { if ($ids[$i].StartsWith($t, $ordinal)) { $ok = $true; break } } }
+            if (-not $ok -and $subnetStart -and $numbers[$i] -ge 0) { for ($k = 0; $k -lt $netStart.Count; $k++) { if (($numbers[$i] -band $maskStart[$k]) -eq $netStart[$k]) { $ok = $true; break } } }
             if (-not $ok) { continue }
         }
         if ($useContains) {
             $ok = $false
             foreach ($t in $nameIn) { if ($names[$i].Contains($t)) { $ok = $true; break } }
-            if (-not $ok) { foreach ($t in $idIn) { if ($ids[$i].Contains($t)) { $ok = $true; break } } }
+            if (-not $ok) { foreach ($t in $idIn) { if ($ids[$i].StartsWith($t, $ordinal)) { $ok = $true; break } } }
+            if (-not $ok -and $subnetIn -and $numbers[$i] -ge 0) { for ($k = 0; $k -lt $netIn.Count; $k++) { if (($numbers[$i] -band $maskIn[$k]) -eq $netIn[$k]) { $ok = $true; break } } }
             if (-not $ok) { continue }
         }
         $hits.Add($i)
     }
     return ,$hits.ToArray()
+}
+
+function Get-DhcpCountInRange {
+    # How many values of the sorted, distinct array lie between Low and High (inclusive)
+    param([long[]]$Sorted, [long]$Low, [long]$High)
+    $from = [Array]::BinarySearch($Sorted, $Low)
+    if ($from -lt 0) { $from = -bnot $from }
+    $to = [Array]::BinarySearch($Sorted, $High)
+    if ($to -lt 0) { $to = -bnot $to } else { $to++ }
+    return ($to - $from)
+}
+
+function Get-DhcpScopeSubnets {
+    <#
+    .SYNOPSIS
+        The subnets that the scopes with matching names sit in ("Add Subnets"), and the
+        scopes with other names inside them.
+    .DESCRIPTION
+        Each matching scope starts as its own subnet. A subnet is widened to the next
+        larger block that holds more scopes, up to a /16, while the scopes in it with
+        other names stay fewer than the matching ones. So a badly named scope among a
+        site's scopes is taken in, and a neighbouring site's block is not.
+        Scopes are counted once per scope ID (failover partners list the same ID twice).
+    .OUTPUTS
+        @{ Matched = indexes of the scopes whose names match;
+           Subnets = @(@{ Cidr; Network; Length; MatchedIds; Added = indexes of the scopes
+                          with other names in the subnet }) }
+    #>
+    param($Keys, [AllowEmptyCollection()][string[]]$NameTerms)
+    Initialize-DhcpScopeFilterNumbers -Keys $Keys
+    $names = $Keys.Names
+    $numbers = $Keys.Numbers
+    $terms = @(foreach ($t in $NameTerms) { $u = ([string]$t).Trim().ToUpperInvariant(); if ($u) { $u } })
+    $isMatch = [bool[]]::new($names.Count)
+    $matched = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        foreach ($t in $terms) { if ($names[$i].Contains($t)) { $isMatch[$i] = $true; $matched.Add($i); break } }
+    }
+    $allSet = [System.Collections.Generic.SortedSet[long]]::new()
+    $matchSet = [System.Collections.Generic.SortedSet[long]]::new()
+    for ($i = 0; $i -lt $numbers.Count; $i++) {
+        if ($numbers[$i] -lt 0) { continue }
+        [void]$allSet.Add($numbers[$i])
+        if ($isMatch[$i]) { [void]$matchSet.Add($numbers[$i]) }
+    }
+    $all = [long[]]::new($allSet.Count); $allSet.CopyTo($all)
+    $named = [long[]]::new($matchSet.Count); $matchSet.CopyTo($named)
+
+    # start: the subnet of each matching scope (a subnet inside another one is dropped)
+    $blocks = [System.Collections.Generic.List[object]]::new()
+    foreach ($i in $matched) {
+        if ($numbers[$i] -lt 0) { continue }
+        $len = $Keys.PrefixLengths[$i]
+        $blocks.Add(@{ Network = ($numbers[$i] -band (Get-DhcpPrefixMask -Length $len)); Length = $len })
+    }
+    $ordered = @($blocks | Sort-Object -Property @{ Expression = { $_.Length } }, @{ Expression = { $_.Network } })
+    $blocks.Clear()
+    foreach ($b in $ordered) {
+        $inside = $false
+        foreach ($o in $blocks) { if (($b.Network -band (Get-DhcpPrefixMask -Length $o.Length)) -eq $o.Network) { $inside = $true; break } }
+        if (-not $inside) { $blocks.Add($b) }
+    }
+
+    # widen while the other names stay fewer than the matching ones
+    do {
+        $changed = $false
+        foreach ($b in @($blocks)) {
+            if (-not $blocks.Contains($b)) { continue }
+            $size = [long]1 -shl (32 - $b.Length)
+            $inside = Get-DhcpCountInRange -Sorted $all -Low $b.Network -High ($b.Network + $size - 1)
+            $wider = $null
+            for ($len = $b.Length - 1; $len -ge 16; $len--) {
+                $net = $b.Network -band (Get-DhcpPrefixMask -Length $len)
+                $high = $net + ([long]1 -shl (32 - $len)) - 1
+                $total = Get-DhcpCountInRange -Sorted $all -Low $net -High $high
+                if ($total -gt $inside) { $wider = @{ Network = $net; Length = $len; High = $high; Total = $total }; break }
+            }
+            if ($null -eq $wider) { continue }
+            $hits = Get-DhcpCountInRange -Sorted $named -Low $wider.Network -High $wider.High
+            if (($wider.Total - $hits) -ge $hits) { continue }
+            $mask = Get-DhcpPrefixMask -Length $wider.Length
+            for ($k = $blocks.Count - 1; $k -ge 0; $k--) {
+                if (($blocks[$k].Network -band $mask) -eq $wider.Network) { $blocks.RemoveAt($k) }
+            }
+            $blocks.Add(@{ Network = $wider.Network; Length = $wider.Length })
+            $changed = $true
+        }
+    } while ($changed)
+
+    $subnets = foreach ($b in @($blocks | Sort-Object -Property @{ Expression = { $_.Network } })) {
+        $mask = Get-DhcpPrefixMask -Length $b.Length
+        $added = [System.Collections.Generic.List[int]]::new()
+        for ($i = 0; $i -lt $numbers.Count; $i++) {
+            if (-not $isMatch[$i] -and $numbers[$i] -ge 0 -and ($numbers[$i] -band $mask) -eq $b.Network) { $added.Add($i) }
+        }
+        # in address order (stable for the same ID)
+        $addedIndexes = $added.ToArray()
+        $addedKeys = [long[]]::new($addedIndexes.Count)
+        for ($k = 0; $k -lt $addedIndexes.Count; $k++) { $addedKeys[$k] = $numbers[$addedIndexes[$k]] * 1048576 + $k }
+        [Array]::Sort($addedKeys, $addedIndexes)
+        $high = $b.Network + ([long]1 -shl (32 - $b.Length)) - 1
+        @{
+            Cidr       = ('{0}/{1}' -f (ConvertTo-DhcpIPv4Text -Number $b.Network), $b.Length)
+            Network    = $b.Network
+            Length     = $b.Length
+            MatchedIds = (Get-DhcpCountInRange -Sorted $named -Low $b.Network -High $high)
+            Added      = $addedIndexes
+        }
+    }
+    return @{ Matched = $matched.ToArray(); Subnets = @($subnets) }
 }
 
 function Get-DhcpExportColumns {
@@ -4961,7 +5182,7 @@ $script:dhcpState = $null
 $script:dhcpCacheJob = $null
 $script:allDHCPScopes = @()
 $script:scopeByDisplayName = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-$script:scopeFilterKeys = @{ Names = [string[]]@(); Ids = [string[]]@() }
+$script:scopeFilterKeys = Get-DhcpScopeFilterKeys -Scopes @()
 $script:selectedScopeNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $script:suppressScopeItemCheck = $false
 $script:scopeCacheUpdated = $null
@@ -5447,16 +5668,17 @@ $dhcpScopeCard = New-NetGuiCard -Bounds @(16, 228, 700, 314) -Title 'Scopes (Opt
 $script:lblScopeCacheStatus = New-NetGuiControl Label @(162, 19, 380, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Tag = 'Muted' }) $dhcpScopeCard
 $script:btnRefreshScopeCache = New-NetGuiControl Button @(554, 12, 130, 28) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeCard
 [void](New-NetGuiControl Label @(16, 55, 40, 20) ([ordered]@{ Text = 'Filter' }) $dhcpScopeCard)
-$script:ScopeFilterPlaceholder = 'Scope name or ID, e.g., SITE1, 10.20'
+$script:ScopeFilterPlaceholder = 'Name, ID or subnet, e.g., SITE1, 10.20.0.0/22'
 $script:PrefixFilterPlaceholder = 'e.g., ZA or 10.20'
 $script:txtScopeListFilter = New-NetGuiControl TextBox @(60, 52, 290, 23) ([ordered]@{ MaxLength = 500; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeCard
 [void](New-NetGuiControl Label @(366, 55, 40, 20) ([ordered]@{ Text = 'Prefix' }) $dhcpScopeCard)
-$script:txtPrefixFilter = New-NetGuiControl TextBox @(410, 52, 136, 23) ([ordered]@{ MaxLength = 10; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeCard
+$script:txtPrefixFilter = New-NetGuiControl TextBox @(410, 52, 136, 23) ([ordered]@{ MaxLength = 100; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeCard
 $script:lstDHCPScopes = New-NetGuiControl CheckedListBox @(16, 86, 530, 168) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dhcpScopeCard
 $btnSelectAllScopes = New-NetGuiControl Button @(558, 86, 126, 28) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeCard
 $btnSelectNoneScopes = New-NetGuiControl Button @(558, 120, 126, 28) ([ordered]@{ Text = 'Select None' }) $dhcpScopeCard
-$script:lblVisibleScopes = New-NetGuiControl Label @(558, 156, 126, 40) ([ordered]@{ Tag = 'Muted' }) $dhcpScopeCard
-[void](New-NetGuiControl Label @(16, 262, 668, 38) ([ordered]@{ Text = "Searches scope names and IDs, not server names. 10.1 finds 10.1.x.x, not 10.10.x.x.`nComma = OR. Select All Visible checks every match; selections stay when the filter changes."; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
+$script:btnAddSubnets = New-NetGuiControl Button @(558, 154, 126, 28) ([ordered]@{ Text = 'Add Subnets'; Enabled = $false }) $dhcpScopeCard
+$script:lblVisibleScopes = New-NetGuiControl Label @(558, 190, 126, 40) ([ordered]@{ Tag = 'Muted' }) $dhcpScopeCard
+[void](New-NetGuiControl Label @(16, 262, 668, 38) ([ordered]@{ Text = "Names match anywhere. IDs match from the start (10.1 = 10.1.x.x) or by subnet (10.1.0.0/20). Comma = OR.`nAdd Subnets adds differently named scopes in the same subnets. Server names are not searched."; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
 
 # --- Actions (bottom left)
 $btnCollectDHCP = New-NetGuiControl Button @(16, 554, 220, 40) ([ordered]@{ Text = 'Collect DHCP Statistics'; Tag = 'Primary'; Anchor = 'Bottom,Left' }) $tab2
@@ -5475,8 +5697,9 @@ try { if ([int]$script:Settings.DHCPParallelServers -ge 1 -and [int]$script:Sett
 $script:numConcurrency = New-NetGuiControl NumericUpDown @(328, 97, 60, 23) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsCard
 $toolTip.SetToolTip($script:chkGroupByScope, "One row per Scope ID:`n- failover partners report the whole scope, so they are counted once`n- split scopes (same ID, no failover) have their pools added together`n- inactive copies are not counted")
 $toolTip.SetToolTip($script:numConcurrency, 'How many DHCP servers (and option lookups) are queried at the same time.')
-$toolTip.SetToolTip($script:txtScopeListFilter, "Finds scopes whose name contains the text, or whose scope ID contains the numbers as whole octets:`n  SITE1 - scopes with SITE1 in their name`n  10.20 - 10.20.5.0 yes; 10.200.5.0 and 110.20.5.0 no`nComma = OR. The DHCP server name is not searched.")
-$toolTip.SetToolTip($script:txtPrefixFilter, "Finds scopes whose name starts with the text, or whose scope ID starts with the numbers:`n  ZA - names starting with ZA`n  10 - every 10.x.x.x scope`nComma = OR. With a Filter as well, both must match.")
+$toolTip.SetToolTip($script:txtScopeListFilter, "Finds scopes whose name contains the text, or whose scope ID starts with the numbers or is in the subnet:`n  SITE1 - scopes with SITE1 in their name`n  10.20 - 10.20.x.x (not 10.200.x.x or 110.20.x.x)`n  10.20.0.0/22 - 10.20.0.x to 10.20.3.x`nComma = OR. The DHCP server name is not searched.")
+$toolTip.SetToolTip($script:txtPrefixFilter, "Finds scopes whose name starts with the text, or whose scope ID starts with the numbers or is in the subnet:`n  ZA - names starting with ZA`n  10 - every 10.x.x.x scope`nComma = OR. With a Filter as well, both must match.")
+$toolTip.SetToolTip($script:btnAddSubnets, "Adds the subnets of the scopes whose names match the Filter (for example 10.45.0.0/20) to the filter,`nso scopes in them that are named differently are listed too. The log names every scope this adds.`nA subnet is only widened while differently named scopes stay fewer than the matching ones,`nso a neighbouring site's block is not added.")
 
 # --- Log and export (right column)
 $dhcpLogCard = New-NetGuiCard -Bounds @(728, 164, 436, 430) -Title 'Collection Log' -Parent $tab2 -Anchor 'Top,Bottom,Left,Right'
@@ -5528,9 +5751,7 @@ function Set-DhcpScopeList {
     param([object[]]$Scopes)
     $valid = [System.Collections.Generic.List[object]]::new()
     foreach ($s in $Scopes) { if ($null -ne $s -and $s.DisplayName) { $valid.Add($s) } }
-    $sorted = $valid.ToArray()
-    $keys = [string[]]@(foreach ($s in $sorted) { [string]$s.DisplayName })
-    [Array]::Sort($keys, $sorted, [System.StringComparer]::OrdinalIgnoreCase)
+    $sorted = Sort-DhcpScopesByDisplayName -Scopes $valid.ToArray()
     $script:allDHCPScopes = $sorted
     $script:scopeFilterKeys = Get-DhcpScopeFilterKeys -Scopes $sorted
     $script:scopeByDisplayName.Clear()
@@ -5576,6 +5797,7 @@ function Update-ScopeListView {
 
     $containsTerms = @($containsText.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 3 })
     $prefixTerms = @($prefixText.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 2 })
+    $script:btnAddSubnets.Enabled = @((Split-DhcpScopeFilterTerms -Terms $containsTerms).Name).Count -gt 0
     $containsWaiting = $containsText -and $containsTerms.Count -eq 0
     $prefixWaiting = $prefixText -and $prefixTerms.Count -eq 0
     if ($containsWaiting -and $prefixWaiting) { $script:lblVisibleScopes.Text = '(filter: 3+ chars, prefix: 2+ chars)'; return }
@@ -5604,6 +5826,55 @@ function Update-ScopeListView {
         $list.EndUpdate()
     }
     Update-ScopeCountLabel
+}
+
+function Add-DhcpScopeSubnetsToFilter {
+    <#
+    .SYNOPSIS
+        "Add Subnets": adds the subnets of the scopes whose names match the Filter box
+        to the filter, so differently named scopes in them are listed too. The log
+        names every scope that comes in this way.
+    #>
+    $text = $script:txtScopeListFilter.Text.Trim()
+    if ($text -eq $script:ScopeFilterPlaceholder) { $text = '' }
+    $terms = @($text.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 3 })
+    $nameTerms = @((Split-DhcpScopeFilterTerms -Terms $terms).Name)
+    if ($nameTerms.Count -eq 0) { return }
+    $found = Get-DhcpScopeSubnets -Keys $script:scopeFilterKeys -NameTerms $nameTerms
+    $what = $nameTerms -join ' or '
+    if ($found.Matched.Count -eq 0) {
+        Write-Log -Message "Add Subnets: no scope name contains $what" -Color 'Warning' -LogBox $dhcpLogBox
+        return
+    }
+    Write-Log -Message ('Add Subnets: {0} scope(s) have {1} in their name. Their subnets:' -f $found.Matched.Count, $what) -Color 'Info' -LogBox $dhcpLogBox
+    $inFilter = [System.Collections.Generic.HashSet[string]]::new([string[]]$terms, [System.StringComparer]::OrdinalIgnoreCase)
+    $new = [System.Collections.Generic.List[string]]::new()
+    foreach ($subnet in $found.Subnets) {
+        $others = [System.Collections.Generic.List[string]]::new()
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($i in $subnet.Added) {
+            $s = $script:allDHCPScopes[$i]
+            $label = if ($s.ScopeId) { '{0} ({1})' -f $s.Name, $s.ScopeId } else { [string]$s.DisplayName }
+            if ($seen.Add($label)) { $others.Add($label) }
+        }
+        if ($others.Count -eq 0) {
+            Write-Log -Message ('  {0} - no differently named scopes' -f $subnet.Cidr) -Color 'Info' -LogBox $dhcpLogBox
+            continue
+        }
+        $list = ($others | Select-Object -First 10) -join ', '
+        if ($others.Count -gt 10) { $list += (' and {0} more' -f ($others.Count - 10)) }
+        Write-Log -Message ('  {0} - adds {1} differently named scope(s): {2}' -f $subnet.Cidr, $others.Count, $list) -Color 'Success' -LogBox $dhcpLogBox
+        if ($inFilter.Add($subnet.Cidr)) { $new.Add($subnet.Cidr) }
+    }
+    if ($new.Count -eq 0) {
+        Write-Log -Message 'Add Subnets: nothing to add' -Color 'Info' -LogBox $dhcpLogBox
+        return
+    }
+    $script:filterChangeFromCode = $true
+    try { $script:txtScopeListFilter.Text = $text + ', ' + ($new -join ', ') }
+    finally { $script:filterChangeFromCode = $false }
+    Update-ScopeFilterColors
+    Update-ScopeListView
 }
 
 function Set-DhcpBusy {
@@ -5973,6 +6244,10 @@ $script:scopeFilterTimer.Add_Tick({
     Update-ScopeListView
 })
 
+$script:btnAddSubnets.Add_Click({
+    try { Add-DhcpScopeSubnetsToFilter }
+    catch { Write-Log -Message "Add Subnets failed: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox }
+})
 $btnSelectAllScopes.Add_Click({
     $list = $script:lstDHCPScopes
     $list.BeginUpdate()
@@ -7234,8 +7509,9 @@ Collects scope usage from your Windows DHCP servers, many servers at once.
   - Nothing selected = all domain DHCP servers
 2. Optional - select specific scopes:
   - "Refresh Cache" loads all scopes
-  - Filter (3+ characters, comma = OR): the scope name contains the text, or the scope ID contains the numbers as whole octets - 10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x
-  - Prefix (2+ characters): the scope name starts with the text, or the scope ID starts with the numbers - 10 finds every 10.x.x.x scope
+  - Filter (3+ characters, comma = OR): the scope name contains the text, the scope ID starts with the numbers (10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x), or the scope ID is in the subnet (10.1.0.0/20)
+  - Prefix (2+ characters): the scope name starts with the text; numbers and subnets work as in Filter - 10 finds every 10.x.x.x scope
+  - "Add Subnets" finds a site's scopes that are not named after it: type the site code, click it, and the subnets of the matching scopes (for example 10.45.0.0/20) are added to the filter. The log names every scope that comes in this way. A subnet is only widened while differently named scopes in it stay fewer than the matching ones, so a neighbouring site's block is not added
   - The DHCP server name is not searched, so a site code in a server name does not bring in the other sites that server serves
   - "Select All Visible"; selections are kept when you change the filter
   - The server and scope caches are encrypted with ONE password. If a cache does not open, you can type its password again or skip it; after a skip, "Refresh Cache" rebuilds it with your current password.
