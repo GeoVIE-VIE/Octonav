@@ -65,12 +65,22 @@ Export" writes one row per scope, plus `ServerCount`.
   missing from the bulk statistics is asked for on its own (and listed with a note
   if it still has none), failed servers are named in the summary, and after a full
   collection the log lists every cached scope that was not collected, with the reason.
+- Failed option lookups are tried once more, one scope at a time, after the
+  server's other lookups have finished. A lookup that fails again shows
+  `(lookup failed)` in its option columns, never an empty value that looks like
+  "no option set", and the summary lists it with the server and the error. If a
+  server fails every lookup for 60 seconds, its remaining lookups are skipped.
+  "Refresh Cache" also retries a failed server once and names servers that still fail.
 - DHCP servers are queried in parallel inside the same process (runspace pool)
   instead of one `powershell.exe` per server. Each server needs 3 bulk calls plus
   one option call per scope, only when options are requested. You can set how
   many servers run at once, and Stop keeps the results collected so far.
 - DNA Center device queries run in parallel (6 at a time). When the server rate
-  limits (HTTP 429), the request waits and retries. Stop cancels a running report.
+  limits (HTTP 429), the request waits and retries (up to 5 attempts). A request
+  that still fails for a temporary reason (no answer, timeout, 429, 5xx) is sent
+  once more after a 5-second pause, 2 at a time. If 6 of those second tries in a
+  row get no answer, the rest are not retried. Devices that still fail are named
+  in the log with their IP and the error. Stop cancels a running report.
 - Large device and scope lists filter as you type without freezing the window,
   and your selections are kept when the filter changes.
 - CSV export is written directly and is about twice as fast as `Export-Csv`.
@@ -425,7 +435,7 @@ CLI-only features:
 
 1. **Certificate Validation**: Disabled for DNA Center (as per user requirements)
 2. **Token Refresh**: Manual re-authentication required after 1 hour
-3. **API Rate Limiting**: Not implemented
+3. **API Rate Limiting**: No request budget; HTTP 429 answers are retried with back-off, and requests that still fail get one slower second try
 4. **Audit Logging**: Events only shown in GUI, not logged to file
 5. **MFA**: DNA Center multi-factor authentication not supported
 

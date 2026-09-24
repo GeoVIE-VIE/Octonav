@@ -1436,6 +1436,9 @@ function Invoke-OctoParallel {
         Results are returned index-aligned with Items: @{ Output; Error } each.
         Only 2x Throttle tasks are queued at a time, so thousands of items cost
         no more memory than a few dozen. Shared.Stop = $true cancels.
+    .PARAMETER MaxInFlight
+        At most this many items sent at once (default 2x Throttle); lets a
+        caller-owned pool run fewer requests at a time than it has runspaces.
     .OUTPUTS
         object[] (returned with the unary comma so a single result is not unrolled)
     #>
@@ -1448,6 +1451,7 @@ function Invoke-OctoParallel {
         [string[]]$FunctionNames = @(),
         [hashtable]$ExtraFunctions = @{},
         $Pool,
+        [int]$MaxInFlight = 0,
         [switch]$NoUi
     )
     if ($null -eq $Items) { $Items = @() }
@@ -1460,6 +1464,7 @@ function Invoke-OctoParallel {
     $pool = if ($ownPool) { New-OctoRunspacePool -MaxRunspaces ([Math]::Min($Throttle, $Items.Count)) -FunctionNames $FunctionNames -ExtraFunctions $ExtraFunctions } else { $Pool }
     $pending = [System.Collections.Generic.List[object]]::new()
     $next = 0; $done = 0; $maxQueued = [Math]::Max(2, $Throttle * 2)
+    if ($MaxInFlight -gt 0) { $maxQueued = $MaxInFlight }
     $stopped = $false
     try {
         while ($done -lt $Items.Count) {
@@ -1833,6 +1838,7 @@ function Get-DhcpScopeAnalysis {
 
     # Distinct-value collectors, allocated once and cleared per scope
     $distinctFields = @('ScopeState', 'FailoverRelationship', 'FailoverPartner', 'FailoverState', 'Option60', 'Option43', 'AllOptions', 'DNSServers')
+    $optionFields = @('DNSServers', 'Option60', 'Option43', 'AllOptions')
     $collect = @{}
     foreach ($name in $distinctFields) {
         $collect[$name] = @{ List = [System.Collections.Generic.List[string]]::new(); Seen = [System.Collections.Generic.HashSet[string]]::new($ignoreCase) }
@@ -1846,6 +1852,7 @@ function Get-DhcpScopeAnalysis {
     $clusters = [System.Collections.Generic.List[object]]::new()
     $unknown = [System.Collections.Generic.List[object]]::new()
     $scopeNames = [System.Collections.Generic.List[string]]::new()
+    $optionFailedServers = [System.Collections.Generic.List[string]]::new()
     $noStatsRows = 0
 
     $groups = [System.Collections.Generic.List[object]]::new()
@@ -1859,7 +1866,7 @@ function Get-DhcpScopeAnalysis {
         $all = $byScope[$scopeId]
         foreach ($c in $collect.Values) { $c.List.Clear(); $c.Seen.Clear() }
         $members.Clear(); $active.Clear(); $inactiveServers.Clear(); $serverSeen.Clear()
-        $servers.Clear(); $notes.Clear(); $clusters.Clear(); $unknown.Clear()
+        $servers.Clear(); $notes.Clear(); $clusters.Clear(); $unknown.Clear(); $optionFailedServers.Clear()
         $desc = ''
 
         # --- 1. one row per server; own numbers; distinct display values
@@ -1885,7 +1892,11 @@ function Get-DhcpScopeAnalysis {
             if ($isInactive) { $inactiveServers.Add($server) } else { $active.Add($m) }
             if (-not $desc -and -not $isInactive -and -not [string]::IsNullOrWhiteSpace([string]$m.Description)) { $desc = [string]$m.Description }
 
+            $optionsFailed = [bool]$m.OptionsFailed
+            if ($optionsFailed) { $optionFailedServers.Add($server) }
             foreach ($name in $distinctFields) {
+                # A server whose options could not be read adds none (the partner's values stand)
+                if ($optionsFailed -and $optionFields -contains $name) { continue }
                 $v = $m.$name
                 if ($null -eq $v) { continue }
                 $col = $collect[$name]
@@ -1898,6 +1909,18 @@ function Get-DhcpScopeAnalysis {
         }
         if (-not $desc) {
             foreach ($m in $members) { if (-not [string]::IsNullOrWhiteSpace([string]$m.Description)) { $desc = [string]$m.Description; break } }
+        }
+        if ($optionFailedServers.Count -gt 0) {
+            if ($optionFailedServers.Count -lt $members.Count) {
+                $notes.Add("DHCP options could not be read from $($optionFailedServers -join ', ') - the option values shown come from the other server(s)")
+            } else {
+                # No server answered: the grouped row says '(lookup failed)' too
+                foreach ($name in $optionFields) {
+                    $v = $members[0].$name
+                    if ($null -ne $v) { $collect[$name].List.Add([string]$v) }
+                }
+                $notes.Add("DHCP options could not be read from $($optionFailedServers -join ', ')")
+            }
         }
 
         # --- 2. active copies only (unless every copy is inactive)
@@ -2161,6 +2184,7 @@ function New-DhcpScopeRow {
         Option60              = $null
         Option43              = $null
         AllOptions            = $null
+        OptionsFailed         = $false
         TotalAddresses        = $null
         PercentageInUse       = $null
         Redundancy            = $null
@@ -2251,6 +2275,7 @@ try {
     if ($Item.Retry) {
         $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
         while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        $sw.Restart()
     }
     if ($Shared.Stop) {
         $out.Cancelled = $true
@@ -2362,6 +2387,7 @@ try {
                     Option60              = $null
                     Option43              = $null
                     AllOptions            = $null
+                    OptionsFailed         = $false
                     TotalAddresses        = $null
                     PercentageInUse       = $null
                     Redundancy            = $null
@@ -2387,14 +2413,30 @@ param($Item, $Shared)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $scopeOptions = @{}
-$failed = 0
+$failures = @{}
 $message = ''
 try {
+    $failingSince = $null
+    if ($Item.Retry) {
+        # Second try (the scopes that failed): give the server a moment first. It
+        # runs as one batch, so the server is asked one scope at a time.
+        $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
+        while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        if (-not $Shared.Stop -and -not (Test-DhcpServerReachable -ComputerName ([string]$Item.Server))) {
+            throw 'Unreachable (no ping reply and RPC port 135 closed)'
+        }
+    }
     try { $null = Get-Command -Name Get-DhcpServerv4OptionValue -ErrorAction Stop } catch { Import-Module DhcpServer -ErrorAction Stop }
     # -Brief skips the option-name lookup (Microsoft's recommended fast path)
     $useBrief = (Get-Command -Name Get-DhcpServerv4OptionValue).Parameters.ContainsKey('Brief')
     foreach ($id in $Item.ScopeIds) {
         if ($Shared.Stop) { break }
+        if ($null -ne $failingSince -and ([DateTime]::UtcNow - $failingSince).TotalMilliseconds -ge [int]$Item.GiveUpMs) {
+            # Every lookup has failed for a while: do not wait out each remaining one
+            $failures[[string]$id] = 'Skipped - every lookup on this server had failed for {0:N0} s' -f ([int]$Item.GiveUpMs / 1000)
+            continue
+        }
+        $callStart = [DateTime]::UtcNow
         $entry = @{ DNSServers = $null; Option60 = $null; Option43 = $null; AllOptions = $null }
         try {
             $splat = @{ ComputerName = [string]$Item.Server; ScopeId = [string]$id; ErrorAction = 'Stop' }
@@ -2414,15 +2456,23 @@ try {
                 $all.Add(('{0}:{1}' -f $oid, ($vals -join ';')))
             }
             if ($all.Count -gt 0) { $entry.AllOptions = $all -join ' | ' }
+            $scopeOptions[[string]$id] = $entry
+            $failingSince = $null
         } catch {
-            $failed++
+            # A failed lookup is reported as failed, never as "no options set"
+            $failures[[string]$id] = $_.Exception.Message
+            if ($Item.Retry -and $null -eq $failingSince) { $failingSince = $callStart }
         }
-        $scopeOptions[[string]$id] = $entry
     }
 } catch {
+    # The whole batch failed (e.g. the module did not load): every scope not answered failed
     $message = $_.Exception.Message
+    foreach ($id in $Item.ScopeIds) {
+        $key = [string]$id
+        if (-not $scopeOptions.ContainsKey($key) -and -not $failures.ContainsKey($key)) { $failures[$key] = $message }
+    }
 }
-[pscustomobject]@{ Server = [string]$Item.Server; ScopeOptions = $scopeOptions; Failed = $failed; Message = $message }
+[pscustomobject]@{ Server = [string]$Item.Server; ScopeOptions = $scopeOptions; Failures = $failures; Cancelled = [bool]$Shared.Stop; Message = $message }
 '@
 
 $script:DhcpWorkerScripts.ScopeList = @'
@@ -2432,6 +2482,11 @@ $ProgressPreference = 'SilentlyContinue'
 $server = [string]$Item.Server
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 try {
+    if ($Item.Retry) {
+        $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
+        while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        $sw.Restart()
+    }
     if ($Shared.Stop) { return [pscustomobject]@{ Server = $server; Success = $false; Scopes = @(); Message = 'Cancelled'; ElapsedMs = 0 } }
     if (-not (Test-DhcpServerReachable -ComputerName $server)) {
         return [pscustomobject]@{ Server = $server; Success = $false; Scopes = @(); Message = 'Unreachable (no ping reply and RPC port 135 closed)'; ElapsedMs = [int]$sw.ElapsedMilliseconds }
@@ -2471,6 +2526,8 @@ function New-DhcpCollectionState {
     if (-not $Request.OptionBatchSize) { $Request.OptionBatchSize = 25 }
     if (-not $Request.Throttle) { $Request.Throttle = 20 }
     if ($null -eq $Request.RetryDelayMs) { $Request.RetryDelayMs = 3000 }
+    # Second try of option lookups: a server failing every lookup for this long is skipped
+    if ($null -eq $Request.RetryGiveUpMs) { $Request.RetryGiveUpMs = 60000 }
     return @{
         Request           = $Request
         Rows              = [System.Collections.Generic.List[object]]::new()
@@ -2485,7 +2542,12 @@ function New-DhcpCollectionState {
         OptionBatchesDone = 0
         OptionScopes      = 0
         OptionScopesDone  = 0
-        OptionFailures    = 0
+        OptionPending     = @{}   # server -> @{ Batches = first-try batches still running; Failed = scope ID -> error }
+        OptionRetries     = 0     # scope lookups asked a second time
+        OptionRetriesDone = 0
+        OptionRecovered   = 0     # ... that succeeded on it
+        OptionFailures    = 0     # scope lookups that failed twice
+        OptionFailed      = [System.Collections.Generic.List[object]]::new()
         Log               = [System.Collections.Generic.List[object]]::new()
         Error             = $null
         Stopwatch         = [System.Diagnostics.Stopwatch]::StartNew()
@@ -2601,20 +2663,25 @@ function Receive-DhcpTaskResult {
                 $message = $out.Message
 
                 if ((Test-DhcpOptionsRequested $req) -and $scopeCount -gt 0) {
+                    $batchCount = 0
+                    $order = [System.Collections.Generic.List[string]]::new()
                     $batch = [System.Collections.Generic.List[string]]::new()
                     foreach ($row in $rows) {
+                        $order.Add([string]$row.ScopeId)
                         $batch.Add([string]$row.ScopeId)
                         if ($batch.Count -ge $req.OptionBatchSize) {
                             $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $batch.ToArray() } })
-                            $State.OptionBatches++
+                            $batchCount++
                             $batch.Clear()
                         }
                     }
                     if ($batch.Count -gt 0) {
                         $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $batch.ToArray() } })
-                        $State.OptionBatches++
+                        $batchCount++
                     }
+                    $State.OptionBatches += $batchCount
                     $State.OptionScopes += $scopeCount
+                    $State.OptionPending[$server] = @{ Batches = $batchCount; Order = $order.ToArray(); Failed = @{} }
                 }
             }
             if ($status -ne 'OK') {
@@ -2628,26 +2695,89 @@ function Receive-DhcpTaskResult {
         'Options' {
             $State.OptionBatchesDone++
             $server = [string]$Descriptor.Item.Server
-            $count = @($Descriptor.Item.ScopeIds).Count
-            $State.OptionScopesDone += $count
+            $isRetry = [bool]$Descriptor.Item.Retry
+            $ids = @($Descriptor.Item.ScopeIds)
+            $answers = @{}
+            $failures = @{}
             if ($null -eq $out) {
-                $State.OptionFailures += $count
+                # The batch itself failed: none of its scopes were read
+                $reason = if ($Result.Error) { $Result.Error } else { 'No result returned' }
+                foreach ($id in $ids) { $failures[[string]$id] = $reason }
             } else {
-                $State.OptionFailures += [int]$out.Failed
-                foreach ($id in @($out.ScopeOptions.Keys)) {
-                    $row = $null
-                    if ($State.RowIndex.TryGetValue($server + '|' + $id, [ref]$row)) {
-                        $v = $out.ScopeOptions[$id]
-                        if ($req.IncludeDNS) { $row.DNSServers = $v.DNSServers }
-                        if ($req.IncludeOption60) { $row.Option60 = $v.Option60 }
-                        if ($req.IncludeOption43) { $row.Option43 = $v.Option43 }
-                        if ($req.ShowAllOptions) { $row.AllOptions = $v.AllOptions }
-                    }
+                if ($out.ScopeOptions) { $answers = $out.ScopeOptions }
+                if ($out.Failures) { $failures = $out.Failures }
+            }
+            foreach ($id in @($answers.Keys)) {
+                $row = $null
+                if ($State.RowIndex.TryGetValue($server + '|' + $id, [ref]$row)) {
+                    $v = $answers[$id]
+                    if ($req.IncludeDNS) { $row.DNSServers = $v.DNSServers }
+                    if ($req.IncludeOption60) { $row.Option60 = $v.Option60 }
+                    if ($req.IncludeOption43) { $row.Option43 = $v.Option43 }
+                    if ($req.ShowAllOptions) { $row.AllOptions = $v.AllOptions }
                 }
+            }
+            # Failed scopes in the order they were asked for
+            $failedIds = [System.Collections.Generic.List[string]]::new()
+            foreach ($id in $ids) { if ($failures.ContainsKey([string]$id)) { $failedIds.Add([string]$id) } }
+
+            if ($isRetry) {
+                $State.OptionRetriesDone += $ids.Count
+                $State.OptionRecovered += $answers.Count
+                if ($failedIds.Count -gt 0) {
+                    foreach ($id in $failedIds) { Set-DhcpOptionsFailed -State $State -Server $server -ScopeId $id -Message ([string]$failures[$id]) }
+                    $shown = @($failedIds | Select-Object -First 5) -join ', '
+                    if ($failedIds.Count -gt 5) { $shown += " and $($failedIds.Count - 5) more" }
+                    Add-DhcpLog $State 'Error' ('{0} - options still unreadable on the second try for {1} scope(s): {2} ({3})' -f $server, $failedIds.Count, $shown, $failures[$failedIds[0]])
+                }
+                return $next.ToArray()
+            }
+
+            # First try: failures wait until every batch of this server is back, then
+            # get ONE second try together (one scope at a time, after a pause) - the
+            # server is no longer busy with the parallel first round by then
+            $State.OptionScopesDone += $ids.Count
+            $pending = $State.OptionPending[$server]
+            if ($null -eq $pending) {
+                $pending = @{ Batches = 1; Order = [string[]]$ids; Failed = @{} }
+                $State.OptionPending[$server] = $pending
+            }
+            foreach ($id in $failedIds) { $pending.Failed[$id] = [string]$failures[$id] }
+            $pending.Batches--
+            if ($pending.Batches -le 0 -and $pending.Failed.Count -gt 0) {
+                $retryIds = [string[]]@(foreach ($id in $pending.Order) { if ($pending.Failed.ContainsKey($id)) { $id } })
+                $firstReason = $pending.Failed[$retryIds[0]]
+                if ($null -ne $out -and $out.Cancelled) {
+                    foreach ($id in $retryIds) { Set-DhcpOptionsFailed -State $State -Server $server -ScopeId $id -Message $pending.Failed[$id] }
+                } else {
+                    $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $retryIds; Retry = 1; RetryDelayMs = $req.RetryDelayMs; GiveUpMs = $req.RetryGiveUpMs } })
+                    $State.OptionBatches++
+                    $State.OptionRetries += $retryIds.Count
+                    Add-DhcpLog $State 'Warning' ('{0} - options could not be read for {1} scope(s) ({2}) - trying them again, one at a time' -f $server, $retryIds.Count, $firstReason)
+                }
+                $pending.Failed.Clear()
             }
         }
     }
     return $next.ToArray()
+}
+
+function Set-DhcpOptionsFailed {
+    # Marks a scope whose options could not be read (after the second try): its
+    # option columns say so instead of looking like "no option set"
+    param($State, [string]$Server, [string]$ScopeId, [string]$Message)
+    $req = $State.Request
+    $row = $null
+    if ($State.RowIndex.TryGetValue($Server + '|' + $ScopeId, [ref]$row)) {
+        $row.OptionsFailed = $true
+        $marker = '(lookup failed)'
+        if ($req.IncludeDNS) { $row.DNSServers = $marker }
+        if ($req.IncludeOption60) { $row.Option60 = $marker }
+        if ($req.IncludeOption43) { $row.Option43 = $marker }
+        if ($req.ShowAllOptions) { $row.AllOptions = $marker }
+    }
+    $State.OptionFailures++
+    $State.OptionFailed.Add([pscustomobject]@{ Server = $Server; ScopeId = $ScopeId; Message = $Message })
 }
 
 function Get-DhcpSummaryLines {
@@ -2670,8 +2800,15 @@ function Get-DhcpSummaryLines {
             $more = if ($failedServers.Count -gt 10) { " and $($failedServers.Count - 10) more" } else { '' }
             $lines.Add(@{ Color = 'Error'; Message = ('{0} server(s) could not be read: {1}{2} - scopes that only they serve are missing (failover partners still report theirs)' -f $failedServers.Count, ($names -join ', '), $more) })
         }
-        if ($State.OptionScopes -gt 0 -and $State.OptionFailures -gt 0) {
-            $lines.Add(@{ Color = 'Warning'; Message = ('Options: {0} of {1} scope lookups failed' -f $State.OptionFailures, $State.OptionScopes) })
+        if ($State.OptionRetries -gt 0) {
+            $lines.Add(@{ Color = 'Info'; Message = ('Options: {0} scope lookup(s) needed a second try - {1} succeeded on it' -f $State.OptionRetries, $State.OptionRecovered) })
+        }
+        if ($State.OptionFailures -gt 0) {
+            $lines.Add(@{ Color = 'Warning'; Message = ("Options: {0} of {1} scope lookup(s) failed twice - their option columns say '(lookup failed)':" -f $State.OptionFailures, $State.OptionScopes) })
+            foreach ($f in @($State.OptionFailed | Select-Object -First 10)) {
+                $lines.Add(@{ Color = 'Warning'; Message = ('  {0,-15} {1}: {2}' -f $f.ScopeId, $f.Server, $f.Message) })
+            }
+            if ($State.OptionFailed.Count -gt 10) { $lines.Add(@{ Color = 'Warning'; Message = ('  ... and {0} more' -f ($State.OptionFailed.Count - 10)) }) }
         }
     }
     $unique = 'Unique scopes: {0:N0} (active {1:N0}, inactive {2:N0})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes
@@ -2848,6 +2985,8 @@ $script:Dna = @{
     Devices = @(); Selected = @(); DeviceById = @{}; Busy = $false; Shared = $null; Pool = $null
 }
 $script:DnaThrottle = 6
+# Pause before the second try of requests that failed with a temporary error
+$script:DnaRetryDelayMs = 5000
 
 # GET worker for parallel requests; retries HTTP 429 (rate limit) with back-off
 $script:DnaGetWorker = @'
@@ -2984,8 +3123,19 @@ function Invoke-DnaGet {
 function Get-DnaResult {
     param($Result)
     if ($Result -and $Result.Output) { return $Result.Output }
-    $err = if ($Result -and $Result.Error) { $Result.Error } else { 'No result' }
+    # No result at all = the run was stopped before this request was sent
+    if ($null -eq $Result) { return [pscustomobject]@{ Response = $null; Error = 'Not run (stopped)'; Status = -1 } }
+    $err = if ($Result.Error) { $Result.Error } else { 'No result' }
     return [pscustomobject]@{ Response = $null; Error = $err; Status = 0 }
+}
+
+function Test-DnaRetryable {
+    # Temporary failures worth a second try: no answer / timeout (0), 408, 429 and 5xx.
+    # 4xx answers (bad request, expired token, not found) would fail again.
+    param($Result)
+    if ($null -eq $Result -or -not $Result.Error) { return $false }
+    $status = [int]$Result.Status
+    return ($status -eq 0 -or $status -eq 408 -or $status -eq 429 -or $status -ge 500)
 }
 
 function Get-DnaPool {
@@ -2998,8 +3148,15 @@ function Invoke-DnaParallel {
     <#
     .SYNOPSIS
         Runs a DNA worker for each item on the session pool, with progress in the status bar.
+    .PARAMETER RetryFailed
+        GET worker only: requests that failed with a temporary error (no answer,
+        timeout, HTTP 408 / 429 / 5xx - after the worker's own 429 back-off) are
+        sent once more after a pause, two at a time instead of six.
     #>
-    param([object[]]$Items, [string]$Script, [hashtable]$Extra = @{}, [string]$Activity = 'Working', [scriptblock]$OnResult)
+    param(
+        [object[]]$Items, [string]$Script, [hashtable]$Extra = @{}, [string]$Activity = 'Working', [scriptblock]$OnResult,
+        [switch]$RetryFailed, [System.Windows.Forms.RichTextBox]$LogBox
+    )
     $shared = [hashtable]::Synchronized(@{ Stop = $false; Headers = $script:Dna.Headers.Clone(); BaseUrl = $script:Dna.BaseUrl; TimeoutSec = 15 })
     foreach ($k in $Extra.Keys) { $shared[$k] = $Extra[$k] }
     $script:Dna.Shared = $shared
@@ -3009,6 +3166,44 @@ function Invoke-DnaParallel {
             if ($OnResult) { & $OnResult $done $count $r }
             if ($done -eq $count -or ($done % 5) -eq 0) {
                 Set-OctoStatus -Text "$Activity..." -Percent ([int](100 * $done / $count)) -ProgressText "$done/$count"
+            }
+        }
+
+        if ($RetryFailed -and -not $shared.Stop) {
+            $retry = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $results.Count; $i++) {
+                if (Test-DnaRetryable -Result (Get-DnaResult -Result $results[$i])) { $retry.Add($i) }
+            }
+            if ($retry.Count -gt 0) {
+                $firstError = (Get-DnaResult -Result $results[$retry[0]]).Error
+                Write-Log -Message ('{0} - {1} request(s) failed ({2}) - trying them again, two at a time' -f $Activity, $retry.Count, $firstError) -Color 'Warning' -LogBox $LogBox
+                Set-OctoStatus -Text "$Activity - pausing before the second try..."
+                $until = [DateTime]::UtcNow.AddMilliseconds($script:DnaRetryDelayMs)
+                while ([DateTime]::UtcNow -lt $until -and -not $shared.Stop) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 40
+                }
+                $retryItems = @(foreach ($i in $retry) { $Items[$i] })
+                $tries = @{ NoAnswerInRow = 0; GaveUp = $false }
+                $second = Invoke-OctoParallel -Items $retryItems -Script $Script -Shared $shared -MaxInFlight 2 -Pool (Get-DnaPool) -OnProgress {
+                    param($done, $count, $r)
+                    $rr = Get-DnaResult -Result $r
+                    if ($rr.Error -and [int]$rr.Status -eq 0) { $tries.NoAnswerInRow++ } else { $tries.NoAnswerInRow = 0 }
+                    # DNA Center not answering at all: stop instead of waiting out every timeout again
+                    if ($tries.NoAnswerInRow -ge 6 -and $done -lt $count -and -not $tries.GaveUp) { $tries.GaveUp = $true; $shared.Stop = $true }
+                    Set-OctoStatus -Text "$Activity (second try)..." -Percent ([int](100 * $done / $count)) -ProgressText "$done/$count"
+                }
+                $recovered = 0; $notSent = 0
+                for ($k = 0; $k -lt $retry.Count; $k++) {
+                    if ($null -eq $second[$k]) { $notSent++; continue }   # stopped before it was answered
+                    $results[$retry[$k]] = $second[$k]
+                    if (-not (Get-DnaResult -Result $second[$k]).Error) { $recovered++ }
+                }
+                if ($tries.GaveUp) {
+                    Write-Log -Message ('{0} - DNA Center did not answer 6 second tries in a row - the other {1} request(s) were not tried again' -f $Activity, $notSent) -Color 'Warning' -LogBox $LogBox
+                }
+                $tried = $retry.Count - $notSent
+                Write-Log -Message ('{0} - second try: {1} of {2} succeeded' -f $Activity, $recovered, $tried) -Color $(if ($recovered -eq $retry.Count) { 'Success' } else { 'Warning' }) -LogBox $LogBox
             }
         }
     } finally {
@@ -3023,16 +3218,44 @@ function Invoke-DnaDeviceRequests {
     .SYNOPSIS
         GET <PathTemplate> for every device in parallel ({id} = device id).
         Returns index-aligned results: .Response / .Error per device.
+    .DESCRIPTION
+        Temporary failures get a second try; devices that still fail are named in the log.
     #>
-    param([object[]]$Devices, [string]$PathTemplate, [int]$TimeoutSec = 15, [string]$Activity = 'Querying devices')
+    param([object[]]$Devices, [string]$PathTemplate, [int]$TimeoutSec = 15, [string]$Activity = 'Querying devices', [System.Windows.Forms.RichTextBox]$LogBox)
     $items = New-Object object[] $Devices.Count
     for ($i = 0; $i -lt $Devices.Count; $i++) {
         $items[$i] = @{ Url = $script:Dna.BaseUrl + $PathTemplate.Replace('{id}', [System.Uri]::EscapeDataString([string]$Devices[$i].id)) }
     }
-    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = $TimeoutSec } -Activity $Activity
+    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = $TimeoutSec } -Activity $Activity -RetryFailed -LogBox $LogBox
     $out = New-Object object[] $raw.Count
     for ($i = 0; $i -lt $raw.Count; $i++) { $out[$i] = Get-DnaResult -Result $raw[$i] }
+    Write-DnaFailedDevices -Devices $Devices -Results $out -What $Activity -LogBox $LogBox
     return ,$out
+}
+
+function Write-DnaFailedDevices {
+    <#
+    .SYNOPSIS
+        Names the devices whose request failed (after the second try) in the log.
+    #>
+    param([object[]]$Devices, [object[]]$Results, [string]$What, [System.Windows.Forms.RichTextBox]$LogBox, [int]$MaxListed = 10)
+    $failed = [System.Collections.Generic.List[int]]::new()
+    $notRun = 0
+    for ($i = 0; $i -lt $Results.Count; $i++) {
+        $r = $Results[$i]
+        if ($null -eq $r -or -not $r.Error) { continue }
+        if ($r.Status -eq -1) { $notRun++ } else { $failed.Add($i) }
+    }
+    if ($notRun -gt 0) { Write-Log -Message ('{0} - {1} device(s) not queried (stopped)' -f $What, $notRun) -Color 'Warning' -LogBox $LogBox }
+    if ($failed.Count -eq 0) { return }
+    Write-Log -Message ('{0} - {1} of {2} device(s) failed:' -f $What, $failed.Count, $Results.Count) -Color 'Warning' -LogBox $LogBox
+    foreach ($i in @($failed | Select-Object -First $MaxListed)) {
+        $d = $Devices[$i]
+        $name = if ($d.hostname) { [string]$d.hostname } else { [string]$d.id }
+        $ip = if ($d.managementIpAddress) { " ($($d.managementIpAddress))" } else { '' }
+        Write-Log -Message ('  {0}{1}: {2}' -f $name, $ip, $Results[$i].Error) -Color 'Warning' -LogBox $LogBox
+    }
+    if ($failed.Count -gt $MaxListed) { Write-Log -Message ('  ... and {0} more' -f ($failed.Count - $MaxListed)) -Color 'Warning' -LogBox $LogBox }
 }
 
 function Get-AllDNADevices {
@@ -3064,7 +3287,7 @@ function Get-AllDNADevices {
                 $items.Add(@{ Url = "$($script:Dna.BaseUrl)/dna/intent/api/v1/network-device?offset=$o&limit=$pageSize" })
             }
             Write-Log -Message "Inventory reports $count device(s) - fetching $($items.Count) pages in parallel" -Color 'Cyan' -LogBox $LogBox
-            $pages = Invoke-DnaParallel -Items $items.ToArray() -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 60 } -Activity 'Loading devices'
+            $pages = Invoke-DnaParallel -Items $items.ToArray() -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 60 } -Activity 'Loading devices' -RetryFailed -LogBox $LogBox
             foreach ($p in $pages) {
                 $r = Get-DnaResult -Result $p
                 if ($r.Error) { throw "Device page failed: $($r.Error)" }
@@ -3141,14 +3364,6 @@ function Export-DnaRows {
     Write-Log -Message "Exported $($Rows.Count) row(s) to: $path" -Color 'Green' -LogBox $LogBox
     Add-ExportHistory -Settings $script:Settings -FilePath $path -Operation $Operation
     return $path
-}
-
-function Write-DnaFailureSummary {
-    param([object[]]$Results, [string]$What, [System.Windows.Forms.RichTextBox]$LogBox)
-    $failed = @($Results | Where-Object { $_.Error })
-    if ($failed.Count -gt 0) {
-        Write-Log -Message "$What - $($failed.Count) of $($Results.Count) request(s) failed (first: $($failed[0].Error))" -Color 'Yellow' -LogBox $LogBox
-    }
 }
 
 # ---------- Device information (local data) ----------
@@ -3368,7 +3583,7 @@ function Get-ComplianceStatus {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching compliance status for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/compliance/{id}' -Activity 'Compliance status'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/compliance/{id}' -Activity 'Compliance status' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         $d = $devices[$i]; $r = $results[$i]
         if ($r.Error) {
@@ -3388,7 +3603,7 @@ function Get-DnaNeighborReport {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching $What for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate $PathTemplate -Activity $What
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate $PathTemplate -Activity $What -LogBox $LogBox
     $rows = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
@@ -3399,7 +3614,6 @@ function Get-DnaNeighborReport {
             if ($row) { $rows.Add($row) }
         }
     }
-    Write-DnaFailureSummary -Results $results -What $What -LogBox $LogBox
     [void](Export-DnaRows -Rows $rows.ToArray() -BaseName $BaseName -Operation "DNA - $What" -LogBox $LogBox)
 }
 
@@ -3465,7 +3679,7 @@ function Get-VLANs {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching VLANs for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/interface/network-device/{id}' -Activity 'VLANs'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/interface/network-device/{id}' -Activity 'VLANs' -LogBox $LogBox
     $rows = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
@@ -3477,7 +3691,6 @@ function Get-VLANs {
             $rows.Add([PSCustomObject][ordered]@{ Hostname = $(if ($devices[$i].hostname) { $devices[$i].hostname } else { 'Unknown' }); IPAddress = $(if ($devices[$i].managementIpAddress) { $devices[$i].managementIpAddress } else { 'N/A' }); VlanId = $iface.vlanId })
         }
     }
-    Write-DnaFailureSummary -Results $results -What 'VLANs' -LogBox $LogBox
     [void](Export-DnaRows -Rows $rows.ToArray() -BaseName 'VLANs' -Operation 'DNA - VLANs' -LogBox $LogBox)
 }
 
@@ -3490,7 +3703,7 @@ function Get-DeviceConfigurations {
         $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
         $configFolder = Join-Path (Initialize-OutputDirectory -Path $script:outputDir) "DeviceConfigurations_$timestamp"
         [void][System.IO.Directory]::CreateDirectory($configFolder)
-        $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/config' -TimeoutSec 30 -Activity 'Device configurations'
+        $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/config' -TimeoutSec 30 -Activity 'Device configurations' -LogBox $LogBox
         $usedNames = @{}
         $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
             $d = $devices[$i]; $r = $results[$i]
@@ -3552,14 +3765,17 @@ function Get-DnaEventTimestamps {
     .SYNOPSIS
         Latest event timestamp per device (parallel), index-aligned; $null when none.
     #>
-    param([object[]]$Devices, [string]$EventName, [hashtable]$AdditionalQuery, [string]$Activity)
+    param([object[]]$Devices, [string]$EventName, [hashtable]$AdditionalQuery, [string]$Activity, [System.Windows.Forms.RichTextBox]$LogBox)
     $items = New-Object object[] $Devices.Count
     for ($i = 0; $i -lt $Devices.Count; $i++) {
         $items[$i] = @{ Url = (Get-DnaEventSeriesUrl -DeviceId ([string]$Devices[$i].id) -EventName $EventName -AdditionalQuery $AdditionalQuery) }
     }
-    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 30 } -Activity $Activity
+    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 30 } -Activity $Activity -RetryFailed -LogBox $LogBox
+    $results = New-Object object[] $raw.Count
+    for ($i = 0; $i -lt $raw.Count; $i++) { $results[$i] = Get-DnaResult -Result $raw[$i] }
+    Write-DnaFailedDevices -Devices $Devices -Results $results -What $Activity -LogBox $LogBox
     $out = New-Object object[] $Devices.Count
-    for ($i = 0; $i -lt $raw.Count; $i++) { $out[$i] = Get-DnaEventTimestamp -Response (Get-DnaResult -Result $raw[$i]).Response }
+    for ($i = 0; $i -lt $results.Count; $i++) { $out[$i] = Get-DnaEventTimestamp -Response $results[$i].Response }
     return ,$out
 }
 
@@ -3568,7 +3784,7 @@ function Get-LastDeviceAvailabilityEventTime {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching last availability events for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $times = Get-DnaEventTimestamps -Devices $devices -EventName 'Device Unreachable' -AdditionalQuery @{ tags = 'ASSURANCE' } -Activity 'Availability events'
+    $times = Get-DnaEventTimestamps -Devices $devices -EventName 'Device Unreachable' -AdditionalQuery @{ tags = 'ASSURANCE' } -Activity 'Availability events' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         [PSCustomObject][ordered]@{
             Hostname = $(if ($devices[$i].hostname) { $devices[$i].hostname } else { 'Unknown' }); IPAddress = $(if ($devices[$i].managementIpAddress) { $devices[$i].managementIpAddress } else { 'N/A' })
@@ -3584,7 +3800,7 @@ function Get-LastDisconnectTime {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching last disconnect times for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/enrichment-details' -TimeoutSec 30 -Activity 'Last disconnect times'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/enrichment-details' -TimeoutSec 30 -Activity 'Last disconnect times' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
         $value = 'N/A'
@@ -3612,7 +3828,7 @@ function Get-LastPingReachableTime {
     Write-Log -Message "Retrieving last ping reachable times for $($devices.Count) device(s)..." -Color 'Cyan' -LogBox $LogBox
 
     $values = New-Object object[] $devices.Count
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}' -TimeoutSec 30 -Activity 'Device records'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}' -TimeoutSec 30 -Activity 'Device records' -LogBox $LogBox
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $data = $results[$i].Response
         if (-not $data -or -not $data.response) { continue }
@@ -3629,7 +3845,7 @@ function Get-LastPingReachableTime {
         $missing = @(for ($i = 0; $i -lt $devices.Count; $i++) { if (-not $values[$i]) { $i } })
         if ($missing.Count -eq 0) { break }
         $subset = @(foreach ($i in $missing) { $devices[$i] })
-        $times = Get-DnaEventTimestamps -Devices $subset -EventName $eventName -AdditionalQuery @{} -Activity 'Reachability events'
+        $times = Get-DnaEventTimestamps -Devices $subset -EventName $eventName -AdditionalQuery @{} -Activity "Reachability events ($eventName)" -LogBox $LogBox
         for ($k = 0; $k -lt $missing.Count; $k++) { if ($times[$k]) { $values[$missing[$k]] = $times[$k] } }
     }
 
@@ -5128,14 +5344,23 @@ function Start-DhcpScopeCacheRefresh {
             }
             return
         }
+        $ok = $out -and $out.Success
+        $server = if ($out) { $out.Server } else { [string]$task.Item.Server }
+        $msg = if ($out) { $out.Message } elseif ($result.Error) { $result.Error } else { 'No result returned' }
+        if (-not $ok -and -not $task.Item.Retry -and $msg -ne 'Cancelled') {
+            # A busy server or RPC hiccup must not leave its scopes out of the cache: one more try after a pause
+            Write-Log -Message ('{0}: {1} - trying again' -f $server, $msg) -Color 'Warning' -LogBox $dhcpLogBox
+            Add-OctoJobTask -Job $job -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $server; Retry = 1; RetryDelayMs = 3000 } -Descriptor @{ Kind = 'ScopeList' }
+            return
+        }
         $data.Done++
-        if ($out -and $out.Success) {
+        $label = if ($task.Item.Retry) { "$server (2nd try)" } else { $server }
+        if ($ok) {
             foreach ($s in $out.Scopes) { $data.Scopes.Add($s) }
-            Write-Log -Message ('[{0}/{1}] {2}: {3} scope(s) ({4:N1}s)' -f $data.Done, $data.Total, $out.Server, @($out.Scopes).Count, ($out.ElapsedMs / 1000)) -Color 'Success' -LogBox $dhcpLogBox
+            Write-Log -Message ('[{0}/{1}] {2}: {3} scope(s) ({4:N1}s)' -f $data.Done, $data.Total, $label, @($out.Scopes).Count, ($out.ElapsedMs / 1000)) -Color 'Success' -LogBox $dhcpLogBox
         } else {
-            $server = if ($out) { $out.Server } else { $task.Item.Server }
-            $msg = if ($out) { $out.Message } else { $result.Error }
-            Write-Log -Message ('[{0}/{1}] {2}: FAILED - {3}' -f $data.Done, $data.Total, $server, $msg) -Color 'Error' -LogBox $dhcpLogBox
+            $data.Failed.Add($server)
+            Write-Log -Message ('[{0}/{1}] {2}: FAILED - {3}' -f $data.Done, $data.Total, $label, $msg) -Color 'Error' -LogBox $dhcpLogBox
         }
         if ($data.Total -gt 0) { Set-OctoStatus -Text 'Refreshing scope cache...' -Percent ([int](100 * $data.Done / $data.Total)) -ProgressText "$($data.Done)/$($data.Total) servers" }
     } -OnJobComplete {
@@ -5154,9 +5379,13 @@ function Start-DhcpScopeCacheRefresh {
         $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
         $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
         Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) in $([math]::Round($data.Stopwatch.Elapsed.TotalSeconds, 1))s" -Color 'Success' -LogBox $dhcpLogBox
+        if ($data.Failed.Count -gt 0) {
+            Write-Log -Message ('{0} server(s) failed twice and are not in the cache: {1} - Refresh Cache again to add them' -f $data.Failed.Count, ($data.Failed -join ', ')) -Color 'Warning' -LogBox $dhcpLogBox
+        }
         if ($scopes.Count -gt 0) { [void](Save-DhcpCache -Kind Scopes -Items $scopes) }
     }
     $script:dhcpJob.Data.Scopes = [System.Collections.Generic.List[object]]::new()
+    $script:dhcpJob.Data.Failed = [System.Collections.Generic.List[string]]::new()
     $script:dhcpJob.Data.Done = 0
     $script:dhcpJob.Data.Total = $servers.Count
     $script:dhcpJob.Data.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -5265,6 +5494,8 @@ function Start-DhcpCollection {
         $serverCount = [Math]::Max(1, $state.Servers.Count)
         if ($state.ServersDone -lt $state.Servers.Count -or $state.OptionBatches -eq 0) {
             Set-OctoStatus -Text 'Collecting DHCP statistics...' -Percent ([int](100 * $state.ServersDone / $serverCount)) -ProgressText "$($state.ServersDone)/$($state.Servers.Count) servers"
+        } elseif ($state.OptionScopesDone -ge $state.OptionScopes -and $state.OptionRetriesDone -lt $state.OptionRetries) {
+            Set-OctoStatus -Text 'Retrying failed option lookups...' -Percent ([int](100 * $state.OptionRetriesDone / $state.OptionRetries)) -ProgressText "$($state.OptionRetriesDone)/$($state.OptionRetries) scopes"
         } else {
             Set-OctoStatus -Text 'Collecting DHCP options...' -Percent ([int](100 * $state.OptionScopesDone / [Math]::Max(1, $state.OptionScopes))) -ProgressText "$($state.OptionScopesDone)/$($state.OptionScopes) scopes"
         }
@@ -6712,6 +6943,9 @@ HOW TO USE IT:
       - A summary is written to the log and a CSV is exported automatically
       - A server that fails is tried once more; servers that still fail are
         named in the summary (scopes only they serve are missing)
+      - An option lookup that fails is tried once more (one scope at a time,
+        after the server's other lookups finish). If it fails again, its
+        option columns say "(lookup failed)" and the summary lists it
       - After a full collection the log compares the result with the scope
         cache and lists every cached scope that was not collected, and why
 
@@ -6753,6 +6987,9 @@ DNA CENTER
            Right-click a function to add it to Favorites.
 
    Device queries run in parallel; "Stop" cancels a running report.
+   A request that fails for a temporary reason (no answer, timeout, rate
+   limit, server error) is tried once more after a pause, 2 at a time.
+   Devices that still fail are named in the log with the error.
    Reports are exported as CSV to the Export Path.
 
 
