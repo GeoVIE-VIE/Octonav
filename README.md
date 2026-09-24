@@ -91,6 +91,18 @@ The report now uses a minimal line diff (longest common subsequence). Repeated
 lines such as `!` in switch configs no longer make unrelated lines show as changed.
 Empty files, one-line files and lines containing `</script>` are handled correctly.
 
+### Window layout
+
+- The tabs are a plain navigation bar (no symbols in the names); the selected tab
+  is underlined. Ctrl+Tab and Ctrl+Shift+Tab switch tabs from anywhere.
+- Every tab is laid out in bordered sections with one font (Segoe UI) and one set
+  of colours. Main actions are blue, Stop is red, and hints are grey.
+- Logs are always visible without scrolling: the DHCP log sits next to the server
+  and scope lists, and the DNA Center log next to the device list. Lists and logs
+  grow with the window.
+- View > Toggle Theme (Ctrl+T) switches between the Light and Dark themes,
+  including lines already in the logs, the Help text and the password dialogs.
+
 ---
 
 ## Files in Repository

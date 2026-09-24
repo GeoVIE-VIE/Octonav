@@ -159,7 +159,7 @@ function Set-OctoStatus {
     try {
         if ($Text) {
             $bar.StatusLabel.Text = $Text
-            $bar.StatusLabel.ForeColor = if ($IsError) { [System.Drawing.Color]::Red } else { $script:CurrentTheme.StatusStripForeColor }
+            $bar.StatusLabel.ForeColor = if ($IsError) { $script:CurrentTheme.ErrorText } else { $script:CurrentTheme.StatusStripForeColor }
         }
         if ($Percent -ge 0) {
             $bar.ProgressBar.Visible = $true
@@ -180,12 +180,13 @@ function Update-ConnectionStatus {
     $bar = $script:StatusBarPanels
     if ($null -eq $bar) { return }
     if ($IsConnected) {
-        $bar.ConnectionStatus.Text = if ($ServerName) { "o Connected to $ServerName" } else { 'o Connected' }
-        $bar.ConnectionStatus.ForeColor = [System.Drawing.Color]::Green
+        $bar.ConnectionStatus.Text = if ($ServerName) { "Connected to $ServerName" } else { 'Connected' }
+        $bar.ConnectionStatus.Tag = 'Success'
     } else {
-        $bar.ConnectionStatus.Text = '. Not Connected'
-        $bar.ConnectionStatus.ForeColor = [System.Drawing.Color]::Gray
+        $bar.ConnectionStatus.Text = 'Not connected'
+        $bar.ConnectionStatus.Tag = 'Muted'
     }
+    $bar.ConnectionStatus.ForeColor = Get-OctoToneColor -Tone $bar.ConnectionStatus.Tag
 }
 
 function New-EnhancedStatusBar {
@@ -201,20 +202,17 @@ function New-EnhancedStatusBar {
     $statusLabel.TextAlign = 'MiddleLeft'
 
     $connectionLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-    $connectionLabel.Text = '. Not Connected'
-    $connectionLabel.BorderSides = 'Left'
-    $connectionLabel.BorderStyle = [System.Windows.Forms.Border3DStyle]::Etched
+    $connectionLabel.Text = 'Not connected'
+    $connectionLabel.Tag = 'Muted'
 
     $userLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
     if ($script:IsRunningAsAdmin) {
-        $userLabel.Text = '# Administrator'
-        $userLabel.ForeColor = [System.Drawing.Color]::Green
+        $userLabel.Text = 'Administrator'
+        $userLabel.Tag = 'Success'
     } else {
-        $userLabel.Text = '@ Standard user'
-        $userLabel.ForeColor = [System.Drawing.Color]::Gray
+        $userLabel.Text = 'Standard user'
+        $userLabel.Tag = 'Muted'
     }
-    $userLabel.BorderSides = 'Left'
-    $userLabel.BorderStyle = [System.Windows.Forms.Border3DStyle]::Etched
 
     $progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
     $progressBar.Size = New-Object System.Drawing.Size(150, 16)
@@ -237,25 +235,37 @@ function New-EnhancedStatusBar {
 }
 
 function New-DashboardPanel {
-    param([string]$Title, [string]$Value, [int]$X, [int]$Y)
-    $panel = New-Object System.Windows.Forms.GroupBox
-    $panel.Text = $Title
-    $panel.Location = New-Object System.Drawing.Point($X, $Y)
-    $panel.Size = New-Object System.Drawing.Size(220, 100)
+    # A small card with a caption and one large value (placed by a TableLayoutPanel)
+    param([string]$Title, [string]$Value)
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Tag = 'Card'
+    # Design size of one cell; the label is anchored to it before the panel is docked
+    $panel.Size = New-Object System.Drawing.Size(278, 100)
+    $panel.Dock = 'Fill'
+    $panel.Margin = New-Object System.Windows.Forms.Padding(6, 0, 6, 0)
+    $panel.Add_Paint($script:OctoBorderPainter)
+    $panel.Add_Resize({ $this.Invalidate() })
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = $Title
+    $lblTitle.Tag = 'Muted'
+    $lblTitle.Location = New-Object System.Drawing.Point(16, 14)
+    $lblTitle.AutoSize = $true
+    $panel.Controls.Add($lblTitle)
     $lblValue = New-Object System.Windows.Forms.Label
     $lblValue.Text = $Value
-    $lblValue.Location = New-Object System.Drawing.Point(15, 30)
-    $lblValue.Size = New-Object System.Drawing.Size(190, 50)
-    $lblValue.Font = $script:Fonts.Dashboard
-    $lblValue.TextAlign = 'MiddleCenter'
+    $lblValue.Location = New-Object System.Drawing.Point(14, 38)
+    $lblValue.Size = New-Object System.Drawing.Size(250, 44)
+    $lblValue.Anchor = 'Top,Left,Right'
+    $lblValue.Font = $script:Fonts.StatValue
+    $lblValue.AutoEllipsis = $true
     $panel.Controls.Add($lblValue)
     return @{ Panel = $panel; ValueLabel = $lblValue }
 }
 
 function Set-DashboardValue {
-    param([hashtable]$Panel, [string]$Value, [System.Drawing.Color]$Color = [System.Drawing.Color]::Empty)
+    param([hashtable]$Panel, [string]$Value, [string]$Tone = '')
     $Panel.ValueLabel.Text = $Value
-    if (-not $Color.IsEmpty) { $Panel.ValueLabel.ForeColor = $Color }
+    if ($Tone) { Set-OctoTone -Control $Panel.ValueLabel -Tone $Tone }
 }
 
 # ============================================
@@ -534,34 +544,43 @@ function Get-RecentActivity {
 # THEMES
 # ============================================
 
+# Colour tokens per theme. Every control gets its colours from here, so the Light
+# and Dark themes stay consistent (and View > Toggle Theme recolours everything).
 $script:Themes = @{
     Light = @{
         Name = 'Light'
-        FormBackColor = [System.Drawing.Color]::White; FormForeColor = [System.Drawing.Color]::Black
-        ControlBackColor = [System.Drawing.Color]::White; ControlForeColor = [System.Drawing.Color]::Black
-        GroupBoxBackColor = [System.Drawing.Color]::FromArgb(247, 247, 247); GroupBoxForeColor = [System.Drawing.Color]::Black
-        TextBoxBackColor = [System.Drawing.Color]::White; TextBoxForeColor = [System.Drawing.Color]::Black
-        TextBoxBorderColor = [System.Drawing.Color]::Gray; RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
-        ButtonBackColor = [System.Drawing.Color]::WhiteSmoke; ButtonForeColor = [System.Drawing.Color]::Black
-        TabBackColor = [System.Drawing.Color]::White; TabForeColor = [System.Drawing.Color]::Black
-        StatusStripBackColor = [System.Drawing.Color]::WhiteSmoke; StatusStripForeColor = [System.Drawing.Color]::Black
-        TreeViewBackColor = [System.Drawing.Color]::White; TreeViewForeColor = [System.Drawing.Color]::Black; TreeViewLineColor = [System.Drawing.Color]::Gray
-        LogSuccessColor = [System.Drawing.Color]::Green; LogErrorColor = [System.Drawing.Color]::Red
-        LogWarningColor = [System.Drawing.Color]::DarkOrange; LogInfoColor = [System.Drawing.Color]::DarkCyan; LogDebugColor = [System.Drawing.Color]::Gray
+        WindowBack = '#F3F4F6'; HeaderBack = '#FFFFFF'; CardBack = '#FFFFFF'; CardBorder = '#DFE3E8'
+        Text = '#1F2328'; TextMuted = '#5F6B76'
+        Accent = '#0F6CBD'; AccentHover = '#115EA3'; AccentPressed = '#0C4A84'; AccentText = '#FFFFFF'
+        NavText = '#57606A'; NavSelected = '#0F6CBD'; NavHover = '#1F2328'
+        ButtonBack = '#FFFFFF'; ButtonBorder = '#C9CED4'; ButtonHover = '#F0F2F4'; ButtonPressed = '#E4E7EB'; ButtonText = '#1F2328'
+        DangerBack = '#C42B1C'; DangerHover = '#A8241A'; DangerPressed = '#8E1F16'; DangerText = '#FFFFFF'
+        DisabledBack = '#F3F4F6'; DisabledBorder = '#E1E4E8'; DisabledText = '#A2A9B0'
+        InputBack = '#FFFFFF'; InputText = '#1F2328'; LogBack = '#F8F9FB'
+        SuccessText = '#107C10'; WarningText = '#9A5B00'; ErrorText = '#C42B1C'
+        SuccessBack = '#E3F4E1'; WarningBack = '#FFF4D6'; ErrorBack = '#FDE7E9'
+        LogSuccessColor = '#107C10'; LogErrorColor = '#C42B1C'; LogWarningColor = '#9A5B00'; LogInfoColor = '#0F6CBD'; LogDebugColor = '#6E7781'
+        TextBoxForeColor = '#1F2328'; StatusStripForeColor = '#5F6B76'
     }
     Dark = @{
         Name = 'Dark'
-        FormBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); FormForeColor = [System.Drawing.Color]::White
-        ControlBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); ControlForeColor = [System.Drawing.Color]::White
-        GroupBoxBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); GroupBoxForeColor = [System.Drawing.Color]::White
-        TextBoxBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); TextBoxForeColor = [System.Drawing.Color]::White
-        TextBoxBorderColor = [System.Drawing.Color]::Gray; RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
-        ButtonBackColor = [System.Drawing.Color]::FromArgb(60, 60, 60); ButtonForeColor = [System.Drawing.Color]::White
-        TabBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); TabForeColor = [System.Drawing.Color]::White
-        StatusStripBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); StatusStripForeColor = [System.Drawing.Color]::White
-        TreeViewBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); TreeViewForeColor = [System.Drawing.Color]::White; TreeViewLineColor = [System.Drawing.Color]::Gray
-        LogSuccessColor = [System.Drawing.Color]::LimeGreen; LogErrorColor = [System.Drawing.Color]::OrangeRed
-        LogWarningColor = [System.Drawing.Color]::Orange; LogInfoColor = [System.Drawing.Color]::Cyan; LogDebugColor = [System.Drawing.Color]::LightGray
+        WindowBack = '#1C1D20'; HeaderBack = '#25272B'; CardBack = '#2A2C30'; CardBorder = '#3B3E44'
+        Text = '#E7E9EC'; TextMuted = '#9BA3AB'
+        Accent = '#2373C8'; AccentHover = '#2E84DB'; AccentPressed = '#1B5EA6'; AccentText = '#FFFFFF'
+        NavText = '#A9B1B9'; NavSelected = '#6CB4FF'; NavHover = '#E7E9EC'
+        ButtonBack = '#34373C'; ButtonBorder = '#4A4F56'; ButtonHover = '#3E4248'; ButtonPressed = '#474B52'; ButtonText = '#E7E9EC'
+        DangerBack = '#B8322A'; DangerHover = '#CC3F36'; DangerPressed = '#9E2A23'; DangerText = '#FFFFFF'
+        DisabledBack = '#2F3135'; DisabledBorder = '#3B3E44'; DisabledText = '#6C737A'
+        InputBack = '#1F2023'; InputText = '#E7E9EC'; LogBack = '#1F2023'
+        SuccessText = '#6CCB5F'; WarningText = '#F2B84B'; ErrorText = '#FF8A80'
+        SuccessBack = '#1E3A22'; WarningBack = '#3D3014'; ErrorBack = '#45201F'
+        LogSuccessColor = '#6CCB5F'; LogErrorColor = '#FF8A80'; LogWarningColor = '#F2B84B'; LogInfoColor = '#6CB4FF'; LogDebugColor = '#9BA3AB'
+        TextBoxForeColor = '#E7E9EC'; StatusStripForeColor = '#9BA3AB'
+    }
+}
+foreach ($theme in $script:Themes.Values) {
+    foreach ($key in @($theme.Keys)) {
+        if ($key -ne 'Name') { $theme[$key] = [System.Drawing.ColorTranslator]::FromHtml($theme[$key]) }
     }
 }
 
@@ -571,10 +590,103 @@ function Get-Theme {
     return $script:Themes.Light
 }
 
+function Get-OctoToneColor {
+    # Text colour for a tone (Success / Warning / Error / Muted / Accent; anything else = normal text)
+    param([string]$Tone, [hashtable]$Theme)
+    if ($null -eq $Theme) { $Theme = $script:CurrentTheme }
+    switch ($Tone) {
+        'Success' { return $Theme.SuccessText }
+        'Warning' { return $Theme.WarningText }
+        'Error' { return $Theme.ErrorText }
+        'Muted' { return $Theme.TextMuted }
+        'Accent' { return $Theme.NavSelected }
+        'InfoSuccess' { return $Theme.SuccessText }
+        'InfoWarning' { return $Theme.WarningText }
+        default { return $Theme.Text }
+    }
+}
+
+function Set-OctoTone {
+    # Colours a label by meaning; the tone is kept in Tag so a theme change recolours it
+    param($Control, [string]$Tone)
+    $Control.Tag = $Tone
+    $Control.ForeColor = Get-OctoToneColor -Tone $Tone
+}
+
+function Set-OctoButtonStyle {
+    <#
+    .SYNOPSIS
+        Flat button colours by role (Tag = Primary / Danger; anything else = secondary)
+        and state; runs again whenever the button is enabled or disabled.
+    #>
+    param($Button, [hashtable]$Theme)
+    if ($null -eq $Theme) { $Theme = $script:CurrentTheme }
+    if ($null -eq $Theme) { return }
+    $Button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $Button.UseVisualStyleBackColor = $false
+    $flat = $Button.FlatAppearance
+    $flat.BorderSize = 1
+    $role = [string]$Button.Tag
+    if ($role -eq 'Primary' -and $script:Fonts) { $Button.Font = $script:Fonts.Semibold }
+    if (-not $Button.Enabled) {
+        $Button.BackColor = $Theme.DisabledBack; $Button.ForeColor = $Theme.DisabledText
+        $flat.BorderColor = $Theme.DisabledBorder
+        $flat.MouseOverBackColor = $Theme.DisabledBack; $flat.MouseDownBackColor = $Theme.DisabledBack
+        return
+    }
+    switch ($role) {
+        'Primary' { $colors = @($Theme.Accent, $Theme.AccentHover, $Theme.AccentPressed, $Theme.AccentText, $Theme.Accent) }
+        'Danger' { $colors = @($Theme.DangerBack, $Theme.DangerHover, $Theme.DangerPressed, $Theme.DangerText, $Theme.DangerBack) }
+        default { $colors = @($Theme.ButtonBack, $Theme.ButtonHover, $Theme.ButtonPressed, $Theme.ButtonText, $Theme.ButtonBorder) }
+    }
+    $Button.BackColor = $colors[0]
+    $flat.MouseOverBackColor = $colors[1]
+    $flat.MouseDownBackColor = $colors[2]
+    $Button.ForeColor = $colors[3]
+    $flat.BorderColor = $colors[4]
+}
+
+# Thin border for cards and log frames (drawn on Paint: WinForms panels have no border colour)
+$script:OctoBorderPainter = {
+    param($control, $e)
+    $color = if ($script:CurrentTheme) { $script:CurrentTheme.CardBorder } else { [System.Drawing.Color]::LightGray }
+    $pen = New-Object System.Drawing.Pen($color)
+    try { $e.Graphics.DrawRectangle($pen, 0, 0, $control.Width - 1, $control.Height - 1) } finally { $pen.Dispose() }
+}
+# Line under the navigation bar
+$script:OctoBottomLinePainter = {
+    param($control, $e)
+    $color = if ($script:CurrentTheme) { $script:CurrentTheme.CardBorder } else { [System.Drawing.Color]::LightGray }
+    $pen = New-Object System.Drawing.Pen($color)
+    try { $e.Graphics.DrawLine($pen, 0, $control.Height - 1, $control.Width, $control.Height - 1) } finally { $pen.Dispose() }
+}
+
+function Convert-OctoLogColors {
+    <#
+    .SYNOPSIS
+        Recolours the lines already in a log for another theme (swaps the entries of
+        the RTF colour table, so it is fast for long logs too).
+    #>
+    param([System.Windows.Forms.RichTextBox]$LogBox, [hashtable]$From, [hashtable]$To)
+    if ($null -eq $LogBox -or $LogBox.TextLength -eq 0 -or $null -eq $From -or $From.Name -eq $To.Name) { return }
+    $rtf = $LogBox.Rtf
+    foreach ($key in 'LogSuccessColor', 'LogErrorColor', 'LogWarningColor', 'LogInfoColor', 'LogDebugColor', 'Text') {
+        $old = $From[$key]; $new = $To[$key]
+        $rtf = $rtf.Replace(('\red{0}\green{1}\blue{2};' -f $old.R, $old.G, $old.B), ('\red{0}\green{1}\blue{2};' -f $new.R, $new.G, $new.B))
+    }
+    $LogBox.Rtf = $rtf
+    $LogBox.SelectionStart = $LogBox.TextLength
+    $LogBox.ScrollToCaret()
+}
+
 function Set-ThemeToControl {
     <#
     .SYNOPSIS
         Applies a theme to a control and all of its children (iterative walk).
+    .DESCRIPTION
+        Panels and labels are coloured by their Tag: Card, Header, LogFrame, Page,
+        NavIndicator, InfoSuccess / InfoWarning (panels); Muted, Success, Warning,
+        Error, NavItem (labels). Buttons by role, see Set-OctoButtonStyle.
     #>
     param(
         [Parameter(Mandatory = $true)][System.Windows.Forms.Control]$Control,
@@ -584,37 +696,48 @@ function Set-ThemeToControl {
     $stack.Push($Control)
     while ($stack.Count -gt 0) {
         $c = $stack.Pop()
+        $tag = [string]$c.Tag
         try {
             switch ($c.GetType().Name) {
-                'Form' { $c.BackColor = $Theme.FormBackColor; $c.ForeColor = $Theme.FormForeColor }
-                'GroupBox' { $c.BackColor = $Theme.GroupBoxBackColor; $c.ForeColor = $Theme.GroupBoxForeColor }
-                'TextBox' { $c.BackColor = $Theme.TextBoxBackColor; $c.ForeColor = $Theme.TextBoxForeColor }
-                'RichTextBox' { $c.BackColor = $Theme.RichTextBoxBackColor; $c.ForeColor = $Theme.TextBoxForeColor }
-                'Button' {
-                    $c.BackColor = $Theme.ButtonBackColor; $c.ForeColor = $Theme.ButtonForeColor
-                    $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-                    $c.FlatAppearance.BorderColor = $Theme.TextBoxBorderColor
+                'Form' { $c.BackColor = $Theme.WindowBack; $c.ForeColor = $Theme.Text }
+                'Panel' {
+                    switch ($tag) {
+                        'Card' { $c.BackColor = $Theme.CardBack }
+                        'Header' { $c.BackColor = $Theme.HeaderBack }
+                        'LogFrame' { $c.BackColor = $Theme.LogBack }
+                        'NavIndicator' { $c.BackColor = $Theme.Accent }
+                        'InfoSuccess' { $c.BackColor = $Theme.SuccessBack }
+                        'InfoWarning' { $c.BackColor = $Theme.WarningBack }
+                        default { $c.BackColor = $Theme.WindowBack }
+                    }
+                    $c.ForeColor = $Theme.Text
+                    $c.Invalidate()
                 }
-                'TabControl' { $c.BackColor = $Theme.TabBackColor; $c.ForeColor = $Theme.TabForeColor }
-                'TabPage' { $c.BackColor = $Theme.FormBackColor; $c.ForeColor = $Theme.FormForeColor }
-                'Label' { $c.ForeColor = $Theme.ControlForeColor }
-                'TreeView' { $c.BackColor = $Theme.TreeViewBackColor; $c.ForeColor = $Theme.TreeViewForeColor; $c.LineColor = $Theme.TreeViewLineColor }
-                'ComboBox' { $c.BackColor = $Theme.ControlBackColor; $c.ForeColor = $Theme.ControlForeColor; $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat }
-                'StatusStrip' { $c.BackColor = $Theme.StatusStripBackColor; $c.ForeColor = $Theme.StatusStripForeColor }
-                'Panel' { $c.BackColor = $Theme.ControlBackColor; $c.ForeColor = $Theme.ControlForeColor }
-                default {
-                    if ($c.BackColor -ne [System.Drawing.Color]::Transparent) { $c.BackColor = $Theme.ControlBackColor }
-                    $c.ForeColor = $Theme.ControlForeColor
+                'TableLayoutPanel' { $c.BackColor = $Theme.WindowBack; $c.ForeColor = $Theme.Text }
+                'Label' {
+                    if ($tag -eq 'NavItem') { $c.ForeColor = $Theme.NavText } else { $c.ForeColor = Get-OctoToneColor -Tone $tag -Theme $Theme }
                 }
+                'Button' { Set-OctoButtonStyle -Button $c -Theme $Theme }
+                { $_ -in 'CheckBox', 'RadioButton' } { $c.ForeColor = $Theme.Text }
+                { $_ -in 'TextBox', 'NumericUpDown', 'ComboBox', 'ListBox', 'CheckedListBox' } {
+                    # Inside a frame (the template editor) the box takes the frame colour
+                    $c.BackColor = if ($c.Parent -and [string]$c.Parent.Tag -eq 'LogFrame') { $Theme.LogBack } else { $Theme.InputBack }
+                    $c.ForeColor = $Theme.InputText
+                    # A standard drop-down list is drawn like a button and ignores the colours
+                    if ($_ -eq 'ComboBox') { $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat }
+                }
+                'RichTextBox' { $c.BackColor = if ($tag -eq 'Card') { $Theme.CardBack } else { $Theme.LogBack }; $c.ForeColor = $Theme.Text }
+                'TreeView' { $c.BackColor = $Theme.InputBack; $c.ForeColor = $Theme.InputText; $c.LineColor = $Theme.TextMuted }
+                { $_ -in 'MenuStrip', 'StatusStrip' } {
+                    $c.BackColor = $Theme.HeaderBack
+                    $c.ForeColor = if ($_ -eq 'StatusStrip') { $Theme.TextMuted } else { $Theme.Text }
+                    foreach ($item in $c.Items) { if ($item.Tag) { $item.ForeColor = Get-OctoToneColor -Tone ([string]$item.Tag) -Theme $Theme } }
+                }
+                default { $c.ForeColor = $Theme.Text }
             }
         } catch { }
         foreach ($child in $c.Controls) { $stack.Push($child) }
     }
-}
-
-function Add-IconToTab {
-    param([System.Windows.Forms.TabPage]$Tab, [string]$Icon)
-    if ($Icon) { $Tab.Text = "$Icon $($Tab.Text)" }
 }
 
 # ============================================
@@ -812,6 +935,13 @@ function Start-SessionMonitor {
     Update-SessionActivity
 }
 
+function Set-OctoDialogStyle {
+    # Fonts and colours of the main window for a dialog (when the theme is loaded)
+    param($Form)
+    $Form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    if ($script:CurrentTheme) { Set-ThemeToControl -Control $Form -Theme $script:CurrentTheme }
+}
+
 function Show-StartupPasswordDialog {
     param([switch]$IsFirstRun)
 
@@ -829,8 +959,8 @@ function Show-StartupPasswordDialog {
     $lblTitle.Text = if ($IsFirstRun) { 'Welcome to OctoNav' } else { 'Please authenticate to continue' }
     $lblTitle.Location = New-Object System.Drawing.Point(20, $y)
     $lblTitle.Size = New-Object System.Drawing.Size(450, 25)
-    $lblTitle.Font = New-Object System.Drawing.Font('Arial', 12, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor = [System.Drawing.Color]::DarkBlue
+    $lblTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 13)
+    $lblTitle.Tag = 'Accent'
     $form.Controls.Add($lblTitle)
     $y += 35
 
@@ -838,9 +968,9 @@ function Show-StartupPasswordDialog {
         $lblInstructions = New-Object System.Windows.Forms.Label
         $lblInstructions.Text = "Please create a strong startup password.`n`nPassword Requirements:`n- Minimum $script:PasswordMinLength characters`n- At least one uppercase letter (A-Z)`n- At least one lowercase letter (a-z)`n- At least one number (0-9)`n- At least one special character (!@#$%^&*)`n`nWARNING: If you forget this password, you will be locked out!"
         $lblInstructions.Location = New-Object System.Drawing.Point(20, $y)
-        $lblInstructions.Size = New-Object System.Drawing.Size(450, 140)
+        $lblInstructions.Size = New-Object System.Drawing.Size(450, 185)
         $form.Controls.Add($lblInstructions)
-        $y += 150
+        $y += 195
 
         $lblPassword = New-Object System.Windows.Forms.Label
         $lblPassword.Text = 'Enter Password:'
@@ -871,7 +1001,7 @@ function Show-StartupPasswordDialog {
         $btnSetPassword.Text = 'Set Password'
         $btnSetPassword.Location = New-Object System.Drawing.Point(180, $y)
         $btnSetPassword.Size = New-Object System.Drawing.Size(140, 35)
-        $btnSetPassword.BackColor = [System.Drawing.Color]::LightGreen
+        $btnSetPassword.Tag = 'Primary'
         $form.Controls.Add($btnSetPassword)
         $form.AcceptButton = $btnSetPassword
         $btnSetPassword.Add_Click({
@@ -901,8 +1031,8 @@ function Show-StartupPasswordDialog {
         $lblLocked.Text = "ACCOUNT LOCKED`n`nToo many failed login attempts.`n`nRemaining lockout time: $remaining minutes`n`nPlease try again later."
         $lblLocked.Location = New-Object System.Drawing.Point(20, $y)
         $lblLocked.Size = New-Object System.Drawing.Size(450, 150)
-        $lblLocked.Font = New-Object System.Drawing.Font('Arial', 10, [System.Drawing.FontStyle]::Bold)
-        $lblLocked.ForeColor = [System.Drawing.Color]::Red
+        $lblLocked.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+        $lblLocked.Tag = 'Error'
         $form.Controls.Add($lblLocked)
         $y += 160
         $btnClose = New-Object System.Windows.Forms.Button
@@ -927,14 +1057,14 @@ function Show-StartupPasswordDialog {
         $lblStatus = New-Object System.Windows.Forms.Label
         $lblStatus.Location = New-Object System.Drawing.Point(20, $y)
         $lblStatus.Size = New-Object System.Drawing.Size(450, 20)
-        $lblStatus.ForeColor = [System.Drawing.Color]::Red
+        $lblStatus.Tag = 'Error'
         $form.Controls.Add($lblStatus)
         $y += 30
         $btnLogin = New-Object System.Windows.Forms.Button
         $btnLogin.Text = 'Login'
         $btnLogin.Location = New-Object System.Drawing.Point(150, $y)
         $btnLogin.Size = New-Object System.Drawing.Size(100, 35)
-        $btnLogin.BackColor = [System.Drawing.Color]::LightGreen
+        $btnLogin.Tag = 'Primary'
         $form.Controls.Add($btnLogin)
         $form.AcceptButton = $btnLogin
         $btnExit = New-Object System.Windows.Forms.Button
@@ -964,6 +1094,9 @@ function Show-StartupPasswordDialog {
         })
     }
 
+    # $y is the top of the button row: fit the window to it
+    $form.ClientSize = New-Object System.Drawing.Size(490, ($y + 55))
+    Set-OctoDialogStyle -Form $form
     $result = $form.ShowDialog()
     $form.Dispose()
     return ($result -eq [System.Windows.Forms.DialogResult]::OK)
@@ -1104,18 +1237,20 @@ function Get-DHCPCachePassword {
     $form.Controls.Add($textBox)
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = 'OK'
-    $btnOK.Location = New-Object System.Drawing.Point(220, 105)
-    $btnOK.Size = New-Object System.Drawing.Size(80, 30)
+    $btnOK.Tag = 'Primary'
+    $btnOK.Location = New-Object System.Drawing.Point(214, 105)
+    $btnOK.Size = New-Object System.Drawing.Size(84, 32)
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Controls.Add($btnOK)
     $form.AcceptButton = $btnOK
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(310, 105)
-    $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(306, 105)
+    $btnCancel.Size = New-Object System.Drawing.Size(84, 32)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
+    Set-OctoDialogStyle -Form $form
     $password = $null
     if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and -not [string]::IsNullOrWhiteSpace($textBox.Text)) {
         $password = ConvertTo-SecureString -String $textBox.Text -AsPlainText -Force
@@ -3897,8 +4032,8 @@ function Invoke-PathTrace {
     foreach ($f in $fields) {
         $lbl = New-Object System.Windows.Forms.Label
         $lbl.Text = $f.Label
-        $lbl.Location = New-Object System.Drawing.Point(20, $y)
-        $lbl.Size = New-Object System.Drawing.Size(125, 20)
+        $lbl.Location = New-Object System.Drawing.Point(20, ($y + 3))
+        $lbl.Size = New-Object System.Drawing.Size(145, 20)
         $form.Controls.Add($lbl)
         if ($f.Name -eq 'Protocol') {
             $ctl = New-Object System.Windows.Forms.ComboBox
@@ -3908,8 +4043,8 @@ function Invoke-PathTrace {
         } else {
             $ctl = New-Object System.Windows.Forms.TextBox
         }
-        $ctl.Location = New-Object System.Drawing.Point(150, $y)
-        $ctl.Size = New-Object System.Drawing.Size($f.Width, 20)
+        $ctl.Location = New-Object System.Drawing.Point(170, $y)
+        $ctl.Size = New-Object System.Drawing.Size($f.Width, 23)
         $form.Controls.Add($ctl)
         $inputs[$f.Name] = $ctl
         $y += 40
@@ -3917,16 +4052,19 @@ function Invoke-PathTrace {
     $y += 20
     $btnStart = New-Object System.Windows.Forms.Button
     $btnStart.Text = 'Start Path Trace'
-    $btnStart.Location = New-Object System.Drawing.Point(150, $y)
-    $btnStart.Size = New-Object System.Drawing.Size(120, 30)
+    $btnStart.Tag = 'Primary'
+    $btnStart.Location = New-Object System.Drawing.Point(170, $y)
+    $btnStart.Size = New-Object System.Drawing.Size(130, 32)
     $form.Controls.Add($btnStart)
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(280, $y)
-    $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(308, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
+    $form.ClientSize = New-Object System.Drawing.Size(490, ($y + 52))
+    Set-OctoDialogStyle -Form $form
     $btnStart.Add_Click({
         if (-not (Test-IPAddress -IPAddress $inputs.Source.Text.Trim())) { [System.Windows.Forms.MessageBox]::Show('Invalid source IP address', 'Validation Error', 'OK', 'Warning') | Out-Null; return }
         if (-not (Test-IPAddress -IPAddress $inputs.Dest.Text.Trim())) { [System.Windows.Forms.MessageBox]::Show('Invalid destination IP address', 'Validation Error', 'OK', 'Warning') | Out-Null; return }
@@ -4093,8 +4231,8 @@ function Invoke-CommandRunner {
     $lblInfo.Text = "Execute CLI commands on $($devices.Count) selected device(s)"
     $lblInfo.Location = New-Object System.Drawing.Point(20, $y)
     $lblInfo.Size = New-Object System.Drawing.Size(650, 20)
-    $lblInfo.Font = New-Object System.Drawing.Font('Arial', 11, [System.Drawing.FontStyle]::Bold)
-    $lblInfo.ForeColor = [System.Drawing.Color]::DarkBlue
+    $lblInfo.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 11)
+    $lblInfo.Tag = 'Accent'
     $cmdForm.Controls.Add($lblInfo)
     $y += 30
     $lblCommand = New-Object System.Windows.Forms.Label
@@ -4112,10 +4250,10 @@ function Invoke-CommandRunner {
     $cmdForm.Controls.Add($txtCommand)
     $y += 130
     $lblWarning = New-Object System.Windows.Forms.Label
-    $lblWarning.Text = '! Note: Pipes (|) are not supported by DNA Center API. Use plain commands only.'
+    $lblWarning.Text = 'Note: pipes (|) are not supported by the DNA Center API - use plain commands only.'
     $lblWarning.Location = New-Object System.Drawing.Point(20, $y)
     $lblWarning.Size = New-Object System.Drawing.Size(650, 20)
-    $lblWarning.ForeColor = [System.Drawing.Color]::DarkOrange
+    $lblWarning.Tag = 'Warning'
     $cmdForm.Controls.Add($lblWarning)
     $y += 30
     $lblFormat = New-Object System.Windows.Forms.Label
@@ -4143,28 +4281,30 @@ function Invoke-CommandRunner {
     $lblFilterInfo = New-Object System.Windows.Forms.Label
     $lblFilterInfo.Text = 'Output Filters (optional - keeps lines containing any pattern, case-insensitive), e.g.: up, Gigabit, 192.168'
     $lblFilterInfo.Location = New-Object System.Drawing.Point(20, $y)
-    $lblFilterInfo.Size = New-Object System.Drawing.Size(650, 20)
+    $lblFilterInfo.Size = New-Object System.Drawing.Size(650, 36)
     $cmdForm.Controls.Add($lblFilterInfo)
-    $y += 25
+    $y += 40
     $txtFilter = New-Object System.Windows.Forms.TextBox
     $txtFilter.Location = New-Object System.Drawing.Point(20, $y)
-    $txtFilter.Size = New-Object System.Drawing.Size(650, 20)
+    $txtFilter.Size = New-Object System.Drawing.Size(650, 23)
     $txtFilter.Font = New-Object System.Drawing.Font('Consolas', 9)
     $cmdForm.Controls.Add($txtFilter)
     $y += 40
     $btnExecute = New-Object System.Windows.Forms.Button
     $btnExecute.Text = 'Execute Commands'
     $btnExecute.Location = New-Object System.Drawing.Point(20, $y)
-    $btnExecute.Size = New-Object System.Drawing.Size(140, 35)
-    $btnExecute.BackColor = [System.Drawing.Color]::LightGreen
+    $btnExecute.Size = New-Object System.Drawing.Size(150, 34)
+    $btnExecute.Tag = 'Primary'
     $cmdForm.Controls.Add($btnExecute)
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(170, $y)
-    $btnCancel.Size = New-Object System.Drawing.Size(100, 35)
+    $btnCancel.Location = New-Object System.Drawing.Point(178, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 34)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $cmdForm.Controls.Add($btnCancel)
     $cmdForm.CancelButton = $btnCancel
+    $cmdForm.ClientSize = New-Object System.Drawing.Size(690, ($y + 54))
+    Set-OctoDialogStyle -Form $cmdForm
     $btnExecute.Add_Click({
         if ([string]::IsNullOrWhiteSpace($txtCommand.Text)) {
             [System.Windows.Forms.MessageBox]::Show('Please enter at least one command', 'Validation Error', 'OK', 'Warning') | Out-Null
@@ -4725,17 +4865,19 @@ $script:dnaUpdatingChecks = $false
 
 # Shared fonts (one GDI object each instead of one per control)
 $script:Fonts = @{
-    Normal    = New-Object System.Drawing.Font('Segoe UI', 9)
-    Bold      = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-    Italic    = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Italic)
-    Header    = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-    Title     = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
-    Dashboard = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-    Mono      = New-Object System.Drawing.Font('Consolas', 9)
-    MonoLarge = New-Object System.Drawing.Font('Consolas', 10)
-    Small     = New-Object System.Drawing.Font('Arial', 8, [System.Drawing.FontStyle]::Italic)
-    Tiny      = New-Object System.Drawing.Font('Arial', 7, [System.Drawing.FontStyle]::Italic)
-    ArialBold = New-Object System.Drawing.Font('Arial', 9, [System.Drawing.FontStyle]::Bold)
+    Normal      = New-Object System.Drawing.Font('Segoe UI', 9)
+    Semibold    = New-Object System.Drawing.Font('Segoe UI Semibold', 9)
+    CardTitle   = New-Object System.Drawing.Font('Segoe UI Semibold', 10.5)
+    Nav         = New-Object System.Drawing.Font('Segoe UI', 10)
+    NavSelected = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+    StatValue   = New-Object System.Drawing.Font('Segoe UI Semibold', 18)
+    Body        = New-Object System.Drawing.Font('Segoe UI', 10)
+    HelpTitle   = New-Object System.Drawing.Font('Segoe UI Semibold', 16)
+    HelpHeading = New-Object System.Drawing.Font('Segoe UI Semibold', 12.5)
+    HelpLabel   = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+    Spacer      = New-Object System.Drawing.Font('Segoe UI', 5)
+    Mono        = New-Object System.Drawing.Font('Consolas', 9)
+    MonoLarge   = New-Object System.Drawing.Font('Consolas', 10)
 }
 
 function New-OctoControl {
@@ -4750,6 +4892,8 @@ function New-OctoControl {
         $Parent
     )
     $c = New-Object -TypeName ('System.Windows.Forms.' + $Type)
+    # Buttons are recoloured whenever they are enabled or disabled
+    if ($Type -eq 'Button') { $c.Add_EnabledChanged({ Set-OctoButtonStyle -Button $this }) }
     if ($Bounds) {
         $c.Location = New-Object System.Drawing.Point($Bounds[0], $Bounds[1])
         if ($Bounds.Count -ge 4) { $c.Size = New-Object System.Drawing.Size($Bounds[2], $Bounds[3]) }
@@ -4757,6 +4901,39 @@ function New-OctoControl {
     if ($Props) { foreach ($key in $Props.Keys) { $c.$key = $Props[$key] } }
     if ($Parent) { [void]$Parent.Controls.Add($c) }
     return $c
+}
+
+function New-OctoCard {
+    <#
+    .SYNOPSIS
+        A bordered panel with a title - the building block of every tab.
+        Content starts at y = 48 (the title row is 12..40).
+    #>
+    param([int[]]$Bounds, [string]$Title, $Parent, [string]$Anchor = 'Top,Left')
+    $card = New-OctoControl Panel $Bounds ([ordered]@{ Tag = 'Card'; Anchor = $Anchor }) $Parent
+    $card.Add_Paint($script:OctoBorderPainter)
+    $card.Add_Resize({ $this.Invalidate() })
+    if ($Title) { [void](New-OctoControl Label @(15, 15) ([ordered]@{ Text = $Title; AutoSize = $true; Font = $script:Fonts.CardTitle; Tag = 'CardTitle' }) $card) }
+    return $card
+}
+
+function New-OctoFrame {
+    # Bordered area with a little padding for one docked text control (logs, editor)
+    param([int[]]$Bounds, $Parent, [string]$Anchor = 'Top,Bottom,Left,Right')
+    $frame = New-OctoControl Panel $Bounds ([ordered]@{ Tag = 'LogFrame'; Anchor = $Anchor; Padding = (New-Object System.Windows.Forms.Padding(8, 6, 1, 1)) }) $Parent
+    $frame.Add_Paint($script:OctoBorderPainter)
+    $frame.Add_Resize({ $this.Invalidate() })
+    return $frame
+}
+
+function New-OctoLogBox {
+    # Read-only log inside a frame
+    param([int[]]$Bounds, $Parent, [string]$Anchor = 'Top,Bottom,Left,Right', [bool]$WordWrap = $true)
+    $frame = New-OctoFrame -Bounds $Bounds -Parent $Parent -Anchor $Anchor
+    return New-OctoControl RichTextBox $null ([ordered]@{
+        Dock = 'Fill'; BorderStyle = 'None'; Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'
+        WordWrap = $WordWrap; HideSelection = $false; DetectUrls = $false; Multiline = $true
+    }) $frame
 }
 
 function Show-OctoMessage {
@@ -4802,7 +4979,7 @@ try {
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.SuspendLayout()
 $mainForm.Text = 'OctoNav - Network Management Tool'
-$windowWidth = 1200; $windowHeight = 800
+$windowWidth = 1245; $windowHeight = 800
 try {
     if ($script:Settings.WindowSize.Width -ge 800) { $windowWidth = [int]$script:Settings.WindowSize.Width }
     if ($script:Settings.WindowSize.Height -ge 500) { $windowHeight = [int]$script:Settings.WindowSize.Height }
@@ -4810,7 +4987,7 @@ try {
 $mainForm.Size = New-Object System.Drawing.Size($windowWidth, $windowHeight)
 $mainForm.StartPosition = 'CenterScreen'
 $mainForm.FormBorderStyle = 'Sizable'
-$mainForm.MinimumSize = New-Object System.Drawing.Size(1245, 600)
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1000, 600)
 $mainForm.Font = $script:Fonts.Normal
 if ($script:Settings.WindowMaximized) { $mainForm.WindowState = 'Maximized' }
 
@@ -4819,6 +4996,7 @@ if ($script:Settings.WindowMaximized) { $mainForm.WindowState = 'Maximized' }
 # ============================================
 
 $menuStrip = New-Object System.Windows.Forms.MenuStrip
+$menuStrip.Padding = New-Object System.Windows.Forms.Padding(6, 3, 0, 1)
 
 $menuFile = New-Object System.Windows.Forms.ToolStripMenuItem('&File')
 $menuFileExit = New-Object System.Windows.Forms.ToolStripMenuItem('E&xit')
@@ -4851,14 +5029,25 @@ $menuView = New-Object System.Windows.Forms.ToolStripMenuItem('&View')
 $menuViewTheme = New-Object System.Windows.Forms.ToolStripMenuItem('Toggle &Theme')
 $menuViewTheme.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::T
 $menuViewTheme.Add_Click({
-    $newTheme = if ($script:CurrentTheme.Name -eq 'Light') { 'Dark' } else { 'Light' }
+    $previous = $script:CurrentTheme
+    $newTheme = if ($previous.Name -eq 'Light') { 'Dark' } else { 'Light' }
     $script:CurrentTheme = Get-Theme -ThemeName $newTheme
     $script:Settings.Theme = $newTheme
     [void](Save-OctoNavSettings -Settings $script:Settings)
-    $mainForm.SuspendLayout()
-    try { Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme } finally { $mainForm.ResumeLayout() }
+    Set-OctoTheme
+    foreach ($log in @($netLogBox, $dhcpLogBox, $dnaLogBox)) { Convert-OctoLogColors -LogBox $log -From $previous -To $script:CurrentTheme }
 })
 [void]$menuView.DropDownItems.Add($menuViewTheme)
+[void]$menuView.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+# Menu shortcuts work wherever the focus is (Ctrl+Tab never reaches a form's KeyDown)
+$menuViewNextTab = New-Object System.Windows.Forms.ToolStripMenuItem('&Next Tab')
+$menuViewNextTab.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::Tab
+$menuViewNextTab.Add_Click({ Select-OctoPage -Index (($script:OctoPageIndex + 1) % $script:OctoPages.Count) })
+[void]$menuView.DropDownItems.Add($menuViewNextTab)
+$menuViewPreviousTab = New-Object System.Windows.Forms.ToolStripMenuItem('&Previous Tab')
+$menuViewPreviousTab.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::Shift -bor [System.Windows.Forms.Keys]::Tab
+$menuViewPreviousTab.Add_Click({ Select-OctoPage -Index (($script:OctoPageIndex + $script:OctoPages.Count - 1) % $script:OctoPages.Count) })
+[void]$menuView.DropDownItems.Add($menuViewPreviousTab)
 
 $menuHelp = New-Object System.Windows.Forms.ToolStripMenuItem('&Help')
 $menuHelpAbout = New-Object System.Windows.Forms.ToolStripMenuItem('&About')
@@ -4872,56 +5061,111 @@ $menuHelpAbout.Add_Click({
 [void]$menuHelp.DropDownItems.Add($menuHelpAbout)
 
 $menuStrip.Items.AddRange([System.Windows.Forms.ToolStripItem[]]@($menuFile, $menuTools, $menuView, $menuHelp))
+
+# ============================================
+# NAVIGATION BAR AND PAGES
+# ============================================
+# Every page is laid out for PageSize: a smaller window scrolls, a larger one stretches
+$script:PageSize = New-Object System.Drawing.Size(1180, 610)
+$script:OctoPages = [System.Collections.Generic.List[object]]::new()
+$script:OctoNavItems = [System.Collections.Generic.List[object]]::new()
+$script:OctoPageIndex = -1
+
+$script:navBar = New-OctoControl Panel $null ([ordered]@{ Dock = 'Top'; Height = 42; Tag = 'Header' })
+$script:navBar.Add_Paint($script:OctoBottomLinePainter)
+$script:navBar.Add_Resize({ $this.Invalidate() })
+$script:navIndicator = New-OctoControl Panel @(0, 39, 10, 3) ([ordered]@{ Tag = 'NavIndicator' }) $script:navBar
+# Pages are filled while the host is suspended, so their controls are anchored to PageSize
+$script:pageHost = New-OctoControl Panel $null ([ordered]@{ Dock = 'Fill'; Tag = 'Page' })
+$script:pageHost.SuspendLayout()
+# Docking order (see Show): status bar, menu, navigation bar, then pages fill the rest
+$mainForm.Controls.Add($script:pageHost)
+$mainForm.Controls.Add($script:navBar)
 $mainForm.Controls.Add($menuStrip)
 $mainForm.MainMenuStrip = $menuStrip
 
-# ============================================
-# CREATE TAB CONTROL
-# ============================================
-
-$tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(16, 30)
-$tabControl.Size = New-Object System.Drawing.Size(($mainForm.ClientSize.Width - 32), ($mainForm.ClientSize.Height - 70))
-$tabControl.Anchor = 'Top,Bottom,Left,Right'
-$mainForm.Controls.Add($tabControl)
-
 function New-OctoTab {
-    param([string]$Text, [string]$Icon, [int]$MinWidth, [int]$MinHeight)
-    $tab = New-Object System.Windows.Forms.TabPage
-    $tab.Text = $Text
-    $tab.AutoScroll = $true
-    if ($MinWidth) { $tab.AutoScrollMinSize = New-Object System.Drawing.Size($MinWidth, $MinHeight) }
-    $tab.Padding = New-Object System.Windows.Forms.Padding(5)
-    Add-IconToTab -Tab $tab -Icon $Icon
-    $tabControl.Controls.Add($tab)
-    return $tab
+    <#
+    .SYNOPSIS
+        Adds a page and its entry in the navigation bar.
+    #>
+    param([string]$Text)
+    $page = New-Object System.Windows.Forms.Panel
+    $page.Text = $Text
+    $page.Tag = 'Page'
+    $page.Size = $script:PageSize
+    $page.AutoScroll = $true
+    $page.AutoScrollMinSize = $script:PageSize
+    $page.Dock = 'Fill'
+    $page.Visible = $false
+    $script:pageHost.Controls.Add($page)
+    $script:OctoPages.Add($page)
+
+    $x = 8
+    if ($script:OctoNavItems.Count -gt 0) { $x = $script:OctoNavItems[$script:OctoNavItems.Count - 1].Right }
+    $width = [System.Windows.Forms.TextRenderer]::MeasureText($Text, $script:Fonts.NavSelected).Width + 28
+    $navItem = New-OctoControl Label @($x, 0, $width, 39) ([ordered]@{ Text = $Text; TextAlign = 'MiddleCenter'; Font = $script:Fonts.Nav; Tag = 'NavItem'; Cursor = [System.Windows.Forms.Cursors]::Hand }) $script:navBar
+    $navItem.Add_Click({ Select-OctoPage -Index $script:OctoNavItems.IndexOf($this) })
+    $navItem.Add_MouseEnter({ if ($script:OctoNavItems.IndexOf($this) -ne $script:OctoPageIndex) { $this.ForeColor = $script:CurrentTheme.NavHover } })
+    $navItem.Add_MouseLeave({ Update-OctoNav })
+    $script:OctoNavItems.Add($navItem)
+    return $page
+}
+
+function Select-OctoPage {
+    param([int]$Index)
+    if ($Index -lt 0 -or $Index -ge $script:OctoPages.Count) { return }
+    # Show the new page before hiding the old one (no flash of the empty host)
+    $script:OctoPages[$Index].Visible = $true
+    for ($i = 0; $i -lt $script:OctoPages.Count; $i++) { if ($i -ne $Index) { $script:OctoPages[$i].Visible = $false } }
+    $script:OctoPageIndex = $Index
+    Update-OctoNav
+}
+
+function Update-OctoNav {
+    # Selected entry: accent colour, semibold, underline
+    for ($i = 0; $i -lt $script:OctoNavItems.Count; $i++) {
+        $navItem = $script:OctoNavItems[$i]
+        if ($i -eq $script:OctoPageIndex) {
+            $navItem.ForeColor = $script:CurrentTheme.NavSelected
+            $navItem.Font = $script:Fonts.NavSelected
+            $script:navIndicator.Location = New-Object System.Drawing.Point(($navItem.Left + 12), 39)
+            $script:navIndicator.Size = New-Object System.Drawing.Size([Math]::Max(0, $navItem.Width - 24), 3)
+        } else {
+            $navItem.ForeColor = $script:CurrentTheme.NavText
+            $navItem.Font = $script:Fonts.Nav
+        }
+    }
 }
 
 # ============================================
 # TAB: DASHBOARD
 # ============================================
 
-$tab0 = New-OctoTab -Text 'Dashboard' -Icon '=' -MinWidth 980 -MinHeight 650
-[void](New-OctoControl Label @(15, 15, 900, 30) ([ordered]@{ Text = 'OctoNav System Dashboard'; Font = $script:Fonts.Title; Anchor = 'Top,Left,Right' }) $tab0)
-$healthGroupBox = New-OctoControl GroupBox @(15, 55, 920, 130) ([ordered]@{ Text = 'System Health'; Anchor = 'Top,Left,Right' }) $tab0
-$script:adminPanel = New-DashboardPanel -Title 'Admin Status' -Value '...' -X 20 -Y 25
-$script:networkPanel = New-DashboardPanel -Title 'Network Adapters' -Value '...' -X 255 -Y 25
-$script:dnaPanel = New-DashboardPanel -Title 'DNA Center' -Value 'Not Connected' -X 490 -Y 25
-$script:dhcpPanel = New-DashboardPanel -Title 'DHCP Servers' -Value '...' -X 725 -Y 25
-foreach ($p in @($script:adminPanel, $script:networkPanel, $script:dnaPanel, $script:dhcpPanel)) { $healthGroupBox.Controls.Add($p.Panel) }
-$recentActivityGroupBox = New-OctoControl GroupBox @(15, 195, 920, 390) ([ordered]@{ Text = 'Recent Activity'; Anchor = 'Top,Bottom,Left,Right' }) $tab0
-$script:lstRecentActivity = New-OctoControl ListBox @(15, 25, 885, 350) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Bottom,Left,Right' }) $recentActivityGroupBox
+$tab0 = New-OctoTab -Text 'Dashboard'
+# Four equal status cards that stretch with the window
+$statsTable = New-OctoControl TableLayoutPanel @(10, 16, 1160, 100) ([ordered]@{ ColumnCount = 4; RowCount = 1; Anchor = 'Top,Left,Right' }) $tab0
+foreach ($i in 1..4) { [void]$statsTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+[void]$statsTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$script:adminPanel = New-DashboardPanel -Title 'Admin Status' -Value '...'
+$script:networkPanel = New-DashboardPanel -Title 'Network Adapters' -Value '...'
+$script:dnaPanel = New-DashboardPanel -Title 'DNA Center' -Value 'Not Connected'
+$script:dhcpPanel = New-DashboardPanel -Title 'DHCP Servers' -Value '...'
+$column = 0
+foreach ($p in @($script:adminPanel, $script:networkPanel, $script:dnaPanel, $script:dhcpPanel)) { $statsTable.Controls.Add($p.Panel, $column, 0); $column++ }
+$activityCard = New-OctoCard -Bounds @(16, 128, 1148, 466) -Title 'Recent Activity' -Parent $tab0 -Anchor 'Top,Bottom,Left,Right'
+$script:lstRecentActivity = New-OctoControl ListBox @(16, 48, 1116, 402) ([ordered]@{ Font = $script:Fonts.Body; BorderStyle = 'None'; IntegralHeight = $false; Anchor = 'Top,Bottom,Left,Right' }) $activityCard
 
 function Update-Dashboard {
     param([switch]$IncludeAdapters)
     try {
-        if ($script:IsRunningAsAdmin) { Set-DashboardValue -Panel $script:adminPanel -Value 'Active' -Color ([System.Drawing.Color]::Green) }
-        else { Set-DashboardValue -Panel $script:adminPanel -Value 'Standard' -Color ([System.Drawing.Color]::Orange) }
+        if ($script:IsRunningAsAdmin) { Set-DashboardValue -Panel $script:adminPanel -Value 'Active' -Tone Success }
+        else { Set-DashboardValue -Panel $script:adminPanel -Value 'Standard' -Tone Warning }
         if ($IncludeAdapters) {
             Set-DashboardValue -Panel $script:networkPanel -Value ([string]@(Get-NetAdapter -ErrorAction SilentlyContinue).Count)
         }
-        if (Test-DNACTokenValid) { Set-DashboardValue -Panel $script:dnaPanel -Value 'Connected' -Color ([System.Drawing.Color]::Green) }
-        else { Set-DashboardValue -Panel $script:dnaPanel -Value 'Disconnected' -Color ([System.Drawing.Color]::Gray) }
+        if (Test-DNACTokenValid) { Set-DashboardValue -Panel $script:dnaPanel -Value 'Connected' -Tone Success }
+        else { Set-DashboardValue -Panel $script:dnaPanel -Value 'Disconnected' -Tone Muted }
         Set-DashboardValue -Panel $script:dhcpPanel -Value ([string]$script:lstDHCPServers.Items.Count)
         $script:lstRecentActivity.BeginUpdate()
         try {
@@ -4937,31 +5181,25 @@ function Update-Dashboard {
 # TAB: NETWORK CONFIGURATION
 # ============================================
 
-$tab1 = New-OctoTab -Text 'Network Configuration' -Icon '~' -MinWidth 980 -MinHeight 680
-$lblAdminStatus = New-OctoControl Label @(10, 10, 940, 25) ([ordered]@{ Font = $script:Fonts.Bold; TextAlign = 'MiddleLeft'; Anchor = 'Top,Left,Right' }) $tab1
-if ($script:IsRunningAsAdmin) {
-    $lblAdminStatus.Text = '[OK] Administrator Privileges: ACTIVE - Network configuration enabled'
-    $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
-    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)
-} else {
-    $lblAdminStatus.Text = "[i] Running as a standard user - this tab needs 'Run as Administrator'. All other tabs work normally."
-    $lblAdminStatus.ForeColor = [System.Drawing.Color]::DarkOrange
-    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(255, 245, 230)
-}
-$netGroupBox = New-OctoControl GroupBox @(10, 40, 940, 250) ([ordered]@{ Text = 'Network Adapter Configuration'; Anchor = 'Top,Left,Right' }) $tab1
-$btnFindNetwork = New-OctoControl Button @(20, 30, 200, 30) ([ordered]@{ Text = 'Find Unidentified Network' }) $netGroupBox
-[void](New-OctoControl Label @(20, 80, 120, 20) ([ordered]@{ Text = 'New IP Address:' }) $netGroupBox)
-$txtIPAddress = New-OctoControl TextBox @(150, 78, 200, 20) ([ordered]@{ Text = '192.168.1.101' }) $netGroupBox
-[void](New-OctoControl Label @(20, 120, 120, 20) ([ordered]@{ Text = 'Gateway:' }) $netGroupBox)
-$txtGateway = New-OctoControl TextBox @(150, 118, 200, 20) ([ordered]@{ Text = '192.168.1.100' }) $netGroupBox
-[void](New-OctoControl Label @(20, 160, 120, 20) ([ordered]@{ Text = 'Prefix Length:' }) $netGroupBox)
-$txtPrefix = New-OctoControl TextBox @(150, 158, 200, 20) ([ordered]@{ Text = '24' }) $netGroupBox
-$btnApplyConfig = New-OctoControl Button @(20, 200, 200, 30) ([ordered]@{ Text = 'Apply Configuration' }) $netGroupBox
-$btnRestoreDefaults = New-OctoControl Button @(240, 200, 200, 30) ([ordered]@{ Text = 'Restore Defaults' }) $netGroupBox
-$netLogBox = New-OctoControl RichTextBox @(10, 300, 940, 310) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $false
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Bottom,Left,Right'
-}) $tab1
+$tab1 = New-OctoTab -Text 'Network Configuration'
+$adminTone = if ($script:IsRunningAsAdmin) { 'InfoSuccess' } else { 'InfoWarning' }
+$adminBar = New-OctoControl Panel @(16, 16, 1148, 40) ([ordered]@{ Tag = $adminTone; Anchor = 'Top,Left,Right' }) $tab1
+$lblAdminStatus = New-OctoControl Label $null ([ordered]@{ Dock = 'Fill'; TextAlign = 'MiddleLeft'; Font = $script:Fonts.Semibold; Tag = $adminTone; Padding = (New-Object System.Windows.Forms.Padding(12, 0, 12, 0)) }) $adminBar
+$lblAdminStatus.Text = if ($script:IsRunningAsAdmin) { 'Running as Administrator - network configuration is enabled' }
+    else { "Running as a standard user - this tab needs 'Run as Administrator'. All other tabs work normally." }
+$netCard = New-OctoCard -Bounds @(16, 68, 380, 316) -Title 'Adapter Configuration' -Parent $tab1
+$btnFindNetwork = New-OctoControl Button @(16, 48, 348, 32) ([ordered]@{ Text = 'Find Unidentified Network' }) $netCard
+[void](New-OctoControl Label @(16, 101, 120, 20) ([ordered]@{ Text = 'New IP Address' }) $netCard)
+$txtIPAddress = New-OctoControl TextBox @(140, 98, 224, 23) ([ordered]@{ Text = '192.168.1.101' }) $netCard
+[void](New-OctoControl Label @(16, 135, 120, 20) ([ordered]@{ Text = 'Gateway' }) $netCard)
+$txtGateway = New-OctoControl TextBox @(140, 132, 224, 23) ([ordered]@{ Text = '192.168.1.100' }) $netCard
+[void](New-OctoControl Label @(16, 169, 120, 20) ([ordered]@{ Text = 'Prefix Length' }) $netCard)
+$txtPrefix = New-OctoControl TextBox @(140, 166, 60, 23) ([ordered]@{ Text = '24' }) $netCard
+$btnApplyConfig = New-OctoControl Button @(16, 212, 170, 34) ([ordered]@{ Text = 'Apply Configuration'; Tag = 'Primary' }) $netCard
+$btnRestoreDefaults = New-OctoControl Button @(194, 212, 170, 34) ([ordered]@{ Text = 'Restore Defaults' }) $netCard
+[void](New-OctoControl Label @(16, 258, 348, 50) ([ordered]@{ Text = 'Apply sets this address on the unidentified (169.254.x.x) adapter and starts the TFTP server. Restore Defaults switches it back to DHCP.'; Tag = 'Muted' }) $netCard)
+$netLogCard = New-OctoCard -Bounds @(408, 68, 756, 526) -Title 'Log' -Parent $tab1 -Anchor 'Top,Bottom,Left,Right'
+$netLogBox = New-OctoLogBox -Bounds @(16, 48, 724, 462) -Parent $netLogCard -WordWrap $false
 
 function Set-TargetAdapter {
     param($NetworkInfo)
@@ -5079,69 +5317,61 @@ $btnRestoreDefaults.Add_Click({
 # TAB: DHCP STATISTICS
 # ============================================
 
-$tab2 = New-OctoTab -Text 'DHCP Statistics' -Icon '=' -MinWidth 1280 -MinHeight 600
+$tab2 = New-OctoTab -Text 'DHCP Statistics'
 $toolTip = New-Object System.Windows.Forms.ToolTip
 $toolTip.AutoPopDelay = 15000
 
-[void](New-OctoControl Label @(15, 15, 900, 20) ([ordered]@{ Text = 'Collect and analyze DHCP scope statistics from domain DHCP servers'; Font = $script:Fonts.Italic; ForeColor = [System.Drawing.Color]::DarkBlue }) $tab2)
+# --- Servers (left column)
+$dhcpServerCard = New-OctoCard -Bounds @(16, 16, 700, 200) -Title 'DHCP Servers' -Parent $tab2
+$script:lblLastRefresh = New-OctoControl Label @(140, 19, 380, 20) ([ordered]@{ Text = 'Last refreshed: Never'; Tag = 'Muted' }) $dhcpServerCard
+$btnRefreshDHCPServers = New-OctoControl Button @(534, 12, 150, 28) ([ordered]@{ Text = 'Refresh Server List' }) $dhcpServerCard
+$script:lstDHCPServers = New-OctoControl CheckedListBox @(16, 50, 420, 104) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false }) $dhcpServerCard
+$btnSelectAll = New-OctoControl Button @(448, 50, 114, 28) ([ordered]@{ Text = 'Select All' }) $dhcpServerCard
+$btnSelectNone = New-OctoControl Button @(570, 50, 114, 28) ([ordered]@{ Text = 'Select None' }) $dhcpServerCard
+[void](New-OctoControl Label @(448, 91, 236, 18) ([ordered]@{ Text = 'Or enter names (comma-separated)' }) $dhcpServerCard)
+$txtSpecificServers = New-OctoControl TextBox @(448, 111, 236, 23) ([ordered]@{ MaxLength = 1000 }) $dhcpServerCard
+[void](New-OctoControl Label @(16, 166, 668, 20) ([ordered]@{ Text = 'Nothing selected or entered = all DHCP servers in Active Directory. The server list is cached.'; Tag = 'Muted' }) $dhcpServerCard)
 
-# --- Server selection
-$dhcpServerGroupBox = New-OctoControl GroupBox @(10, 40, 920, 170) ([ordered]@{ Text = 'Server Selection'; Anchor = 'Top,Left,Right' }) $tab2
-[void](New-OctoControl Label @(15, 20, 350, 20) ([ordered]@{ Text = 'Select DHCP servers to query (check all that apply):'; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpServerGroupBox)
-$btnRefreshDHCPServers = New-OctoControl Button @(370, 17, 150, 25) ([ordered]@{ Text = 'Refresh Server List' }) $dhcpServerGroupBox
-$script:lblLastRefresh = New-OctoControl Label @(530, 21, 380, 20) ([ordered]@{ Text = 'Last refreshed: Never'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpServerGroupBox
-$script:lstDHCPServers = New-OctoControl CheckedListBox @(15, 45, 450, 95) ([ordered]@{ CheckOnClick = $true }) $dhcpServerGroupBox
-$btnSelectAll = New-OctoControl Button @(480, 45, 100, 25) ([ordered]@{ Text = 'Select All' }) $dhcpServerGroupBox
-$btnSelectNone = New-OctoControl Button @(480, 75, 100, 25) ([ordered]@{ Text = 'Select None' }) $dhcpServerGroupBox
-[void](New-OctoControl Label @(590, 72, 250, 20) ([ordered]@{ Text = 'Or enter manually (comma-separated):'; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpServerGroupBox)
-$txtSpecificServers = New-OctoControl TextBox @(590, 95, 320, 20) ([ordered]@{ MaxLength = 1000 }) $dhcpServerGroupBox
-[void](New-OctoControl Label @(15, 148, 900, 20) ([ordered]@{ Text = 'Servers are cached from Active Directory. If no servers are selected or entered, all domain DHCP servers are queried.'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpServerGroupBox)
-
-# --- Scope selection
-$dhcpScopeGroupBox = New-OctoControl GroupBox @(10, 220, 920, 160) ([ordered]@{ Text = 'Scope Selection (Optional)'; Anchor = 'Top,Left,Right' }) $tab2
-[void](New-OctoControl Label @(15, 20, 400, 20) ([ordered]@{ Text = 'Select specific scopes from cache (leave empty to collect all):' }) $dhcpScopeGroupBox)
-$script:btnRefreshScopeCache = New-OctoControl Button @(420, 17, 120, 25) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeGroupBox
-$script:lblScopeCacheStatus = New-OctoControl Label @(550, 21, 360, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(15, 47, 40, 20) ([ordered]@{ Text = 'Filter:' }) $dhcpScopeGroupBox)
+# --- Scopes (left column, grows with the window)
+$dhcpScopeCard = New-OctoCard -Bounds @(16, 228, 700, 314) -Title 'Scopes (Optional)' -Parent $tab2 -Anchor 'Top,Bottom,Left'
+$script:lblScopeCacheStatus = New-OctoControl Label @(162, 19, 380, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Tag = 'Muted' }) $dhcpScopeCard
+$script:btnRefreshScopeCache = New-OctoControl Button @(554, 12, 130, 28) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeCard
+[void](New-OctoControl Label @(16, 55, 40, 20) ([ordered]@{ Text = 'Filter' }) $dhcpScopeCard)
 $script:ScopeFilterPlaceholder = 'e.g., SITE1, SITE2 (min 3 chars)'
 $script:PrefixFilterPlaceholder = 'e.g., ZA (2+ chars)'
-$script:txtScopeListFilter = New-OctoControl TextBox @(55, 45, 300, 20) ([ordered]@{ MaxLength = 500; ForeColor = [System.Drawing.Color]::Gray; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(365, 47, 40, 20) ([ordered]@{ Text = 'Prefix:' }) $dhcpScopeGroupBox)
-$script:txtPrefixFilter = New-OctoControl TextBox @(405, 45, 120, 20) ([ordered]@{ MaxLength = 10; ForeColor = [System.Drawing.Color]::Gray; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeGroupBox
-$script:lstDHCPScopes = New-OctoControl CheckedListBox @(15, 70, 690, 75) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false }) $dhcpScopeGroupBox
-$btnSelectAllScopes = New-OctoControl Button @(720, 70, 120, 30) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeGroupBox
-$btnSelectNoneScopes = New-OctoControl Button @(720, 105, 100, 30) ([ordered]@{ Text = 'Select None' }) $dhcpScopeGroupBox
-$script:lblVisibleScopes = New-OctoControl Label @(845, 72, 70, 60) ([ordered]@{ Font = $script:Fonts.Tiny; ForeColor = [System.Drawing.Color]::DarkBlue }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(15, 145, 900, 15) ([ordered]@{ Text = 'Workflow: Refresh cache -> Filter/Prefix (optional) -> Select All Visible -> Collect DHCP Statistics. Selections are kept when the filter changes.'; Font = $script:Fonts.Tiny; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpScopeGroupBox)
+$script:txtScopeListFilter = New-OctoControl TextBox @(60, 52, 290, 23) ([ordered]@{ MaxLength = 500; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeCard
+[void](New-OctoControl Label @(366, 55, 40, 20) ([ordered]@{ Text = 'Prefix' }) $dhcpScopeCard)
+$script:txtPrefixFilter = New-OctoControl TextBox @(410, 52, 136, 23) ([ordered]@{ MaxLength = 10; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeCard
+$script:lstDHCPScopes = New-OctoControl CheckedListBox @(16, 86, 530, 184) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dhcpScopeCard
+$btnSelectAllScopes = New-OctoControl Button @(558, 86, 126, 28) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeCard
+$btnSelectNoneScopes = New-OctoControl Button @(558, 120, 126, 28) ([ordered]@{ Text = 'Select None' }) $dhcpScopeCard
+$script:lblVisibleScopes = New-OctoControl Label @(558, 156, 126, 40) ([ordered]@{ Tag = 'Muted' }) $dhcpScopeCard
+[void](New-OctoControl Label @(16, 280, 668, 20) ([ordered]@{ Text = 'Refresh Cache, filter (comma = OR), then Select All Visible. Selections are kept when the filter changes.'; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
 
-# --- Options
-$dhcpOptionsGroupBox = New-OctoControl GroupBox @(10, 390, 920, 90) ([ordered]@{ Text = 'Collection Options'; Anchor = 'Top,Left,Right' }) $tab2
-$chkIncludeDNS = New-OctoControl CheckBox @(15, 25, 180, 20) ([ordered]@{ Text = 'Include DNS (Option 6)' }) $dhcpOptionsGroupBox
-$chkIncludeOption60 = New-OctoControl CheckBox @(210, 25, 230, 20) ([ordered]@{ Text = 'Include Option 60 (Vendor Class)' }) $dhcpOptionsGroupBox
-$chkIncludeOption43 = New-OctoControl CheckBox @(455, 25, 260, 20) ([ordered]@{ Text = 'Include Option 43 (Vendor-Specific)' }) $dhcpOptionsGroupBox
-$script:chkGroupByScope = New-OctoControl CheckBox @(15, 55, 190, 20) ([ordered]@{ Text = 'Group by Scope ID on Export' }) $dhcpOptionsGroupBox
-$script:chkShowAllOptions = New-OctoControl CheckBox @(210, 55, 200, 20) ([ordered]@{ Text = 'Show All Configured Options' }) $dhcpOptionsGroupBox
-[void](New-OctoControl Label @(455, 55, 120, 20) ([ordered]@{ Text = 'Parallel Operations:' }) $dhcpOptionsGroupBox)
+# --- Actions (bottom left)
+$btnCollectDHCP = New-OctoControl Button @(16, 554, 220, 40) ([ordered]@{ Text = 'Collect DHCP Statistics'; Tag = 'Primary'; Anchor = 'Bottom,Left' }) $tab2
+$btnStopDHCP = New-OctoControl Button @(244, 554, 90, 40) ([ordered]@{ Text = 'Stop'; Tag = 'Danger'; Enabled = $false; Anchor = 'Bottom,Left' }) $tab2
+
+# --- Options (right column)
+$dhcpOptionsCard = New-OctoCard -Bounds @(728, 16, 436, 136) -Title 'Options' -Parent $tab2 -Anchor 'Top,Left,Right'
+$chkIncludeDNS = New-OctoControl CheckBox @(16, 46, 200, 22) ([ordered]@{ Text = 'DNS Servers (Option 6)' }) $dhcpOptionsCard
+$chkIncludeOption60 = New-OctoControl CheckBox @(224, 46, 200, 22) ([ordered]@{ Text = 'Option 60 (Vendor Class)' }) $dhcpOptionsCard
+$chkIncludeOption43 = New-OctoControl CheckBox @(16, 72, 200, 22) ([ordered]@{ Text = 'Option 43 (Vendor-Specific)' }) $dhcpOptionsCard
+$script:chkShowAllOptions = New-OctoControl CheckBox @(224, 72, 200, 22) ([ordered]@{ Text = 'All Configured Options' }) $dhcpOptionsCard
+$script:chkGroupByScope = New-OctoControl CheckBox @(16, 98, 200, 22) ([ordered]@{ Text = 'Group by Scope ID on Export' }) $dhcpOptionsCard
+[void](New-OctoControl Label @(224, 100, 100, 20) ([ordered]@{ Text = 'Parallel queries' }) $dhcpOptionsCard)
 $defaultParallel = 20
 try { if ([int]$script:Settings.DHCPParallelServers -ge 1 -and [int]$script:Settings.DHCPParallelServers -le 64) { $defaultParallel = [int]$script:Settings.DHCPParallelServers } } catch { }
-$script:numConcurrency = New-OctoControl NumericUpDown @(575, 53, 60, 20) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsGroupBox
-[void](New-OctoControl Label @(640, 55, 260, 20) ([ordered]@{ Text = '(servers / option lookups at once)'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpOptionsGroupBox)
+$script:numConcurrency = New-OctoControl NumericUpDown @(328, 97, 60, 23) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsCard
 $toolTip.SetToolTip($script:chkGroupByScope, "One row per Scope ID:`n- failover partners report the whole scope, so they are counted once`n- split scopes (same ID, no failover) have their pools added together`n- inactive copies are not counted")
 $toolTip.SetToolTip($script:numConcurrency, 'How many DHCP servers (and option lookups) are queried at the same time.')
 
-# --- Actions
-$dhcpActionsGroupBox = New-OctoControl GroupBox @(10, 490, 920, 65) ([ordered]@{ Text = 'Actions'; Anchor = 'Top,Left,Right' }) $tab2
-$btnCollectDHCP = New-OctoControl Button @(15, 20, 200, 35) ([ordered]@{ Text = 'Collect DHCP Statistics'; BackColor = [System.Drawing.Color]::LightGreen }) $dhcpActionsGroupBox
-$btnStopDHCP = New-OctoControl Button @(230, 20, 100, 35) ([ordered]@{ Text = 'Stop'; BackColor = [System.Drawing.Color]::LightCoral; Enabled = $false }) $dhcpActionsGroupBox
-$btnExportDHCPWorkDir = New-OctoControl Button @(345, 20, 140, 35) ([ordered]@{ Text = 'Export to Working Dir'; Enabled = $false }) $dhcpActionsGroupBox
-$btnExportDHCPFolder = New-OctoControl Button @(495, 20, 130, 35) ([ordered]@{ Text = 'Export to Folder...'; Enabled = $false }) $dhcpActionsGroupBox
-[void](New-OctoControl Label @(640, 28, 270, 20) ([ordered]@{ Text = 'Results are auto-exported after collection'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpActionsGroupBox)
-
-[void](New-OctoControl Label @(945, 15, 200, 20) ([ordered]@{ Text = 'Collection Log'; Font = $script:Fonts.Header; ForeColor = [System.Drawing.Color]::DarkBlue; Anchor = 'Top,Right' }) $tab2)
-$dhcpLogBox = New-OctoControl RichTextBox @(945, 40, 320, 515) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $true
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Bottom,Right'
-}) $tab2
+# --- Log and export (right column)
+$dhcpLogCard = New-OctoCard -Bounds @(728, 164, 436, 430) -Title 'Collection Log' -Parent $tab2 -Anchor 'Top,Bottom,Left,Right'
+$btnExportDHCPWorkDir = New-OctoControl Button @(140, 12, 148, 28) ([ordered]@{ Text = 'Export to Working Dir'; Enabled = $false; Anchor = 'Top,Right' }) $dhcpLogCard
+$btnExportDHCPFolder = New-OctoControl Button @(296, 12, 124, 28) ([ordered]@{ Text = 'Export to Folder...'; Enabled = $false; Anchor = 'Top,Right' }) $dhcpLogCard
+$dhcpLogBox = New-OctoLogBox -Bounds @(16, 50, 404, 340) -Parent $dhcpLogCard
+[void](New-OctoControl Label @(16, 398, 404, 20) ([ordered]@{ Text = 'Results are exported automatically after each collection.'; Tag = 'Muted'; Anchor = 'Bottom,Left,Right' }) $dhcpLogCard)
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -5202,16 +5432,22 @@ function Reset-ScopeFilterBoxes {
     $script:filterChangeFromCode = $true
     try {
         $script:txtScopeListFilter.Text = $script:ScopeFilterPlaceholder
-        $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
         $script:txtPrefixFilter.Text = $script:PrefixFilterPlaceholder
-        $script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Gray
     } finally { $script:filterChangeFromCode = $false }
+    Update-ScopeFilterColors
+}
+
+function Update-ScopeFilterColors {
+    # Placeholder text is muted, typed text is normal (also after a theme change)
+    foreach ($pair in @(@($script:txtScopeListFilter, $script:ScopeFilterPlaceholder), @($script:txtPrefixFilter, $script:PrefixFilterPlaceholder))) {
+        $pair[0].ForeColor = if ($pair[0].Text -eq $pair[1]) { $script:CurrentTheme.TextMuted } else { $script:CurrentTheme.InputText }
+    }
 }
 
 function Update-ScopeCountLabel {
     $visible = $script:lstDHCPScopes.Items.Count
     $selected = $script:selectedScopeNames.Count
-    $script:lblVisibleScopes.Text = if ($selected -gt 0) { "($visible visible,`n$selected selected)" } else { "($visible visible)" }
+    $script:lblVisibleScopes.Text = if ($selected -gt 0) { "$visible visible`n$selected selected" } else { "$visible visible" }
 }
 
 function Update-ScopeListView {
@@ -5323,7 +5559,7 @@ function Start-DhcpScopeCacheRefresh {
     $servers = @(Merge-DhcpServerList -Entries @(Get-CheckedDhcpServerEntries) -Resolved $script:dhcpServerResolved)
     Set-DhcpBusy -Busy $true
     $script:lblScopeCacheStatus.Text = 'Cache: Updating...'
-    $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Orange
+    Set-OctoTone -Control $script:lblScopeCacheStatus -Tone Warning
     $pool = New-OctoRunspacePool -MaxRunspaces ([int]$script:numConcurrency.Value) -FunctionNames $script:DhcpWorkerFunctions
     $script:dhcpJob = Start-OctoJob -Pool $pool -OnTaskComplete {
         param($job, $task, $result)
@@ -5370,14 +5606,14 @@ function Start-DhcpScopeCacheRefresh {
         Set-DhcpBusy -Busy $false
         if ($job.Stopped) {
             $script:lblScopeCacheStatus.Text = 'Cache: refresh cancelled'
-            $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Gray
+            Set-OctoTone -Control $script:lblScopeCacheStatus -Tone Muted
             return
         }
         $scopes = $data.Scopes.ToArray()
         Set-DhcpScopeList -Scopes $scopes
         $script:scopeCacheUpdated = Get-Date
         $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        Set-OctoTone -Control $script:lblScopeCacheStatus -Tone Success
         Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) in $([math]::Round($data.Stopwatch.Elapsed.TotalSeconds, 1))s" -Color 'Success' -LogBox $dhcpLogBox
         if ($data.Failed.Count -gt 0) {
             Write-Log -Message ('{0} server(s) failed twice and are not in the cache: {1} - Refresh Cache again to add them' -f $data.Failed.Count, ($data.Failed -join ', ')) -Color 'Warning' -LogBox $dhcpLogBox
@@ -5597,7 +5833,7 @@ $script:btnRefreshScopeCache.Add_Click({
     try { Start-DhcpScopeCacheRefresh }
     catch {
         $script:lblScopeCacheStatus.Text = 'Cache: Error'
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Red
+        Set-OctoTone -Control $script:lblScopeCacheStatus -Tone Error
         Write-Log -Message "Error refreshing scope cache: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox
         Set-DhcpBusy -Busy $false
     }
@@ -5610,7 +5846,7 @@ foreach ($box in @($script:txtScopeListFilter, $script:txtPrefixFilter)) {
         if ($this.Text -eq $placeholder) {
             $script:filterChangeFromCode = $true
             $this.Text = ''
-            $this.ForeColor = $script:CurrentTheme.TextBoxForeColor
+            $this.ForeColor = $script:CurrentTheme.InputText
             $script:filterChangeFromCode = $false
         }
     })
@@ -5618,7 +5854,7 @@ foreach ($box in @($script:txtScopeListFilter, $script:txtPrefixFilter)) {
         if ([string]::IsNullOrWhiteSpace($this.Text)) {
             $script:filterChangeFromCode = $true
             $this.Text = if ($this -eq $script:txtScopeListFilter) { $script:ScopeFilterPlaceholder } else { $script:PrefixFilterPlaceholder }
-            $this.ForeColor = [System.Drawing.Color]::Gray
+            $this.ForeColor = $script:CurrentTheme.TextMuted
             $script:filterChangeFromCode = $false
         }
     })
@@ -5725,43 +5961,46 @@ $script:dnaCenterServers = @(Get-DNACenterServers)
 $script:dnaDeviceEntries = @()
 $script:DnaFunctionNames = @{}
 
-$tab3 = New-OctoTab -Text 'DNA Center' -Icon '#' -MinWidth 980 -MinHeight 960
+$tab3 = New-OctoTab -Text 'DNA Center'
 
-# --- Connection
-$dnaConnGroupBox = New-OctoControl GroupBox @(10, 10, 940, 140) ([ordered]@{ Text = 'DNA Center Connection'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(20, 30, 120, 20) ([ordered]@{ Text = 'DNA Center Server:' }) $dnaConnGroupBox)
-$comboDNAServer = New-OctoControl ComboBox @(150, 28, 350, 20) ([ordered]@{ DropDownStyle = 'DropDownList' }) $dnaConnGroupBox
+# --- Connection (left column)
+$dnaConnCard = New-OctoCard -Bounds @(16, 16, 640, 162) -Title 'Connection' -Parent $tab3
+[void](New-OctoControl Label @(16, 51, 80, 20) ([ordered]@{ Text = 'Server' }) $dnaConnCard)
+$comboDNAServer = New-OctoControl ComboBox @(100, 48, 524, 23) ([ordered]@{ DropDownStyle = 'DropDownList' }) $dnaConnCard
 foreach ($server in $script:dnaCenterServers) { [void]$comboDNAServer.Items.Add("$($server.Name) - $($server.Url)") }
 if ($comboDNAServer.Items.Count -gt 0) { $comboDNAServer.SelectedIndex = 0 }
-[void](New-OctoControl Label @(20, 65, 120, 20) ([ordered]@{ Text = 'Username:' }) $dnaConnGroupBox)
-$txtDNAUser = New-OctoControl TextBox @(150, 63, 200, 20) $null $dnaConnGroupBox
-[void](New-OctoControl Label @(20, 100, 120, 20) ([ordered]@{ Text = 'Password:' }) $dnaConnGroupBox)
-$txtDNAPass = New-OctoControl TextBox @(150, 98, 200, 20) ([ordered]@{ UseSystemPasswordChar = $true }) $dnaConnGroupBox
-$btnDNAConnect = New-OctoControl Button @(370, 63, 120, 30) ([ordered]@{ Text = 'Connect' }) $dnaConnGroupBox
-$btnLoadDevices = New-OctoControl Button @(500, 63, 120, 30) ([ordered]@{ Text = 'Load Devices'; Enabled = $false }) $dnaConnGroupBox
-$btnDNAStop = New-OctoControl Button @(630, 63, 100, 30) ([ordered]@{ Text = 'Stop'; Enabled = $false; BackColor = [System.Drawing.Color]::LightCoral }) $dnaConnGroupBox
-[void](New-OctoControl Label @(370, 100, 550, 20) ([ordered]@{ Text = 'Device queries run in parallel; Stop cancels the running report.'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dnaConnGroupBox)
+[void](New-OctoControl Label @(16, 85, 80, 20) ([ordered]@{ Text = 'Username' }) $dnaConnCard)
+$txtDNAUser = New-OctoControl TextBox @(100, 82, 180, 23) $null $dnaConnCard
+[void](New-OctoControl Label @(300, 85, 70, 20) ([ordered]@{ Text = 'Password' }) $dnaConnCard)
+$txtDNAPass = New-OctoControl TextBox @(374, 82, 250, 23) ([ordered]@{ UseSystemPasswordChar = $true }) $dnaConnCard
+$btnDNAConnect = New-OctoControl Button @(16, 118, 110, 30) ([ordered]@{ Text = 'Connect'; Tag = 'Primary' }) $dnaConnCard
+$btnLoadDevices = New-OctoControl Button @(134, 118, 120, 30) ([ordered]@{ Text = 'Load Devices'; Enabled = $false }) $dnaConnCard
+$btnDNAStop = New-OctoControl Button @(262, 118, 80, 30) ([ordered]@{ Text = 'Stop'; Tag = 'Danger'; Enabled = $false }) $dnaConnCard
+[void](New-OctoControl Label @(354, 124, 230, 20) ([ordered]@{ Text = 'Stop cancels the running report'; Tag = 'Muted' }) $dnaConnCard)
 
-# --- Device filtering and selection
-$dnaFilterGroupBox = New-OctoControl GroupBox @(10, 160, 940, 350) ([ordered]@{ Text = 'Device Filtering & Selection'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(20, 30, 110, 20) ([ordered]@{ Text = 'Hostname Search:' }) $dnaFilterGroupBox)
-$txtFilterHostname = New-OctoControl TextBox @(135, 28, 200, 20) ([ordered]@{ Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(360, 30, 50, 20) ([ordered]@{ Text = 'Family:' }) $dnaFilterGroupBox)
-$cmbFilterFamily = New-OctoControl ComboBox @(415, 28, 180, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(620, 30, 40, 20) ([ordered]@{ Text = 'Role:' }) $dnaFilterGroupBox)
-$cmbFilterRole = New-OctoControl ComboBox @(665, 28, 180, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(20, 65, 110, 20) ([ordered]@{ Text = 'IP Address:' }) $dnaFilterGroupBox)
-$cmbFilterIPAddress = New-OctoControl ComboBox @(135, 63, 200, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-$chkSelectAll = New-OctoControl CheckBox @(360, 63, 180, 25) ([ordered]@{ Text = 'Select All (Current Filter)'; Enabled = $false }) $dnaFilterGroupBox
-$btnApplyDeviceFilter = New-OctoControl Button @(565, 61, 120, 28) ([ordered]@{ Text = 'Apply Selection'; Enabled = $false }) $dnaFilterGroupBox
-$btnResetDeviceFilter = New-OctoControl Button @(695, 61, 120, 28) ([ordered]@{ Text = 'Reset All'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(20, 100, 700, 20) ([ordered]@{ Text = 'Available Devices (check devices to select - checks are kept when the filter changes):'; Font = $script:Fonts.ArialBold }) $dnaFilterGroupBox)
-$lstDevices = New-OctoControl CheckedListBox @(20, 125, 900, 180) ([ordered]@{ CheckOnClick = $true; Enabled = $false; Font = $script:Fonts.Mono; IntegralHeight = $false; Anchor = 'Top,Left,Right' }) $dnaFilterGroupBox
-$lblDeviceSelectionStatus = New-OctoControl Label @(20, 315, 700, 20) ([ordered]@{ Text = 'Showing: 0 devices | Selected: 0'; Font = $script:Fonts.ArialBold; ForeColor = [System.Drawing.Color]::DarkBlue }) $dnaFilterGroupBox
+# --- Device filtering and selection (left column, grows with the window)
+$dnaDeviceCard = New-OctoCard -Bounds @(16, 190, 640, 404) -Title 'Devices' -Parent $tab3 -Anchor 'Top,Bottom,Left'
+[void](New-OctoControl Label @(16, 51, 72, 20) ([ordered]@{ Text = 'Hostname' }) $dnaDeviceCard)
+$txtFilterHostname = New-OctoControl TextBox @(90, 48, 210, 23) ([ordered]@{ Enabled = $false }) $dnaDeviceCard
+[void](New-OctoControl Label @(316, 51, 66, 20) ([ordered]@{ Text = 'Family' }) $dnaDeviceCard)
+$cmbFilterFamily = New-OctoControl ComboBox @(384, 48, 240, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+[void](New-OctoControl Label @(16, 83, 72, 20) ([ordered]@{ Text = 'Role' }) $dnaDeviceCard)
+$cmbFilterRole = New-OctoControl ComboBox @(90, 80, 210, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+[void](New-OctoControl Label @(316, 83, 66, 20) ([ordered]@{ Text = 'IP Address' }) $dnaDeviceCard)
+$cmbFilterIPAddress = New-OctoControl ComboBox @(384, 80, 240, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+# Column captions line up with the fixed-width device list below
+[void](New-OctoControl Label @(35, 114, 589, 16) ([ordered]@{ Text = ('{0,-36} {1,-16} {2,-14} {3}' -f 'HOSTNAME', 'IP ADDRESS', 'ROLE', 'FAMILY'); Font = $script:Fonts.Mono; Tag = 'Muted' }) $dnaDeviceCard)
+$lstDevices = New-OctoControl CheckedListBox @(16, 132, 608, 186) ([ordered]@{ CheckOnClick = $true; Enabled = $false; Font = $script:Fonts.Mono; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dnaDeviceCard
+$chkSelectAll = New-OctoControl CheckBox @(16, 326, 200, 22) ([ordered]@{ Text = 'Select All (Current Filter)'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$lblDeviceSelectionStatus = New-OctoControl Label @(224, 328, 400, 20) ([ordered]@{ Text = 'Showing: 0 devices | Selected: 0'; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$btnApplyDeviceFilter = New-OctoControl Button @(16, 358, 140, 30) ([ordered]@{ Text = 'Apply Selection'; Tag = 'Primary'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$btnResetDeviceFilter = New-OctoControl Button @(164, 358, 100, 30) ([ordered]@{ Text = 'Reset All'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
 
-# --- Function tree
-$dnaTreeGroupBox = New-OctoControl GroupBox @(10, 520, 460, 270) ([ordered]@{ Text = 'DNA Center Functions (double-click to run)'; Anchor = 'Top,Left' }) $tab3
-$script:dnaTreeView = New-OctoControl TreeView @(15, 25, 430, 230) ([ordered]@{ ShowLines = $true; ShowPlusMinus = $true; ShowRootLines = $true; HideSelection = $false }) $dnaTreeGroupBox
+# --- Functions and favorites (right column)
+$dnaFunctionsCard = New-OctoCard -Bounds @(668, 16, 496, 248) -Title 'Functions (double-click to run)' -Parent $tab3 -Anchor 'Top,Left,Right'
+$script:dnaTreeView = New-OctoControl TreeView @(16, 48, 236, 184) ([ordered]@{ ShowLines = $true; ShowPlusMinus = $true; ShowRootLines = $true; HideSelection = $false }) $dnaFunctionsCard
+[void](New-OctoControl Label @(264, 50, 216, 18) ([ordered]@{ Text = 'Favorites (right-click a function to add)'; Tag = 'Muted' }) $dnaFunctionsCard)
+$script:lstFavorites = New-OctoControl ListBox @(264, 70, 216, 162) ([ordered]@{ IntegralHeight = $false; Anchor = 'Top,Left,Right' }) $dnaFunctionsCard
 
 $dnaTree = [ordered]@{
     'Device Information'     = @(
@@ -5798,22 +6037,16 @@ foreach ($category in $dnaTree.Keys) {
 $script:dnaTreeView.ExpandAll()
 $script:dnaTreeView.EndUpdate()
 
-# --- Favorites
-$dnaFavoritesGroupBox = New-OctoControl GroupBox @(480, 520, 470, 270) ([ordered]@{ Text = 'Favorite Functions (right-click a function to add)'; Anchor = 'Top,Left,Right' }) $tab3
-$script:lstFavorites = New-OctoControl ListBox @(15, 25, 440, 230) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $dnaFavoritesGroupBox
+# --- Log (right column, grows with the window)
+$dnaLogCard = New-OctoCard -Bounds @(668, 276, 496, 222) -Title 'Log' -Parent $tab3 -Anchor 'Top,Bottom,Left,Right'
+$dnaLogBox = New-OctoLogBox -Bounds @(16, 48, 464, 158) -Parent $dnaLogCard -WordWrap $false
 
-# --- Export settings
-$dnaExportGroupBox = New-OctoControl GroupBox @(10, 795, 940, 55) ([ordered]@{ Text = 'Export Settings'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(15, 22, 75, 20) ([ordered]@{ Text = 'Export Path:' }) $dnaExportGroupBox)
-$script:txtDNAExportPath = New-OctoControl TextBox @(95, 20, 500, 20) ([ordered]@{ Text = $script:outputDir; ReadOnly = $true }) $dnaExportGroupBox
-$btnDNAExportWorkDir = New-OctoControl Button @(610, 18, 120, 25) ([ordered]@{ Text = 'Use Working Dir' }) $dnaExportGroupBox
-$btnDNAExportFolder = New-OctoControl Button @(740, 18, 120, 25) ([ordered]@{ Text = 'Browse Folder...' }) $dnaExportGroupBox
-$btnDNAExportDefault = New-OctoControl Button @(870, 18, 60, 25) ([ordered]@{ Text = 'Default' }) $dnaExportGroupBox
-
-$dnaLogBox = New-OctoControl RichTextBox @(10, 855, 940, 95) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $false
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Left,Right'
-}) $tab3
+# --- Export folder (right column, bottom)
+$dnaExportCard = New-OctoCard -Bounds @(668, 510, 496, 84) -Title 'Export Folder' -Parent $tab3 -Anchor 'Bottom,Left,Right'
+$btnDNAExportWorkDir = New-OctoControl Button @(166, 12, 112, 28) ([ordered]@{ Text = 'Use Working Dir'; Anchor = 'Top,Right' }) $dnaExportCard
+$btnDNAExportFolder = New-OctoControl Button @(286, 12, 116, 28) ([ordered]@{ Text = 'Browse Folder...'; Anchor = 'Top,Right' }) $dnaExportCard
+$btnDNAExportDefault = New-OctoControl Button @(410, 12, 70, 28) ([ordered]@{ Text = 'Default'; Anchor = 'Top,Right' }) $dnaExportCard
+$script:txtDNAExportPath = New-OctoControl TextBox @(16, 48, 464, 23) ([ordered]@{ Text = $script:outputDir; ReadOnly = $true; Anchor = 'Top,Left,Right' }) $dnaExportCard
 
 # --- Device list helpers ----------------------------------------------------------
 
@@ -6292,35 +6525,31 @@ Update-DnaFavorites
 # TAB: FILE COMPARE
 # ============================================
 
-$tab4 = New-OctoTab -Text 'File Compare' -Icon '<>' -MinWidth 980 -MinHeight 700
-$compareMainPanel = New-OctoControl Panel @(10, 10, 940, 620) ([ordered]@{ Anchor = 'Top,Bottom,Left,Right' }) $tab4
-[void](New-OctoControl Label @(0, 0, 940, 35) ([ordered]@{ Text = 'File Comparison Tool'; Font = $script:Fonts.Title; ForeColor = [System.Drawing.Color]::FromArgb(30, 60, 114) }) $compareMainPanel)
-$fileSelectGroupBox = New-OctoControl GroupBox @(0, 40, 940, 110) ([ordered]@{ Text = 'Select Files to Compare'; Anchor = 'Top,Left,Right' }) $compareMainPanel
-[void](New-OctoControl Label @(15, 28, 90, 23) ([ordered]@{ Text = 'Original File:'; Font = $script:Fonts.Bold }) $fileSelectGroupBox)
-$txtFile1Path = New-OctoControl TextBox @(110, 25, 680, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $fileSelectGroupBox
-$btnBrowseFile1 = New-OctoControl Button @(800, 24, 120, 26) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $fileSelectGroupBox
-[void](New-OctoControl Label @(15, 63, 90, 23) ([ordered]@{ Text = 'Modified File:'; Font = $script:Fonts.Bold }) $fileSelectGroupBox)
-$txtFile2Path = New-OctoControl TextBox @(110, 60, 680, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $fileSelectGroupBox
-$btnBrowseFile2 = New-OctoControl Button @(800, 59, 120, 26) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $fileSelectGroupBox
-$compareActionPanel = New-OctoControl Panel @(0, 155, 940, 45) $null $compareMainPanel
-$btnExportDiff = New-OctoControl Button @(0, 5, 180, 35) ([ordered]@{ Text = 'Compare && Export HTML'; Font = $script:Fonts.Header; BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87); ForeColor = [System.Drawing.Color]::White; FlatStyle = 'Flat' }) $compareActionPanel
-$btnSwapFiles = New-OctoControl Button @(190, 5, 100, 35) ([ordered]@{ Text = 'Swap Files' }) $compareActionPanel
-$btnClearCompare = New-OctoControl Button @(300, 5, 80, 35) ([ordered]@{ Text = 'Clear' }) $compareActionPanel
-[void](New-OctoControl Label @(400, 12, 500, 20) ([ordered]@{ Text = 'The comparison is computed by your browser (fast, works offline)'; ForeColor = [System.Drawing.Color]::Gray }) $compareActionPanel)
-$compareInfoPanel = New-OctoControl Panel @(0, 200, 940, 410) ([ordered]@{ Anchor = 'Top,Bottom,Left,Right'; BorderStyle = 'FixedSingle' }) $compareMainPanel
-[void](New-OctoControl Label @(20, 20, 900, 380) ([ordered]@{
-    Text = "1. Select two files using the 'Browse...' buttons above`n" +
-        "2. Click 'Compare && Export HTML' and choose where to save the report`n" +
-        "3. The report opens in your browser with:`n" +
-        "     - Side-by-side view with changed characters highlighted`n" +
-        "     - Prev / Next buttons and keyboard navigation (j / k or arrow keys)`n" +
-        "     - Counts of added, removed and unchanged lines`n" +
-        "     - 'Ignore blank lines' option`n`n" +
-        "Lines are matched with a minimal diff (longest common subsequence), so repeated`n" +
-        "lines such as '!' or 'exit' in switch configs no longer make unrelated lines`n" +
-        "show up as changed."
-    Font = New-Object System.Drawing.Font('Segoe UI', 11); ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80); Anchor = 'Top,Bottom,Left,Right'
-}) $compareInfoPanel)
+$tab4 = New-OctoTab -Text 'File Compare'
+$compareFilesCard = New-OctoCard -Bounds @(16, 16, 1148, 176) -Title 'Files to Compare' -Parent $tab4 -Anchor 'Top,Left,Right'
+[void](New-OctoControl Label @(16, 51, 90, 20) ([ordered]@{ Text = 'Original File' }) $compareFilesCard)
+$txtFile1Path = New-OctoControl TextBox @(110, 48, 914, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $compareFilesCard
+$btnBrowseFile1 = New-OctoControl Button @(1034, 46, 98, 28) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $compareFilesCard
+[void](New-OctoControl Label @(16, 85, 90, 20) ([ordered]@{ Text = 'Modified File' }) $compareFilesCard)
+$txtFile2Path = New-OctoControl TextBox @(110, 82, 914, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $compareFilesCard
+$btnBrowseFile2 = New-OctoControl Button @(1034, 80, 98, 28) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $compareFilesCard
+$btnExportDiff = New-OctoControl Button @(16, 124, 200, 36) ([ordered]@{ Text = 'Compare && Export HTML'; Tag = 'Primary' }) $compareFilesCard
+$btnSwapFiles = New-OctoControl Button @(224, 124, 110, 36) ([ordered]@{ Text = 'Swap Files' }) $compareFilesCard
+$btnClearCompare = New-OctoControl Button @(342, 124, 80, 36) ([ordered]@{ Text = 'Clear' }) $compareFilesCard
+[void](New-OctoControl Label @(438, 133, 600, 20) ([ordered]@{ Text = 'The comparison runs in your browser - fast, and works offline.'; Tag = 'Muted' }) $compareFilesCard)
+$compareHowCard = New-OctoCard -Bounds @(16, 204, 1148, 390) -Title 'How It Works' -Parent $tab4 -Anchor 'Top,Bottom,Left,Right'
+[void](New-OctoControl Label @(16, 48, 1116, 326) ([ordered]@{
+    Text = "1.  Select the original and the modified file with the Browse buttons.`n" +
+        "2.  Click 'Compare && Export HTML' and choose where to save the report.`n" +
+        "3.  The report opens in your browser:`n" +
+        "       - side-by-side view with the changed characters highlighted`n" +
+        "       - Prev / Next buttons and keyboard navigation (j / k or the arrow keys)`n" +
+        "       - counts of added, removed and unchanged lines`n" +
+        "       - an 'Ignore blank lines' option`n`n" +
+        "Lines are matched with a minimal diff (longest common subsequence), so repeated lines such as '!' or 'exit'`n" +
+        "in switch configurations do not make unrelated lines show up as changed."
+    Font = $script:Fonts.Body; Anchor = 'Top,Bottom,Left,Right'
+}) $compareHowCard)
 
 function ConvertTo-JsStringArray {
     <#
@@ -6689,20 +6918,18 @@ $btnExportDiff.Add_Click({
 # TAB: RDOX EXPORTS
 # ============================================
 
-$tab7 = New-OctoTab -Text 'RDOX Exports' -Icon '^' -MinWidth 980 -MinHeight 500
-[void](New-OctoControl Label @(15, 15, 900, 35) ([ordered]@{ Text = 'RDOX Resource Export'; Font = $script:Fonts.Title; ForeColor = [System.Drawing.Color]::FromArgb(30, 60, 114) }) $tab7)
-[void](New-OctoControl Label @(15, 55, 900, 25) ([ordered]@{ Text = 'Export embedded RDOX resource files. Select files from the list below and choose an export location.'; ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80) }) $tab7)
-$resourcesGroupBox = New-OctoControl GroupBox @(15, 90, 920, 350) ([ordered]@{ Text = 'Embedded Resources (.RDOX Files)'; Anchor = 'Top,Bottom,Left,Right' }) $tab7
-$script:lstResources = New-OctoControl ListBox @(15, 25, 700, 280) ([ordered]@{ Font = $script:Fonts.MonoLarge; SelectionMode = 'MultiExtended'; Anchor = 'Top,Bottom,Left,Right'; IntegralHeight = $false }) $resourcesGroupBox
+$tab7 = New-OctoTab -Text 'RDOX Exports'
+$resourcesCard = New-OctoCard -Bounds @(16, 16, 1148, 578) -Title 'Embedded RDOX Files' -Parent $tab7 -Anchor 'Top,Bottom,Left,Right'
+[void](New-OctoControl Label @(16, 46, 900, 20) ([ordered]@{ Text = 'Select files to export (Ctrl+Click for several), or select none to export all of them.'; Tag = 'Muted' }) $resourcesCard)
+$script:lstResources = New-OctoControl ListBox @(16, 72, 916, 490) ([ordered]@{ Font = $script:Fonts.MonoLarge; SelectionMode = 'MultiExtended'; Anchor = 'Top,Bottom,Left,Right'; IntegralHeight = $false }) $resourcesCard
 if ($script:EmbeddedResources -and $script:EmbeddedResources.Count -gt 0) {
     $script:lstResources.Items.AddRange([object[]]@(Get-EmbeddedResourceList))
 } else {
     [void]$script:lstResources.Items.Add('(No embedded resources - run Package-Resources.ps1)')
     $script:lstResources.Enabled = $false
 }
-$btnExportToWorkDir = New-OctoControl Button @(730, 25, 170, 35) ([ordered]@{ Text = 'Export to Working Directory'; Anchor = 'Top,Right' }) $resourcesGroupBox
-$btnExportToCustomDir = New-OctoControl Button @(730, 70, 170, 35) ([ordered]@{ Text = 'Export to Folder...'; Anchor = 'Top,Right' }) $resourcesGroupBox
-[void](New-OctoControl Label @(730, 115, 170, 50) ([ordered]@{ Text = "Select files to export (Ctrl+Click for multiple)`nor leave empty to export all"; ForeColor = [System.Drawing.Color]::Gray; Anchor = 'Top,Right' }) $resourcesGroupBox)
+$btnExportToWorkDir = New-OctoControl Button @(948, 72, 184, 34) ([ordered]@{ Text = 'Export to Working Directory'; Tag = 'Primary'; Anchor = 'Top,Right' }) $resourcesCard
+$btnExportToCustomDir = New-OctoControl Button @(948, 114, 184, 34) ([ordered]@{ Text = 'Export to Folder...'; Anchor = 'Top,Right' }) $resourcesCard
 
 function Export-SelectedResources {
     param([string]$Folder)
@@ -6731,37 +6958,41 @@ $btnExportToCustomDir.Add_Click({
 # TAB: PORT CONFIGURATION
 # ============================================
 
-$tab5 = New-OctoTab -Text 'Port Config' -Icon '*' -MinWidth 950 -MinHeight 650
-$portInputGroup = New-OctoControl GroupBox @(10, 10, 400, 280) ([ordered]@{ Text = 'Configuration Parameters' }) $tab5
+$tab5 = New-OctoTab -Text 'Port Config'
+$portInputCard = New-OctoCard -Bounds @(16, 16, 400, 578) -Title 'Configuration Parameters' -Parent $tab5 -Anchor 'Top,Bottom,Left'
+# Old VLAN is last: it is hidden for vendors that do not use it, without leaving a gap
 $portFields = [ordered]@{
-    Vendor = 'Vendor:'; PortType = 'Port Type:'; Interface = 'Interface:'; Description = 'Description:'
-    Vlan = 'VLAN:'; OldVlan = 'Old VLAN:'; VoiceVlan = 'Voice VLAN:'; Status = 'Status:'
+    Vendor = 'Vendor'; PortType = 'Port Type'; Interface = 'Interface'; Description = 'Description'
+    Vlan = 'VLAN'; VoiceVlan = 'Voice VLAN'; Status = 'Status'; OldVlan = 'Old VLAN'
 }
 $portDefaults = @{ Interface = 'Gi1/0/1'; Description = 'User PC'; Vlan = '100'; OldVlan = ''; VoiceVlan = '200'; Status = 'no shutdown' }
 $portInputs = @{}
 $portLabels = @{}
-$y = 30
+$y = 48
 foreach ($key in $portFields.Keys) {
-    $portLabels[$key] = New-OctoControl Label @(15, $y, 100, 20) ([ordered]@{ Text = $portFields[$key] }) $portInputGroup
+    $portLabels[$key] = New-OctoControl Label @(16, ($y + 3), 100, 20) ([ordered]@{ Text = $portFields[$key] }) $portInputCard
     if ($key -eq 'Vendor' -or $key -eq 'PortType') {
-        $portInputs[$key] = New-OctoControl ComboBox @(120, ($y - 3), 250, 25) ([ordered]@{ DropDownStyle = 'DropDownList' }) $portInputGroup
+        $portInputs[$key] = New-OctoControl ComboBox @(120, $y, 264, 23) ([ordered]@{ DropDownStyle = 'DropDownList' }) $portInputCard
     } else {
-        $portInputs[$key] = New-OctoControl TextBox @(120, ($y - 3), 250, 25) ([ordered]@{ Text = $portDefaults[$key] }) $portInputGroup
+        $portInputs[$key] = New-OctoControl TextBox @(120, $y, 264, 23) ([ordered]@{ Text = $portDefaults[$key] }) $portInputCard
     }
-    $y += 30
+    $y += 34
 }
 $cboVendor = $portInputs.Vendor
 $cboPortType = $portInputs.PortType
 [void]$cboVendor.Items.AddRange([object[]]@('Cisco', 'ICX/FCX 8030', 'FCX 7.3'))
 
-$btnGenerateConfig = New-OctoControl Button @(10, 300, 130, 35) ([ordered]@{ Text = 'Generate Config'; Font = $script:Fonts.Header; BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87); ForeColor = [System.Drawing.Color]::White; FlatStyle = 'Flat' }) $tab5
-$btnCopyConfig = New-OctoControl Button @(150, 300, 130, 35) ([ordered]@{ Text = 'Copy to Clipboard' }) $tab5
-$btnClearConfig = New-OctoControl Button @(290, 300, 80, 35) ([ordered]@{ Text = 'Clear' }) $tab5
-$btnSaveTemplate = New-OctoControl Button @(10, 345, 130, 35) ([ordered]@{ Text = 'Save as Template' }) $tab5
-$btnLoadTemplate = New-OctoControl Button @(150, 345, 110, 35) ([ordered]@{ Text = 'Load Template' }) $tab5
-[void](New-OctoControl Label @(10, 390, 400, 35) ([ordered]@{ Text = "Placeholders: {{INTERFACE}} {{DESCRIPTION}} {{VLAN}}`n{{OLD_VLAN}} {{VOICE_VLAN}} {{STATUS}}"; Font = New-Object System.Drawing.Font('Consolas', 8); ForeColor = [System.Drawing.Color]::Gray }) $tab5)
-$portOutputGroup = New-OctoControl GroupBox @(420, 10, 500, 600) ([ordered]@{ Text = 'Generated Configuration / Template Editor (paste template with {{PLACEHOLDERS}})'; Padding = (New-Object System.Windows.Forms.Padding(5, 20, 5, 5)); Anchor = 'Top,Bottom,Left,Right' }) $tab5
-$txtConfigOutput = New-OctoControl TextBox $null ([ordered]@{ Dock = 'Fill'; Multiline = $true; ScrollBars = 'Both'; WordWrap = $false; Font = $script:Fonts.MonoLarge; MaxLength = 0 }) $portOutputGroup
+$btnGenerateConfig = New-OctoControl Button @(16, 330, 118, 34) ([ordered]@{ Text = 'Generate Config'; Tag = 'Primary' }) $portInputCard
+$btnCopyConfig = New-OctoControl Button @(142, 330, 134, 34) ([ordered]@{ Text = 'Copy to Clipboard' }) $portInputCard
+$btnClearConfig = New-OctoControl Button @(284, 330, 100, 34) ([ordered]@{ Text = 'Clear' }) $portInputCard
+$btnSaveTemplate = New-OctoControl Button @(16, 372, 130, 34) ([ordered]@{ Text = 'Save as Template' }) $portInputCard
+$btnLoadTemplate = New-OctoControl Button @(154, 372, 122, 34) ([ordered]@{ Text = 'Load Template' }) $portInputCard
+[void](New-OctoControl Label @(16, 422, 368, 18) ([ordered]@{ Text = 'Placeholders'; Font = $script:Fonts.Semibold }) $portInputCard)
+[void](New-OctoControl Label @(16, 442, 368, 40) ([ordered]@{ Text = "{{INTERFACE}} {{DESCRIPTION}} {{VLAN}}`n{{VOICE_VLAN}} {{OLD_VLAN}} {{STATUS}}"; Font = $script:Fonts.Mono; Tag = 'Muted' }) $portInputCard)
+$portOutputCard = New-OctoCard -Bounds @(428, 16, 736, 578) -Title 'Configuration / Template Editor' -Parent $tab5 -Anchor 'Top,Bottom,Left,Right'
+[void](New-OctoControl Label @(272, 19, 448, 20) ([ordered]@{ Text = 'Paste a template with {{PLACEHOLDERS}} here, or generate a configuration.'; Tag = 'Muted'; Anchor = 'Top,Left,Right' }) $portOutputCard)
+$portEditorFrame = New-OctoFrame -Bounds @(16, 48, 704, 514) -Parent $portOutputCard
+$txtConfigOutput = New-OctoControl TextBox $null ([ordered]@{ Dock = 'Fill'; BorderStyle = 'None'; Multiline = $true; ScrollBars = 'Both'; WordWrap = $false; Font = $script:Fonts.MonoLarge; MaxLength = 0 }) $portEditorFrame
 
 function ConvertTo-WindowsNewLines {
     # A multi-line TextBox shows a line break only for CR LF
@@ -6868,184 +7099,155 @@ $btnLoadTemplate.Add_Click({
 # TAB: HELP GUIDE
 # ============================================
 
-$tab6 = New-OctoTab -Text 'Help Guide' -Icon '?'
-$helpText = New-OctoControl RichTextBox @(10, 10, 950, 600) ([ordered]@{
-    ReadOnly = $true; BorderStyle = 'None'; Font = $script:Fonts.MonoLarge; Anchor = 'Top,Bottom,Left,Right'; DetectUrls = $false; WordWrap = $true
-}) $tab6
-$helpText.Text = @'
-===============================================================================
-                              OCTONAV HELP GUIDE
-===============================================================================
+$tab6 = New-OctoTab -Text 'Help Guide'
+$helpCard = New-OctoCard -Bounds @(16, 16, 1148, 578) -Parent $tab6 -Anchor 'Top,Bottom,Left,Right'
+$helpText = New-OctoControl RichTextBox @(24, 18, 1108, 544) ([ordered]@{
+    ReadOnly = $true; BorderStyle = 'None'; Anchor = 'Top,Bottom,Left,Right'; DetectUrls = $false; WordWrap = $true; Tag = 'Card'
+}) $helpCard
 
-OctoNav runs as a standard user. Only the Network Configuration tab needs
-"Run as Administrator" (it changes adapter IP settings).
-
-
--------------------------------------------------------------------------------
-NETWORK CONFIGURATION
--------------------------------------------------------------------------------
-
-WHAT IT DOES:
-   Changes your computer's IP address and starts the TFTP server.
-   Useful when you need to connect directly to a switch for configuration
-   or firmware uploads.
-
-   IMPORTANT: this tab needs Administrator rights
-   (right-click the script -> "Run as Administrator").
-
-HOW TO USE IT:
-   STEP 1: Fill in the IP settings
-      - New IP Address: the IP you want (example: 192.168.1.101)
-      - Gateway: usually the switch's IP (example: 192.168.1.1)
-      - Prefix Length: usually 24 (same as subnet mask 255.255.255.0)
-
-   STEP 2: Click "Apply Configuration"
-      - Finds the unidentified network adapter automatically
-      - Applies your IP configuration
-      - Changes the network from Public to Private
-      - Starts the TFTP server (RunStandAloneMT.bat) if present
-
-   STEP 3: When done, click "Restore Defaults"
-      - Stops the TFTP server
-      - Sets your adapter back to DHCP (automatic IP)
-
-   "What IP should I use?"
-      - If the switch is 192.168.1.1 -> use 192.168.1.100 (same first 3 numbers)
-      - The last number just needs to be different from the switch
-
-
--------------------------------------------------------------------------------
-DHCP STATISTICS
--------------------------------------------------------------------------------
-
-WHAT IT DOES:
-   Collects scope usage from your Windows DHCP servers, many servers at once.
-
-HOW TO USE IT:
-   STEP 1: Select DHCP servers
-      - "Refresh Server List" reads the servers from Active Directory
-      - Check the servers you want, or type names (comma-separated)
-      - Nothing selected = all domain DHCP servers
-
-   STEP 2: (Optional) Select specific scopes
-      - "Refresh Cache" loads all scopes
-      - Filter (3+ characters, comma = OR) and Prefix (2+ characters)
-      - "Select All Visible"; selections are kept when you change the filter
-      - The server and scope caches are encrypted with ONE password. If a cache
-        does not open, you can type its password again or skip it; after a skip,
-        "Refresh Cache" rebuilds it with your current password.
-
-   STEP 3: Options
-      - DNS (Option 6), Option 60, Option 43, or all configured options
-      - Parallel Operations: how many servers are queried at the same time
-
-   STEP 4: Click "Collect DHCP Statistics" (Stop keeps what is collected)
-      - A summary is written to the log and a CSV is exported automatically
-      - A server that fails is tried once more; servers that still fail are
-        named in the summary (scopes only they serve are missing)
-      - An option lookup that fails is tried once more (one scope at a time,
-        after the server's other lookups finish). If it fails again, its
-        option columns say "(lookup failed)" and the summary lists it
-      - After a full collection the log compares the result with the scope
-        cache and lists every cached scope that was not collected, and why
-
-HOW THE NUMBERS ARE CALCULATED (redundancy-aware):
-   - Failover partners (load balance or hot standby) both report the WHOLE
-     scope, so a failover scope is counted ONCE - not twice.
-   - A scope split across servers without failover (split scope) has each
-     server's part of the pool added together.
-   - Added-up pools can never exceed the scope's address range: copies that
-     hand out the same addresses without failover are capped at the range and
-     marked "OVERLAPPING POOLS".
-   - The same scope ID under different scope names on different servers is
-     treated as separate networks (each pool counted), marked "DIFFERENT SCOPE
-     NAMES". The per-server export lists each one.
-   - Inactive copies of a scope are not counted.
-   - "Group by Scope ID on Export" writes one row per scope with the columns
-     Redundancy, FailoverPartner, FailoverState and Notes (for example a
-     degraded failover relationship or pools that differ between partners).
-   - Percentage in use = in use / (in use + free), per scope and overall.
-   - The log shows two counts: scope ROWS (one per scope per server - what
-     the old tool reported) and UNIQUE scopes (a scope on a failover pair or
-     split across servers is one scope).
-   - A server listed more than once in Active Directory (one entry per IP,
-     aliases, stale entries whose name no longer resolves) is queried once;
-     the log lists every skipped entry and why.
-
-
--------------------------------------------------------------------------------
-DNA CENTER
--------------------------------------------------------------------------------
-
-   STEP 1: Select the server, enter username and password, click "Connect"
-   STEP 2: Click "Load Devices"
-   STEP 3: Filter by hostname, family, role or IP (optional)
-   STEP 4: Check devices and click "Apply Selection"
-           (no selection = reports use all loaded devices;
-            the CLI Command Runner always needs a selection)
-   STEP 5: Double-click a function in the tree (or a favorite)
-           Right-click a function to add it to Favorites.
-
-   Device queries run in parallel; "Stop" cancels a running report.
-   A request that fails for a temporary reason (no answer, timeout, rate
-   limit, server error) is tried once more after a pause, 2 at a time.
-   Devices that still fail are named in the log with the error.
-   Reports are exported as CSV to the Export Path.
-
-
--------------------------------------------------------------------------------
-FILE COMPARE
--------------------------------------------------------------------------------
-
-   1. Browse to the ORIGINAL (before) file and the MODIFIED (after) file
-   2. Click "Compare & Export HTML" and choose where to save the report
-   3. The report opens in your browser:
-      - Green = added lines, red = removed lines, changed characters highlighted
-      - Prev / Next buttons, keyboard: j / k or arrow keys
-      - "Ignore blank lines" option
-   "Swap Files" switches the two files, "Clear" empties both boxes.
-
-
--------------------------------------------------------------------------------
-PORT CONFIG
--------------------------------------------------------------------------------
-
-   1. Pick the switch type (Cisco, ICX/FCX 8030, FCX 7.3) and a Port Type
-   2. Fill in Interface, Description, VLAN, Voice VLAN and Status
-      (Old VLAN is only used by FCX 7.3)
-   3. Click "Generate Config", then "Copy to Clipboard"
-
-   Custom templates: paste your config into the text box, replace the values
-   with placeholders, select Vendor and Port Type, click "Save as Template".
-
-   PLACEHOLDERS:
-      {{INTERFACE}}    = port name
-      {{DESCRIPTION}}  = port description
-      {{VLAN}}         = data VLAN
-      {{VOICE_VLAN}}   = voice VLAN
-      {{OLD_VLAN}}     = old VLAN (FCX 7.3 only)
-      {{STATUS}}       = no shutdown / shutdown
-
-
--------------------------------------------------------------------------------
-GENERAL TIPS
--------------------------------------------------------------------------------
-
-   - Each tab has a log / status area - check it when something fails
-   - View -> Toggle Theme switches between the Light and Dark themes
-   - The RDOX Exports tab exports embedded resource files
-   - Settings and caches are stored next to OctoNav.ps1, or in
-     %LOCALAPPDATA%\OctoNav when that folder is read-only
-   - The window size is saved when you close OctoNav
+# '# ' title, '## ' section, '### ' label, '- ' bullet ('  - ' nested), '1. ' step
+$script:HelpMarkup = @'
+# OctoNav Help
+OctoNav runs as a standard user. Only the Network Configuration tab needs "Run as Administrator" (it changes adapter IP settings).
+Switch tabs with the bar at the top, or with Ctrl+Tab and Ctrl+Shift+Tab.
+## Network Configuration
+### What it does
+Changes your computer's IP address and starts the TFTP server - useful when you connect directly to a switch for configuration or firmware uploads. This tab needs Administrator rights (right-click the script and choose "Run as Administrator").
+### How to use it
+1. Fill in the IP settings:
+  - New IP Address: the address you want (example: 192.168.1.101)
+  - Gateway: usually the switch's IP (example: 192.168.1.1)
+  - Prefix Length: usually 24 (the same as subnet mask 255.255.255.0)
+2. Click "Apply Configuration". It finds the unidentified network adapter, applies your IP settings, changes the network from Public to Private and starts the TFTP server (RunStandAloneMT.bat) if it is present.
+3. When you are done, click "Restore Defaults". It stops the TFTP server and sets the adapter back to DHCP (automatic IP).
+### Which IP should I use?
+- If the switch is 192.168.1.1, use for example 192.168.1.100 (the same first three numbers).
+- The last number just has to be different from the switch.
+## DHCP Statistics
+### What it does
+Collects scope usage from your Windows DHCP servers, many servers at once.
+### How to use it
+1. Select DHCP servers:
+  - "Refresh Server List" reads the servers from Active Directory
+  - Check the servers you want, or type names (comma-separated)
+  - Nothing selected = all domain DHCP servers
+2. Optional - select specific scopes:
+  - "Refresh Cache" loads all scopes
+  - Filter (3+ characters, comma = OR) and Prefix (2+ characters)
+  - "Select All Visible"; selections are kept when you change the filter
+  - The server and scope caches are encrypted with ONE password. If a cache does not open, you can type its password again or skip it; after a skip, "Refresh Cache" rebuilds it with your current password.
+3. Options:
+  - DNS Servers (Option 6), Option 60, Option 43, or all configured options
+  - Parallel queries: how many servers are queried at the same time
+4. Click "Collect DHCP Statistics" ("Stop" keeps what is collected so far):
+  - A summary is written to the log and a CSV is exported automatically
+  - A server that fails is tried once more; servers that still fail are named in the summary (scopes only they serve are missing)
+  - An option lookup that fails is tried once more (one scope at a time, after the server's other lookups finish). If it fails again, its option columns say "(lookup failed)" and the summary lists it
+  - After a full collection the log compares the result with the scope cache and lists every cached scope that was not collected, and why
+### How the numbers are calculated (redundancy-aware)
+- Failover partners (load balance or hot standby) both report the WHOLE scope, so a failover scope is counted ONCE - not twice.
+- A scope split across servers without failover (split scope) has each server's part of the pool added together.
+- Added-up pools can never exceed the scope's address range: copies that hand out the same addresses without failover are capped at the range and marked "OVERLAPPING POOLS".
+- The same scope ID under different scope names on different servers is treated as separate networks (each pool counted), marked "DIFFERENT SCOPE NAMES". The per-server export lists each one.
+- Inactive copies of a scope are not counted.
+- "Group by Scope ID on Export" writes one row per scope with the columns Redundancy, FailoverPartner, FailoverState and Notes (for example a degraded failover relationship or pools that differ between partners).
+- Percentage in use = in use / (in use + free), per scope and overall.
+- The log shows two counts: scope ROWS (one per scope per server - what the old tool reported) and UNIQUE scopes (a scope on a failover pair or split across servers is one scope).
+- A server listed more than once in Active Directory (one entry per IP, aliases, stale entries whose name no longer resolves) is queried once; the log lists every skipped entry and why.
+## DNA Center
+1. Select the server, enter username and password, and click "Connect".
+2. Click "Load Devices".
+3. Optional - filter by hostname, family, role or IP.
+4. Check devices and click "Apply Selection". No selection = reports use all loaded devices; the CLI Command Runner always needs a selection.
+5. Double-click a function in the tree (or a favorite). Right-click a function to add it to Favorites.
+- Device queries run in parallel; "Stop" cancels a running report.
+- A request that fails for a temporary reason (no answer, timeout, rate limit, server error) is tried once more after a pause, 2 at a time. Devices that still fail are named in the log with the error.
+- Reports are exported as CSV to the Export Folder.
+## File Compare
+1. Browse to the ORIGINAL (before) file and the MODIFIED (after) file.
+2. Click "Compare & Export HTML" and choose where to save the report.
+3. The report opens in your browser:
+  - Green = added lines, red = removed lines, changed characters highlighted
+  - Prev / Next buttons; keyboard: j / k or the arrow keys
+  - "Ignore blank lines" option
+"Swap Files" switches the two files, "Clear" empties both boxes.
+## Port Config
+1. Pick the switch type (Cisco, ICX/FCX 8030, FCX 7.3) and a Port Type.
+2. Fill in Interface, Description, VLAN, Voice VLAN and Status (Old VLAN is only used by FCX 7.3).
+3. Click "Generate Config", then "Copy to Clipboard".
+Custom templates: paste your config into the editor, replace the values with placeholders, select Vendor and Port Type, and click "Save as Template".
+### Placeholders
+- {{INTERFACE}} - port name
+- {{DESCRIPTION}} - port description
+- {{VLAN}} - data VLAN
+- {{VOICE_VLAN}} - voice VLAN
+- {{OLD_VLAN}} - old VLAN (FCX 7.3 only)
+- {{STATUS}} - no shutdown / shutdown
+## General Tips
+- Each tab has a log or status area - check it when something fails
+- View > Toggle Theme (Ctrl+T) switches between the Light and Dark themes
+- The RDOX Exports tab exports embedded resource files
+- Settings and caches are stored next to OctoNav.ps1, or in %LOCALAPPDATA%\OctoNav when that folder is read-only
+- The window size is saved when you close OctoNav
 '@
+
+function Set-OctoHelpText {
+    <#
+    .SYNOPSIS
+        Renders the help markup with the current theme's colours.
+    #>
+    $theme = $script:CurrentTheme
+    $helpText.Clear()
+    foreach ($raw in ($script:HelpMarkup -split "`r?`n")) {
+        $text = $raw; $font = $script:Fonts.Body; $color = $theme.Text
+        $indent = 0; $hanging = 0; $bullet = $false; $gap = $false
+        if ($raw.StartsWith('# ')) { $text = $raw.Substring(2); $font = $script:Fonts.HelpTitle; $color = $theme.NavSelected }
+        elseif ($raw.StartsWith('## ')) { $text = $raw.Substring(3); $font = $script:Fonts.HelpHeading; $gap = $true }
+        elseif ($raw.StartsWith('### ')) { $text = $raw.Substring(4); $font = $script:Fonts.HelpLabel; $gap = $true }
+        elseif ($raw -match '^(\s*)- (.*)$') { $text = $Matches[2]; $bullet = $true; $indent = if ($Matches[1]) { 44 } else { 22 } }
+        elseif ($raw -match '^\d+\. ') { $indent = 4; $hanging = 18 }
+        # A small empty line before headings (the RichTextBox has no paragraph spacing)
+        $lines = [System.Collections.Generic.List[object]]::new()
+        if ($gap) { $lines.Add(@('', $script:Fonts.Spacer)) }
+        $lines.Add(@($text, $font))
+        foreach ($line in $lines) {
+            $helpText.SelectionStart = $helpText.TextLength
+            $helpText.SelectionLength = 0
+            $helpText.SelectionFont = $line[1]
+            $helpText.SelectionColor = $color
+            $helpText.SelectionBullet = ($bullet -and $line[0])
+            $helpText.BulletIndent = 8
+            $helpText.SelectionIndent = $indent
+            $helpText.SelectionHangingIndent = $hanging
+            $helpText.AppendText($line[0] + "`n")
+        }
+    }
+    $helpText.SelectionStart = 0
+    $helpText.ScrollToCaret()
+}
 
 # ============================================
 # STATUS BAR, THEME, CACHES, SHOW
 # ============================================
 
 $script:StatusBarPanels = New-EnhancedStatusBar -Form $mainForm
-Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
-Reset-ScopeFilterBoxes   # the theme recolours text boxes; keep the placeholders grey
+# Docked last = fills what the status bar, menu and navigation bar leave
+$script:pageHost.BringToFront()
+
+function Set-OctoTheme {
+    # Recolours the whole window for $script:CurrentTheme
+    $mainForm.SuspendLayout()
+    try {
+        Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
+        Update-OctoNav
+        Update-ScopeFilterColors
+        Set-OctoHelpText
+    } finally { $mainForm.ResumeLayout() }
+    $mainForm.Invalidate($true)
+}
+
+Select-OctoPage -Index 0
+Set-OctoTheme
 
 function ConvertTo-OctoDateTime {
     # Cache timestamps are ISO 8601 strings (older caches: local date/time text)
@@ -7080,11 +7282,10 @@ try {
         $script:scopeCacheUpdated = $updated
         $when = if ($updated) { " ($($updated.ToString('MM/dd HH:mm')))" } else { '' }
         $script:lblScopeCacheStatus.Text = "Cache: $($script:allDHCPScopes.Count) scope(s) loaded$when"
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        Set-OctoTone -Control $script:lblScopeCacheStatus -Tone Success
     }
 } catch { }
 
-if ($script:Settings.ShowDashboardOnStartup) { $tabControl.SelectedIndex = 0 }
 if ($script:RequireStartupPassword) { Start-SessionMonitor -Form $mainForm }
 
 # Slow lookups run after the window is on screen
@@ -7109,6 +7310,7 @@ $mainForm.Add_FormClosing({
 })
 
 $mainForm.ResumeLayout()
+$script:pageHost.ResumeLayout()
 [void]$mainForm.ShowDialog()
 
 if ($script:SessionTimer) { try { $script:SessionTimer.Stop(); $script:SessionTimer.Dispose() } catch { } }
