@@ -38,6 +38,7 @@ account for both:
 | Single server | Counted once |
 | Same scope ID on several servers without failover (split scope) | Each server's part of the pool is **added** |
 | Copies without failover whose pools overlap (each hands out the same addresses) | Added, but never more than the scope's address range, and marked `OVERLAPPING POOLS` |
+| Same scope ID with different scope names on different servers (sites reusing a subnet) | Treated as separate networks: each pool counted, marked `DIFFERENT SCOPE NAMES` |
 | Inactive copy of a scope | Not counted in the totals |
 | Failover information unavailable | Counted once, as before, and marked `Unknown` |
 
@@ -49,6 +50,10 @@ Export" writes one row per scope, plus `ServerCount`.
 
 ### Speed
 
+- No scope goes missing silently: a server that fails is tried once more, a scope
+  missing from the bulk statistics is asked for on its own (and listed with a note
+  if it still has none), failed servers are named in the summary, and after a full
+  collection the log lists every cached scope that was not collected, with the reason.
 - DHCP servers are queried in parallel inside the same process (runspace pool)
   instead of one `powershell.exe` per server. Each server needs 3 bulk calls plus
   one option call per scope, only when options are requested. You can set how
