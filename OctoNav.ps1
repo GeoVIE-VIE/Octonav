@@ -976,6 +976,7 @@ function Show-StartupPasswordDialog {
 $script:DHCPCachePassword = $null
 $script:DHCPCachePasswordTimestamp = $null
 $script:DHCPCachePasswordTimeout = 300
+$script:DHCPCachePasswordVerified = $false
 
 function Protect-DHCPCache {
     <#
@@ -1068,35 +1069,49 @@ function Unprotect-DHCPCache {
 }
 
 function Get-DHCPCachePassword {
-    param([ValidateSet('Save', 'Load')][string]$Action = 'Load')
+    <#
+    .SYNOPSIS
+        Password dialog for the encrypted DHCP caches.
+    .PARAMETER Action
+        Load, Save or Confirm (type a new password again) - changes the wording only.
+    .PARAMETER Hint
+        Which cache the password is for, e.g. "DHCP scopes cache".
+    #>
+    param([ValidateSet('Save', 'Load', 'Confirm')][string]$Action = 'Load', [string]$Hint = '')
+    $what = if ($Hint) { "the $Hint" } else { 'the DHCP cache' }
+    $prompt = switch ($Action) {
+        'Load' { "Enter the password for $($what):" }
+        'Save' { "Password to encrypt $what`n(use the same password as your other DHCP cache):" }
+        'Confirm' { 'Type the new DHCP cache password again to confirm it:' }
+    }
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'DHCP Cache Password'
-    $form.Size = New-Object System.Drawing.Size(400, 200)
+    $form.Size = New-Object System.Drawing.Size(420, 210)
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
     $form.TopMost = $true
     $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Enter password to $Action DHCP cache:"
-    $label.Location = New-Object System.Drawing.Point(20, 20)
-    $label.Size = New-Object System.Drawing.Size(350, 20)
+    $label.Text = $prompt
+    $label.Location = New-Object System.Drawing.Point(20, 15)
+    $label.Size = New-Object System.Drawing.Size(370, 40)
     $form.Controls.Add($label)
     $textBox = New-Object System.Windows.Forms.TextBox
-    $textBox.Location = New-Object System.Drawing.Point(20, 50)
-    $textBox.Size = New-Object System.Drawing.Size(350, 25)
+    $textBox.Location = New-Object System.Drawing.Point(20, 60)
+    $textBox.Size = New-Object System.Drawing.Size(370, 25)
     $textBox.UseSystemPasswordChar = $true
     $form.Controls.Add($textBox)
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = 'OK'
-    $btnOK.Location = New-Object System.Drawing.Point(150, 90)
+    $btnOK.Location = New-Object System.Drawing.Point(220, 105)
     $btnOK.Size = New-Object System.Drawing.Size(80, 30)
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Controls.Add($btnOK)
     $form.AcceptButton = $btnOK
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(240, 90)
+    $btnCancel.Location = New-Object System.Drawing.Point(310, 105)
     $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($btnCancel)
@@ -1114,14 +1129,16 @@ function Get-SessionCachedPassword {
     <#
     .SYNOPSIS
         Password for the DHCP caches; asked once and remembered for 5 minutes.
+        $script:DHCPCachePasswordVerified says whether it has opened or created a
+        cache yet (a freshly typed password may be a typo).
     #>
-    param([ValidateSet('Save', 'Load')][string]$Action = 'Load')
+    param([ValidateSet('Save', 'Load')][string]$Action = 'Load', [string]$Hint = '')
     if ($script:DHCPCachePassword -and $script:DHCPCachePasswordTimestamp -and
         ((Get-Date) - $script:DHCPCachePasswordTimestamp).TotalSeconds -lt $script:DHCPCachePasswordTimeout) {
         return $script:DHCPCachePassword
     }
     Clear-SessionCachedPassword
-    $password = Get-DHCPCachePassword -Action $Action
+    $password = Get-DHCPCachePassword -Action $Action -Hint $Hint
     if ($password) {
         $script:DHCPCachePassword = $password
         $script:DHCPCachePasswordTimestamp = Get-Date
@@ -1129,9 +1146,92 @@ function Get-SessionCachedPassword {
     return $password
 }
 
+function Set-SessionCachedPassword {
+    # Remembers a password that is known to be right (it opened or created a cache)
+    param([System.Security.SecureString]$Password)
+    $script:DHCPCachePassword = $Password
+    $script:DHCPCachePasswordTimestamp = Get-Date
+    $script:DHCPCachePasswordVerified = $true
+}
+
 function Clear-SessionCachedPassword {
     $script:DHCPCachePassword = $null
     $script:DHCPCachePasswordTimestamp = $null
+    $script:DHCPCachePasswordVerified = $false
+}
+
+function Test-SecureStringEqual {
+    param([System.Security.SecureString]$First, [System.Security.SecureString]$Second)
+    $a = ConvertFrom-SecureStringPlain -SecureString $First
+    $b = ConvertFrom-SecureStringPlain -SecureString $Second
+    try { return [string]::Equals($a, $b, [System.StringComparison]::Ordinal) }
+    finally { $a = $null; $b = $null }
+}
+
+function Test-DhcpCachePassword {
+    <#
+    .SYNOPSIS
+        $true = the password opens an existing cache file, $false = cache files exist
+        but it opens none of them, $null = there are no cache files yet.
+    #>
+    param([System.Security.SecureString]$Password)
+    $found = $false
+    foreach ($name in @('dhcp_servers_cache.dat', 'dhcp_scopes_cache.dat')) {
+        $file = Join-Path $script:DataDir $name
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        $found = $true
+        try {
+            $null = Unprotect-DHCPCache -EncryptedText (Get-Content -LiteralPath $file -Raw) -Password $Password
+            return $true
+        } catch { }
+    }
+    if ($found) { return $false }
+    return $null
+}
+
+function Get-DhcpCacheSavePassword {
+    <#
+    .SYNOPSIS
+        Password for saving a cache, checked so the two caches keep one password:
+        a newly typed password must open the existing cache files (catches typos and
+        a second password); with no cache files yet it is typed twice.
+    #>
+    param([string]$Hint = '')
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $password = Get-SessionCachedPassword -Action 'Save' -Hint $Hint
+        if (-not $password) { return $null }
+        if ($script:DHCPCachePasswordVerified) { return $password }
+        $check = Test-DhcpCachePassword -Password $password
+        if ($check -eq $true) { Set-SessionCachedPassword -Password $password; return $password }
+        if ($check -eq $false) {
+            $answer = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNoCancel -Text (
+                "This password does not open your existing DHCP cache files.`n`n" +
+                "Yes = type your existing password again`n" +
+                "No = use this new password (a cache saved with the old password keeps it until that cache is refreshed)`n" +
+                "Cancel = do not save")
+            if ("$answer" -eq 'Yes') { Clear-SessionCachedPassword; continue }
+            if ("$answer" -ne 'No') { Clear-SessionCachedPassword; return $null }
+        }
+        # A new password: type it twice so a typo cannot lock the cache
+        $confirm = Get-DHCPCachePassword -Action 'Confirm'
+        if ($confirm -and (Test-SecureStringEqual -First $password -Second $confirm)) {
+            Set-SessionCachedPassword -Password $password
+            return $password
+        }
+        Clear-SessionCachedPassword
+        if (-not $confirm) { return $null }
+        Show-OctoMessage -Text 'The two passwords do not match. Please try again.' -Title 'DHCP Cache Password' -Icon Warning | Out-Null
+    }
+    return $null
+}
+
+function Write-DhcpCacheFile {
+    # Encrypts to a temporary file first, so a failure never damages the existing cache
+    param([string]$File, [string]$PlainText, [System.Security.SecureString]$Password)
+    $temp = $File + '.tmp'
+    Protect-DHCPCache -PlainText $PlainText -Password $Password | Set-Content -LiteralPath $temp -Force
+    [System.IO.File]::Copy($temp, $File, $true)
+    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
 }
 
 function Read-DhcpCache {
@@ -1139,30 +1239,33 @@ function Read-DhcpCache {
     .SYNOPSIS
         Loads the servers or scopes cache: @{ Items; LastUpdated } (Items empty if none).
         Offers to encrypt a legacy unencrypted .json cache, as before.
+    .DESCRIPTION
+        A cache that does not open with the session password can be retried with
+        another password; when the two caches turn out to use different passwords,
+        this one can be re-saved with the first password so one opens both.
     #>
     param([ValidateSet('Servers', 'Scopes')][string]$Kind)
     $base = if ($Kind -eq 'Servers') { 'dhcp_servers_cache' } else { 'dhcp_scopes_cache' }
     $datFile = Join-Path $script:DataDir "$base.dat"
     $jsonFile = Join-Path $script:DataDir "$base.json"
+    $label = "DHCP $($Kind.ToLower()) cache"
     $empty = @{ Items = @(); LastUpdated = $null }
 
     if ((Test-Path -LiteralPath $jsonFile) -and -not (Test-Path -LiteralPath $datFile)) {
         try { $jsonContent = Get-Content -LiteralPath $jsonFile -Raw; $cache = $jsonContent | ConvertFrom-Json }
         catch { return $empty }
-        $answer = [System.Windows.Forms.MessageBox]::Show(
-            "SECURITY WARNING: Unencrypted DHCP cache file detected!`n`nFile: $base.json`n`nThis file contains network information and is NOT encrypted.`n`nEncrypt it now? (Recommended)`n`nThe unencrypted file is deleted after successful encryption.",
-            'Encrypt Unencrypted Cache?', 'YesNo', 'Warning')
-        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-            $password = Get-DHCPCachePassword -Action 'Save'
+        $answer = Show-OctoMessage -Title 'Encrypt Unencrypted Cache?' -Icon Warning -Buttons YesNo -Text (
+            "SECURITY WARNING: Unencrypted DHCP cache file detected!`n`nFile: $base.json`n`nThis file contains network information and is NOT encrypted.`n`n" +
+            "Encrypt it now? (Recommended)`n`nThe unencrypted file is deleted after successful encryption.")
+        if ("$answer" -eq 'Yes') {
+            $password = Get-DhcpCacheSavePassword -Hint $label
             if ($password) {
                 try {
-                    Protect-DHCPCache -PlainText $jsonContent -Password $password | Set-Content -LiteralPath $datFile -Force
+                    Write-DhcpCacheFile -File $datFile -PlainText $jsonContent -Password $password
                     Remove-Item -LiteralPath $jsonFile -Force
-                    $script:DHCPCachePassword = $password
-                    $script:DHCPCachePasswordTimestamp = Get-Date
-                    [System.Windows.Forms.MessageBox]::Show("Cache encrypted successfully.`n`nYou will need this password to load the cache in the future.", 'Encryption Complete', 'OK', 'Information') | Out-Null
+                    Show-OctoMessage -Text "Cache encrypted successfully.`n`nYou will need this password to load the cache in the future." -Title 'Encryption Complete' | Out-Null
                 } catch {
-                    [System.Windows.Forms.MessageBox]::Show("Failed to encrypt cache file:`n`n$($_.Exception.Message)", 'Encryption Failed', 'OK', 'Error') | Out-Null
+                    Show-OctoMessage -Text "Failed to encrypt cache file:`n`n$($_.Exception.Message)" -Title 'Encryption Failed' -Icon Error | Out-Null
                 }
             }
         }
@@ -1170,16 +1273,53 @@ function Read-DhcpCache {
     }
 
     if (-not (Test-Path -LiteralPath $datFile)) { return $empty }
-    $password = Get-SessionCachedPassword -Action 'Load'
-    if (-not $password) { return $empty }
-    try {
-        $cache = (Unprotect-DHCPCache -EncryptedText (Get-Content -LiteralPath $datFile -Raw) -Password $password) | ConvertFrom-Json
-        return @{ Items = @($cache.$Kind | Where-Object { $null -ne $_ }); LastUpdated = $cache.LastUpdated }
-    } catch {
-        Clear-SessionCachedPassword
-        [System.Windows.Forms.MessageBox]::Show("Failed to decrypt the DHCP $($Kind.ToLower()) cache.`n`nPossible causes:`n- Incorrect password`n- File tampering detected (HMAC verification failed)`n- Corrupted file`n`nError: $($_.Exception.Message)", 'Decryption Failed', 'OK', 'Error') | Out-Null
+    try { $encrypted = Get-Content -LiteralPath $datFile -Raw }
+    catch {
+        Show-OctoMessage -Text "The $label file could not be read:`n$($_.Exception.Message)" -Title 'DHCP Cache' -Icon Warning | Out-Null
         return $empty
     }
+    $session = Get-SessionCachedPassword -Action 'Load' -Hint $label
+    if (-not $session) { return $empty }
+    $password = $session
+    $plain = $null
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try { $plain = Unprotect-DHCPCache -EncryptedText $encrypted -Password $password; break } catch { }
+        if ($attempt -ge 3) {
+            Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Text "The $label could not be opened after $attempt tries and is skipped for now.`n`nClick 'Refresh Cache' to rebuild it - it is then saved with your current password." | Out-Null
+            return $empty
+        }
+        $retry = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNo -Text (
+            "The $label could not be opened with this password.`n`n" +
+            "It was probably saved with a different password - the password is asked again after 5 minutes, " +
+            "so the servers and scopes caches can end up with different ones - or the password was mistyped.`n`n" +
+            "Try another password?`n`nNo = skip it for now. 'Refresh Cache' rebuilds it with your current password.")
+        if ("$retry" -ne 'Yes') { return $empty }
+        $password = Get-DHCPCachePassword -Action 'Load' -Hint $label
+        if (-not $password) { return $empty }
+    }
+
+    try { $cache = $plain | ConvertFrom-Json }
+    catch {
+        Show-OctoMessage -Title 'DHCP Cache' -Icon Warning -Text "The $label was decrypted, but its content could not be read:`n$($_.Exception.Message)`n`nClick 'Refresh Cache' to rebuild it." | Out-Null
+        return $empty
+    }
+
+    if ([object]::ReferenceEquals($password, $session) -or -not $script:DHCPCachePasswordVerified) {
+        # This password is now known to be right
+        Set-SessionCachedPassword -Password $password
+    } else {
+        # The session password already opened the other cache: keep one password for both
+        $answer = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Question -Buttons YesNo -Text (
+            "The $label uses a different password than your other DHCP cache.`n`n" +
+            "Re-save it with the password you entered first, so one password opens both caches from now on?")
+        if ("$answer" -eq 'Yes') {
+            try { Write-DhcpCacheFile -File $datFile -PlainText $plain -Password $session }
+            catch { Show-OctoMessage -Title 'DHCP Cache' -Icon Warning -Text "Could not re-save the $($label):`n$($_.Exception.Message)" | Out-Null }
+        }
+    }
+    return @{ Items = @($cache.$Kind | Where-Object { $null -ne $_ }); LastUpdated = $cache.LastUpdated }
 }
 
 function Save-DhcpCache {
@@ -1189,9 +1329,9 @@ function Save-DhcpCache {
     #>
     param([ValidateSet('Servers', 'Scopes')][string]$Kind, [object[]]$Items)
     $base = if ($Kind -eq 'Servers') { 'dhcp_servers_cache' } else { 'dhcp_scopes_cache' }
-    $password = Get-SessionCachedPassword -Action 'Save'
+    $password = Get-DhcpCacheSavePassword -Hint "DHCP $($Kind.ToLower()) cache"
     if (-not $password) {
-        [System.Windows.Forms.MessageBox]::Show("The DHCP $($Kind.ToLower()) cache was NOT saved because no password was provided.`n`nThe data is still loaded for this session.", 'Cache Not Saved', 'OK', 'Warning') | Out-Null
+        Show-OctoMessage -Title 'Cache Not Saved' -Icon Warning -Text "The DHCP $($Kind.ToLower()) cache was NOT saved because no password was provided.`n`nThe data is still loaded for this session." | Out-Null
         return $false
     }
     $cache = [ordered]@{ LastUpdated = (Get-Date).ToString('o') }
@@ -1199,10 +1339,10 @@ function Save-DhcpCache {
     $cache[$Kind] = @($Items)
     try {
         $json = $cache | ConvertTo-Json -Depth 4 -Compress
-        Protect-DHCPCache -PlainText $json -Password $password | Set-Content -LiteralPath (Join-Path $script:DataDir "$base.dat") -Force
+        Write-DhcpCacheFile -File (Join-Path $script:DataDir "$base.dat") -PlainText $json -Password $password
         return $true
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to save the encrypted DHCP cache.`n`nError: $($_.Exception.Message)", 'Encryption Failed', 'OK', 'Error') | Out-Null
+        Show-OctoMessage -Title 'Encryption Failed' -Icon Error -Text "Failed to save the encrypted DHCP cache.`n`nError: $($_.Exception.Message)" | Out-Null
         return $false
     }
 }
@@ -6407,6 +6547,9 @@ HOW TO USE IT:
       - "Refresh Cache" loads all scopes
       - Filter (3+ characters, comma = OR) and Prefix (2+ characters)
       - "Select All Visible"; selections are kept when you change the filter
+      - The server and scope caches are encrypted with ONE password. If a cache
+        does not open, you can type its password again or skip it; after a skip,
+        "Refresh Cache" rebuilds it with your current password.
 
    STEP 3: Options
       - DNS (Option 6), Option 60, Option 43, or all configured options

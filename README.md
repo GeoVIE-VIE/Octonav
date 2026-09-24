@@ -25,6 +25,10 @@ powershell.exe -ExecutionPolicy Bypass -File .\OctoNav.ps1
 - **Settings and caches** (`octonav_settings.json`, the encrypted DHCP caches,
   `PortTemplates.json`) stay next to the script, as before. When that folder is
   read-only for the user, they go to `%LOCALAPPDATA%\OctoNav` instead.
+- **Cache password:** both encrypted DHCP caches use one password. A newly typed
+  password is checked against your existing caches (or typed twice the first time),
+  so a typo cannot lock a cache. If a cache was saved with a different password,
+  OctoNav asks for that password and can re-save the cache with your main one.
 - **Resources:** `Package-Resources.ps1` now embeds files into `OctoNav.ps1`.
 
 ### DHCP numbers with and without redundancy
