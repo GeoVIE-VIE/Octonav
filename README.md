@@ -1,7 +1,7 @@
-# OctoNav - Complete Network Management Tool
+# NetGUI - Complete Network Management Tool
 
 ## Overview
-OctoNav is a comprehensive Windows PowerShell GUI application for network management, combining:
+NetGUI (previously OctoNav) is a comprehensive Windows PowerShell GUI application for network management, combining:
 - Network adapter configuration (XFER functionality)
 - DHCP scope statistics collection
 - Cisco DNA Center API integration
@@ -10,26 +10,32 @@ OctoNav is a comprehensive Windows PowerShell GUI application for network manage
 
 ---
 
-## OctoNav.ps1 (single file)
+## NetGUI.ps1 (single file)
 
-`OctoNav.ps1` is the whole tool in one Windows PowerShell 5.1 script. It replaces
-`OctoNav-GUI-v2.3.ps1` and the `modules` folder, which have been removed.
+`NetGUI.ps1` is the whole tool in one Windows PowerShell 5.1 script. It was called
+`OctoNav.ps1` before, and it replaces `OctoNav-GUI-v2.3.ps1` and the `modules`
+folder, which have been removed.
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\OctoNav.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\NetGUI.ps1
 ```
 
 - **No administrator rights needed.** Only the Network Configuration tab (it changes
   adapter IP settings) needs "Run as Administrator"; every other tab works as a
   standard user.
-- **Settings and caches** (`octonav_settings.json`, the encrypted DHCP caches,
+- **Settings and caches** (`netgui_settings.json`, the encrypted DHCP caches,
   `PortTemplates.json`) stay next to the script, as before. When that folder is
-  read-only for the user, they go to `%LOCALAPPDATA%\OctoNav` instead.
+  read-only for the user, they go to `%LOCALAPPDATA%\NetGUI` instead.
+- **Coming from OctoNav:** your settings, caches and startup password carry over.
+  `octonav_settings.json` is read until NetGUI saves its own settings file, and
+  `%LOCALAPPDATA%\OctoNav` is copied to `%LOCALAPPDATA%\NetGUI` the first time that
+  folder is created (the old folder is left as it is). Shortcuts that start
+  `OctoNav.ps1` need to point to `NetGUI.ps1`.
 - **Cache password:** both encrypted DHCP caches use one password. A newly typed
   password is checked against your existing caches (or typed twice the first time),
   so a typo cannot lock a cache. If a cache was saved with a different password,
-  OctoNav asks for that password and can re-save the cache with your main one.
-- **Resources:** `Package-Resources.ps1` now embeds files into `OctoNav.ps1`.
+  NetGUI asks for that password and can re-save the cache with your main one.
+- **Resources:** `Package-Resources.ps1` now embeds files into `NetGUI.ps1`.
 
 ### DHCP numbers with and without redundancy
 
@@ -47,10 +53,46 @@ account for both:
 | Failover information unavailable | Counted once, as before, and marked `Unknown` |
 
 Percentage in use = in use / (in use + free), rounded to 2 decimals.
+
+The log shows two counts: scope rows (one per scope per server, which is what the
+old tool reported as "Found N scope(s)") and unique scopes (a scope on a failover
+pair or split across servers counts once). A server listed more than once in
+Active Directory (one entry per IP address, aliases, or stale entries whose name no
+longer resolves) is queried once, and the log lists every skipped entry and why.
+Before, such a server was queried twice and its scopes were counted twice.
 The export has these extra columns: `TotalAddresses`, `ScopeState`, `Redundancy`,
 `FailoverPartner`, `FailoverState` and `Notes` (for example a degraded failover
 relationship, or pool sizes that differ between partners). "Group by Scope ID on
 Export" writes one row per scope, plus `ServerCount`.
+
+### Scope filter
+
+The Filter and Prefix boxes search the scope name and the scope ID. They do not
+search the DHCP server name. One server often serves several sites, so a site code
+in a server name used to match the scopes of every site on that server.
+
+| You type | Filter finds | Prefix finds |
+|---|---|---|
+| `SITE1` | scopes with SITE1 in their name | scopes whose name starts with SITE1 |
+| `10.1` or `10.1.x.x` | scope IDs 10.1.x.x (not 10.10.x.x or 110.1.x.x) | the same |
+| `10.1.0.0/20` | scope IDs in that subnet (10.1.0.x to 10.1.15.x) | the same |
+| `100` | names that contain 100, and scope IDs 100.x.x.x | names that start with 100, and scope IDs 100.x.x.x |
+
+A comma means OR inside a box. When both boxes are filled, a scope has to match both.
+
+**Scopes that are not named after their site:** type the site code in Filter and
+click **Add Subnets**. NetGUI works out the subnets the matching scopes sit in and
+adds them to the filter, for example `SITE1, 10.45.0.0/20`. The list then also shows
+the scopes in those subnets that have other names, and the log names each of them.
+
+How the subnets are chosen:
+- Each matching scope starts with its own subnet.
+- A subnet is widened, up to a /16, only while the differently named scopes in it
+  stay fewer than the matching ones.
+- So a badly named scope inside a site's block is found, and a neighbouring site's
+  block is not added.
+
+The subnets in the filter are plain text, so you can edit or remove them.
 
 ### Speed
 
@@ -58,12 +100,22 @@ Export" writes one row per scope, plus `ServerCount`.
   missing from the bulk statistics is asked for on its own (and listed with a note
   if it still has none), failed servers are named in the summary, and after a full
   collection the log lists every cached scope that was not collected, with the reason.
+- Failed option lookups are tried once more, one scope at a time, after the
+  server's other lookups have finished. A lookup that fails again shows
+  `(lookup failed)` in its option columns, never an empty value that looks like
+  "no option set", and the summary lists it with the server and the error. If a
+  server fails every lookup for 60 seconds, its remaining lookups are skipped.
+  "Refresh Cache" also retries a failed server once and names servers that still fail.
 - DHCP servers are queried in parallel inside the same process (runspace pool)
   instead of one `powershell.exe` per server. Each server needs 3 bulk calls plus
   one option call per scope, only when options are requested. You can set how
   many servers run at once, and Stop keeps the results collected so far.
 - DNA Center device queries run in parallel (6 at a time). When the server rate
-  limits (HTTP 429), the request waits and retries. Stop cancels a running report.
+  limits (HTTP 429), the request waits and retries (up to 5 attempts). A request
+  that still fails for a temporary reason (no answer, timeout, 429, 5xx) is sent
+  once more after a 5-second pause, 2 at a time. If 6 of those second tries in a
+  row get no answer, the rest are not retried. Devices that still fail are named
+  in the log with their IP and the error. Stop cancels a running report.
 - Large device and scope lists filter as you type without freezing the window,
   and your selections are kept when the filter changes.
 - CSV export is written directly and is about twice as fast as `Export-Csv`.
@@ -74,12 +126,25 @@ The report now uses a minimal line diff (longest common subsequence). Repeated
 lines such as `!` in switch configs no longer make unrelated lines show as changed.
 Empty files, one-line files and lines containing `</script>` are handled correctly.
 
+### Window layout
+
+- The tabs are a plain navigation bar (no symbols in the names); the selected tab
+  is underlined. Ctrl+Tab and Ctrl+Shift+Tab switch tabs from anywhere.
+- Every tab is laid out in bordered sections with one font (Segoe UI) and one set
+  of colours. Main actions are blue, Stop is red, and hints are grey.
+- Logs are always visible without scrolling: the DHCP log sits next to the server
+  and scope lists, and the DNA Center log next to the device list. Lists and logs
+  grow with the window.
+- View > Toggle Theme (Ctrl+T) switches between the Light and Dark themes,
+  including lines already in the logs, the Help text and the password dialogs.
+
 ---
 
 ## Files in Repository
 
 ### Main Application
-- **OctoNav-CompleteGUI-FIXED.ps1** - Main GUI application (~3,300 lines)
+- **NetGUI.ps1** - Main GUI application, everything in one file (see above)
+- **OctoNav-CompleteGUI-FIXED.ps1** - Older version of the GUI (~3,300 lines), kept for reference
   - ✅ Merged: XFER network configuration (Tab 1)
   - ✅ Merged: DHCP statistics collection (Tab 2 - Redesigned UI)
   - ✅ Merged: DNA Center API functions (Tab 3 - 25 functions)
@@ -174,8 +239,10 @@ $env:DNAC_SERVER2_URL = "https://dnac-dev.example.com"
 
 ### 2. Configure Output Directory (Optional)
 ```powershell
-$env:OCTONAV_OUTPUT_DIR = "D:\Reports\OctoNav"
+$env:NETGUI_OUTPUT_DIR = "D:\Reports\NetGUI"
 ```
+
+`OCTONAV_OUTPUT_DIR` (the earlier name) is still read when `NETGUI_OUTPUT_DIR` is not set.
 
 Default: `C:\DNACenter_Reports`
 
@@ -190,7 +257,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ### Launch the GUI
 ```powershell
-.\OctoNav-CompleteGUI-FIXED.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\NetGUI.ps1
 ```
 
 ### Tab 1: Network Configuration
@@ -346,7 +413,7 @@ All exports are CSV files saved to the configured output directory:
 
 ### Output directory errors
 - Check write permissions on `C:\DNACenter_Reports`
-- Set `OCTONAV_OUTPUT_DIR` to writable location
+- Set `NETGUI_OUTPUT_DIR` to writable location
 - Script will fall back to temp directory if needed
 
 ---
@@ -418,7 +485,7 @@ CLI-only features:
 
 1. **Certificate Validation**: Disabled for DNA Center (as per user requirements)
 2. **Token Refresh**: Manual re-authentication required after 1 hour
-3. **API Rate Limiting**: Not implemented
+3. **API Rate Limiting**: No request budget; HTTP 429 answers are retried with back-off, and requests that still fail get one slower second try
 4. **Audit Logging**: Events only shown in GUI, not logged to file
 5. **MFA**: DNA Center multi-factor authentication not supported
 

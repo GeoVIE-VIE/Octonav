@@ -11,7 +11,7 @@
 # parts summed (never more than the scope's address range), and inactive copies
 # are not counted - see Get-DhcpScopeAnalysis.
 #
-# Settings and caches are stored next to this script, or in %LOCALAPPDATA%\OctoNav
+# Settings and caches are stored next to this script, or in %LOCALAPPDATA%\NetGUI
 # when this folder is read-only for the current user.
 
 # ============================================
@@ -30,29 +30,40 @@ $script:AppRoot = if ($PSScriptRoot) { $PSScriptRoot }
     elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
     else { (Get-Location).Path }
 
-function Get-OctoDataDirectory {
+function Get-NetGuiDataDirectory {
     <#
     .SYNOPSIS
         Folder for settings and caches: next to the script (as before) or, when the
-        current user cannot write there, %LOCALAPPDATA%\OctoNav.
+        current user cannot write there, %LOCALAPPDATA%\NetGUI.
+    .DESCRIPTION
+        When %LOCALAPPDATA%\NetGUI is first created, the files in %LOCALAPPDATA%\OctoNav
+        (the tool's earlier name) are copied into it, so settings, caches and the startup
+        password carry over. The old folder is not changed.
     #>
     $candidates = @($script:AppRoot)
-    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'OctoNav') }
+    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'NetGUI') }
     foreach ($dir in $candidates) {
         if ([string]::IsNullOrWhiteSpace($dir)) { continue }
         try {
-            if (-not [System.IO.Directory]::Exists($dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
-            $probe = Join-Path $dir ('.octonav_write_test_' + [guid]::NewGuid().ToString('N'))
+            $created = -not [System.IO.Directory]::Exists($dir)
+            if ($created) { [void][System.IO.Directory]::CreateDirectory($dir) }
+            $probe = Join-Path $dir ('.netgui_write_test_' + [guid]::NewGuid().ToString('N'))
             [System.IO.File]::WriteAllText($probe, '')
             [System.IO.File]::Delete($probe)
+            $previous = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'OctoNav' } else { $null }
+            if ($created -and $dir -ne $script:AppRoot -and $previous -and [System.IO.Directory]::Exists($previous)) {
+                try { Get-ChildItem -LiteralPath $previous -Force -ErrorAction Stop | Copy-Item -Destination $dir -Recurse -Force -ErrorAction Stop }
+                catch { $script:DataCopyError = $_.Exception.Message }
+            }
             return $dir
         } catch { }
     }
     return [System.IO.Path]::GetTempPath()
 }
-$script:DataDir = Get-OctoDataDirectory
+$script:DataCopyError = $null
+$script:DataDir = Get-NetGuiDataDirectory
 
-function Enable-OctoCertificateBypass {
+function Enable-NetGuiCertificateBypass {
     <#
     .SYNOPSIS
         Accepts self-signed DNA Center certificates (same behaviour as before).
@@ -93,7 +104,7 @@ public static class ServerCertificateValidationCallback
     }
 }
 
-Enable-OctoCertificateBypass
+Enable-NetGuiCertificateBypass
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 # .NET Framework allows only 2 concurrent connections per host by default, which
 # would serialize the parallel DNA Center requests. Expect: 100-continue and
@@ -146,7 +157,7 @@ function Write-Log {
     } catch { }
 }
 
-function Set-OctoStatus {
+function Set-NetGuiStatus {
     <#
     .SYNOPSIS
         Updates the status bar text and (optionally) the progress bar.
@@ -159,7 +170,7 @@ function Set-OctoStatus {
     try {
         if ($Text) {
             $bar.StatusLabel.Text = $Text
-            $bar.StatusLabel.ForeColor = if ($IsError) { [System.Drawing.Color]::Red } else { $script:CurrentTheme.StatusStripForeColor }
+            $bar.StatusLabel.ForeColor = if ($IsError) { $script:CurrentTheme.ErrorText } else { $script:CurrentTheme.StatusStripForeColor }
         }
         if ($Percent -ge 0) {
             $bar.ProgressBar.Visible = $true
@@ -180,12 +191,13 @@ function Update-ConnectionStatus {
     $bar = $script:StatusBarPanels
     if ($null -eq $bar) { return }
     if ($IsConnected) {
-        $bar.ConnectionStatus.Text = if ($ServerName) { "o Connected to $ServerName" } else { 'o Connected' }
-        $bar.ConnectionStatus.ForeColor = [System.Drawing.Color]::Green
+        $bar.ConnectionStatus.Text = if ($ServerName) { "Connected to $ServerName" } else { 'Connected' }
+        $bar.ConnectionStatus.Tag = 'Success'
     } else {
-        $bar.ConnectionStatus.Text = '. Not Connected'
-        $bar.ConnectionStatus.ForeColor = [System.Drawing.Color]::Gray
+        $bar.ConnectionStatus.Text = 'Not connected'
+        $bar.ConnectionStatus.Tag = 'Muted'
     }
+    $bar.ConnectionStatus.ForeColor = Get-NetGuiToneColor -Tone $bar.ConnectionStatus.Tag
 }
 
 function New-EnhancedStatusBar {
@@ -201,20 +213,17 @@ function New-EnhancedStatusBar {
     $statusLabel.TextAlign = 'MiddleLeft'
 
     $connectionLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-    $connectionLabel.Text = '. Not Connected'
-    $connectionLabel.BorderSides = 'Left'
-    $connectionLabel.BorderStyle = [System.Windows.Forms.Border3DStyle]::Etched
+    $connectionLabel.Text = 'Not connected'
+    $connectionLabel.Tag = 'Muted'
 
     $userLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
     if ($script:IsRunningAsAdmin) {
-        $userLabel.Text = '# Administrator'
-        $userLabel.ForeColor = [System.Drawing.Color]::Green
+        $userLabel.Text = 'Administrator'
+        $userLabel.Tag = 'Success'
     } else {
-        $userLabel.Text = '@ Standard user'
-        $userLabel.ForeColor = [System.Drawing.Color]::Gray
+        $userLabel.Text = 'Standard user'
+        $userLabel.Tag = 'Muted'
     }
-    $userLabel.BorderSides = 'Left'
-    $userLabel.BorderStyle = [System.Windows.Forms.Border3DStyle]::Etched
 
     $progressBar = New-Object System.Windows.Forms.ToolStripProgressBar
     $progressBar.Size = New-Object System.Drawing.Size(150, 16)
@@ -237,25 +246,37 @@ function New-EnhancedStatusBar {
 }
 
 function New-DashboardPanel {
-    param([string]$Title, [string]$Value, [int]$X, [int]$Y)
-    $panel = New-Object System.Windows.Forms.GroupBox
-    $panel.Text = $Title
-    $panel.Location = New-Object System.Drawing.Point($X, $Y)
-    $panel.Size = New-Object System.Drawing.Size(220, 100)
+    # A small card with a caption and one large value (placed by a TableLayoutPanel)
+    param([string]$Title, [string]$Value)
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Tag = 'Card'
+    # Design size of one cell; the label is anchored to it before the panel is docked
+    $panel.Size = New-Object System.Drawing.Size(278, 100)
+    $panel.Dock = 'Fill'
+    $panel.Margin = New-Object System.Windows.Forms.Padding(6, 0, 6, 0)
+    $panel.Add_Paint($script:NetGuiBorderPainter)
+    $panel.Add_Resize({ $this.Invalidate() })
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = $Title
+    $lblTitle.Tag = 'Muted'
+    $lblTitle.Location = New-Object System.Drawing.Point(16, 14)
+    $lblTitle.AutoSize = $true
+    $panel.Controls.Add($lblTitle)
     $lblValue = New-Object System.Windows.Forms.Label
     $lblValue.Text = $Value
-    $lblValue.Location = New-Object System.Drawing.Point(15, 30)
-    $lblValue.Size = New-Object System.Drawing.Size(190, 50)
-    $lblValue.Font = $script:Fonts.Dashboard
-    $lblValue.TextAlign = 'MiddleCenter'
+    $lblValue.Location = New-Object System.Drawing.Point(14, 38)
+    $lblValue.Size = New-Object System.Drawing.Size(250, 44)
+    $lblValue.Anchor = 'Top,Left,Right'
+    $lblValue.Font = $script:Fonts.StatValue
+    $lblValue.AutoEllipsis = $true
     $panel.Controls.Add($lblValue)
     return @{ Panel = $panel; ValueLabel = $lblValue }
 }
 
 function Set-DashboardValue {
-    param([hashtable]$Panel, [string]$Value, [System.Drawing.Color]$Color = [System.Drawing.Color]::Empty)
+    param([hashtable]$Panel, [string]$Value, [string]$Tone = '')
     $Panel.ValueLabel.Text = $Value
-    if (-not $Color.IsEmpty) { $Panel.ValueLabel.ForeColor = $Color }
+    if ($Tone) { Set-NetGuiTone -Control $Panel.ValueLabel -Tone $Tone }
 }
 
 # ============================================
@@ -404,7 +425,7 @@ function ConvertTo-Hashtable {
 # CSV EXPORT
 # ============================================
 
-function Export-OctoCsv {
+function Export-NetGuiCsv {
     <#
     .SYNOPSIS
         Writes objects to CSV (UTF-8 with BOM, every field quoted - the same output
@@ -455,7 +476,7 @@ function Initialize-OutputDirectory {
     return $Path
 }
 
-function Get-OctoExportPath {
+function Get-NetGuiExportPath {
     <#
     .SYNOPSIS
         Output file path for an export: <folder>\<BaseName>[_yyyyMMdd_HHmmss].<ext>
@@ -473,7 +494,9 @@ function Get-OctoExportPath {
 # SETTINGS
 # ============================================
 
-$script:SettingsPath = Join-Path $script:DataDir 'octonav_settings.json'
+$script:SettingsPath = Join-Path $script:DataDir 'netgui_settings.json'
+# Settings saved under the tool's earlier name are read until the first save
+$script:PreviousSettingsPath = Join-Path $script:DataDir 'octonav_settings.json'
 $script:DefaultSettings = @{
     Theme                      = 'Light'
     WindowSize                 = @{ Width = 1200; Height = 800 }
@@ -487,11 +510,13 @@ $script:DefaultSettings = @{
     FavoriteFunctions          = @()
 }
 
-function Get-OctoNavSettings {
+function Get-NetGuiSettings {
     $settings = $script:DefaultSettings.Clone()
     try {
-        if (Test-Path -LiteralPath $script:SettingsPath) {
-            $loaded = Get-Content -LiteralPath $script:SettingsPath -Raw | ConvertFrom-Json
+        $path = $script:SettingsPath
+        if (-not (Test-Path -LiteralPath $path)) { $path = $script:PreviousSettingsPath }
+        if (Test-Path -LiteralPath $path) {
+            $loaded = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
             foreach ($name in $loaded.PSObject.Properties.Name) { $settings[$name] = $loaded.$name }
         }
     } catch {
@@ -501,7 +526,7 @@ function Get-OctoNavSettings {
     return $settings
 }
 
-function Save-OctoNavSettings {
+function Save-NetGuiSettings {
     param([Parameter(Mandatory = $true)][hashtable]$Settings)
     try {
         $Settings | ConvertTo-Json -Depth 10 | Out-File -FilePath $script:SettingsPath -Encoding UTF8 -Force
@@ -518,7 +543,7 @@ function Add-ExportHistory {
     $history = @($Settings.ExportHistory | Where-Object { $null -ne $_ })
     if ($history.Count -ge 50) { $history = @($history | Select-Object -Last 49) }
     $Settings.ExportHistory = $history + @($entry)
-    [void](Save-OctoNavSettings -Settings $Settings)
+    [void](Save-NetGuiSettings -Settings $Settings)
 }
 
 function Get-RecentActivity {
@@ -534,34 +559,43 @@ function Get-RecentActivity {
 # THEMES
 # ============================================
 
+# Colour tokens per theme. Every control gets its colours from here, so the Light
+# and Dark themes stay consistent (and View > Toggle Theme recolours everything).
 $script:Themes = @{
     Light = @{
         Name = 'Light'
-        FormBackColor = [System.Drawing.Color]::White; FormForeColor = [System.Drawing.Color]::Black
-        ControlBackColor = [System.Drawing.Color]::White; ControlForeColor = [System.Drawing.Color]::Black
-        GroupBoxBackColor = [System.Drawing.Color]::FromArgb(247, 247, 247); GroupBoxForeColor = [System.Drawing.Color]::Black
-        TextBoxBackColor = [System.Drawing.Color]::White; TextBoxForeColor = [System.Drawing.Color]::Black
-        TextBoxBorderColor = [System.Drawing.Color]::Gray; RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
-        ButtonBackColor = [System.Drawing.Color]::WhiteSmoke; ButtonForeColor = [System.Drawing.Color]::Black
-        TabBackColor = [System.Drawing.Color]::White; TabForeColor = [System.Drawing.Color]::Black
-        StatusStripBackColor = [System.Drawing.Color]::WhiteSmoke; StatusStripForeColor = [System.Drawing.Color]::Black
-        TreeViewBackColor = [System.Drawing.Color]::White; TreeViewForeColor = [System.Drawing.Color]::Black; TreeViewLineColor = [System.Drawing.Color]::Gray
-        LogSuccessColor = [System.Drawing.Color]::Green; LogErrorColor = [System.Drawing.Color]::Red
-        LogWarningColor = [System.Drawing.Color]::DarkOrange; LogInfoColor = [System.Drawing.Color]::DarkCyan; LogDebugColor = [System.Drawing.Color]::Gray
+        WindowBack = '#F3F4F6'; HeaderBack = '#FFFFFF'; CardBack = '#FFFFFF'; CardBorder = '#DFE3E8'
+        Text = '#1F2328'; TextMuted = '#5F6B76'
+        Accent = '#0F6CBD'; AccentHover = '#115EA3'; AccentPressed = '#0C4A84'; AccentText = '#FFFFFF'
+        NavText = '#57606A'; NavSelected = '#0F6CBD'; NavHover = '#1F2328'
+        ButtonBack = '#FFFFFF'; ButtonBorder = '#C9CED4'; ButtonHover = '#F0F2F4'; ButtonPressed = '#E4E7EB'; ButtonText = '#1F2328'
+        DangerBack = '#C42B1C'; DangerHover = '#A8241A'; DangerPressed = '#8E1F16'; DangerText = '#FFFFFF'
+        DisabledBack = '#F3F4F6'; DisabledBorder = '#E1E4E8'; DisabledText = '#A2A9B0'
+        InputBack = '#FFFFFF'; InputText = '#1F2328'; LogBack = '#F8F9FB'
+        SuccessText = '#107C10'; WarningText = '#9A5B00'; ErrorText = '#C42B1C'
+        SuccessBack = '#E3F4E1'; WarningBack = '#FFF4D6'; ErrorBack = '#FDE7E9'
+        LogSuccessColor = '#107C10'; LogErrorColor = '#C42B1C'; LogWarningColor = '#9A5B00'; LogInfoColor = '#0F6CBD'; LogDebugColor = '#6E7781'
+        TextBoxForeColor = '#1F2328'; StatusStripForeColor = '#5F6B76'
     }
     Dark = @{
         Name = 'Dark'
-        FormBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); FormForeColor = [System.Drawing.Color]::White
-        ControlBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); ControlForeColor = [System.Drawing.Color]::White
-        GroupBoxBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); GroupBoxForeColor = [System.Drawing.Color]::White
-        TextBoxBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); TextBoxForeColor = [System.Drawing.Color]::White
-        TextBoxBorderColor = [System.Drawing.Color]::Gray; RichTextBoxBackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
-        ButtonBackColor = [System.Drawing.Color]::FromArgb(60, 60, 60); ButtonForeColor = [System.Drawing.Color]::White
-        TabBackColor = [System.Drawing.Color]::FromArgb(30, 30, 30); TabForeColor = [System.Drawing.Color]::White
-        StatusStripBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); StatusStripForeColor = [System.Drawing.Color]::White
-        TreeViewBackColor = [System.Drawing.Color]::FromArgb(45, 45, 45); TreeViewForeColor = [System.Drawing.Color]::White; TreeViewLineColor = [System.Drawing.Color]::Gray
-        LogSuccessColor = [System.Drawing.Color]::LimeGreen; LogErrorColor = [System.Drawing.Color]::OrangeRed
-        LogWarningColor = [System.Drawing.Color]::Orange; LogInfoColor = [System.Drawing.Color]::Cyan; LogDebugColor = [System.Drawing.Color]::LightGray
+        WindowBack = '#1C1D20'; HeaderBack = '#25272B'; CardBack = '#2A2C30'; CardBorder = '#3B3E44'
+        Text = '#E7E9EC'; TextMuted = '#9BA3AB'
+        Accent = '#2373C8'; AccentHover = '#2E84DB'; AccentPressed = '#1B5EA6'; AccentText = '#FFFFFF'
+        NavText = '#A9B1B9'; NavSelected = '#6CB4FF'; NavHover = '#E7E9EC'
+        ButtonBack = '#34373C'; ButtonBorder = '#4A4F56'; ButtonHover = '#3E4248'; ButtonPressed = '#474B52'; ButtonText = '#E7E9EC'
+        DangerBack = '#B8322A'; DangerHover = '#CC3F36'; DangerPressed = '#9E2A23'; DangerText = '#FFFFFF'
+        DisabledBack = '#2F3135'; DisabledBorder = '#3B3E44'; DisabledText = '#6C737A'
+        InputBack = '#1F2023'; InputText = '#E7E9EC'; LogBack = '#1F2023'
+        SuccessText = '#6CCB5F'; WarningText = '#F2B84B'; ErrorText = '#FF8A80'
+        SuccessBack = '#1E3A22'; WarningBack = '#3D3014'; ErrorBack = '#45201F'
+        LogSuccessColor = '#6CCB5F'; LogErrorColor = '#FF8A80'; LogWarningColor = '#F2B84B'; LogInfoColor = '#6CB4FF'; LogDebugColor = '#9BA3AB'
+        TextBoxForeColor = '#E7E9EC'; StatusStripForeColor = '#9BA3AB'
+    }
+}
+foreach ($theme in $script:Themes.Values) {
+    foreach ($key in @($theme.Keys)) {
+        if ($key -ne 'Name') { $theme[$key] = [System.Drawing.ColorTranslator]::FromHtml($theme[$key]) }
     }
 }
 
@@ -571,10 +605,103 @@ function Get-Theme {
     return $script:Themes.Light
 }
 
+function Get-NetGuiToneColor {
+    # Text colour for a tone (Success / Warning / Error / Muted / Accent; anything else = normal text)
+    param([string]$Tone, [hashtable]$Theme)
+    if ($null -eq $Theme) { $Theme = $script:CurrentTheme }
+    switch ($Tone) {
+        'Success' { return $Theme.SuccessText }
+        'Warning' { return $Theme.WarningText }
+        'Error' { return $Theme.ErrorText }
+        'Muted' { return $Theme.TextMuted }
+        'Accent' { return $Theme.NavSelected }
+        'InfoSuccess' { return $Theme.SuccessText }
+        'InfoWarning' { return $Theme.WarningText }
+        default { return $Theme.Text }
+    }
+}
+
+function Set-NetGuiTone {
+    # Colours a label by meaning; the tone is kept in Tag so a theme change recolours it
+    param($Control, [string]$Tone)
+    $Control.Tag = $Tone
+    $Control.ForeColor = Get-NetGuiToneColor -Tone $Tone
+}
+
+function Set-NetGuiButtonStyle {
+    <#
+    .SYNOPSIS
+        Flat button colours by role (Tag = Primary / Danger; anything else = secondary)
+        and state; runs again whenever the button is enabled or disabled.
+    #>
+    param($Button, [hashtable]$Theme)
+    if ($null -eq $Theme) { $Theme = $script:CurrentTheme }
+    if ($null -eq $Theme) { return }
+    $Button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $Button.UseVisualStyleBackColor = $false
+    $flat = $Button.FlatAppearance
+    $flat.BorderSize = 1
+    $role = [string]$Button.Tag
+    if ($role -eq 'Primary' -and $script:Fonts) { $Button.Font = $script:Fonts.Semibold }
+    if (-not $Button.Enabled) {
+        $Button.BackColor = $Theme.DisabledBack; $Button.ForeColor = $Theme.DisabledText
+        $flat.BorderColor = $Theme.DisabledBorder
+        $flat.MouseOverBackColor = $Theme.DisabledBack; $flat.MouseDownBackColor = $Theme.DisabledBack
+        return
+    }
+    switch ($role) {
+        'Primary' { $colors = @($Theme.Accent, $Theme.AccentHover, $Theme.AccentPressed, $Theme.AccentText, $Theme.Accent) }
+        'Danger' { $colors = @($Theme.DangerBack, $Theme.DangerHover, $Theme.DangerPressed, $Theme.DangerText, $Theme.DangerBack) }
+        default { $colors = @($Theme.ButtonBack, $Theme.ButtonHover, $Theme.ButtonPressed, $Theme.ButtonText, $Theme.ButtonBorder) }
+    }
+    $Button.BackColor = $colors[0]
+    $flat.MouseOverBackColor = $colors[1]
+    $flat.MouseDownBackColor = $colors[2]
+    $Button.ForeColor = $colors[3]
+    $flat.BorderColor = $colors[4]
+}
+
+# Thin border for cards and log frames (drawn on Paint: WinForms panels have no border colour)
+$script:NetGuiBorderPainter = {
+    param($control, $e)
+    $color = if ($script:CurrentTheme) { $script:CurrentTheme.CardBorder } else { [System.Drawing.Color]::LightGray }
+    $pen = New-Object System.Drawing.Pen($color)
+    try { $e.Graphics.DrawRectangle($pen, 0, 0, $control.Width - 1, $control.Height - 1) } finally { $pen.Dispose() }
+}
+# Line under the navigation bar
+$script:NetGuiBottomLinePainter = {
+    param($control, $e)
+    $color = if ($script:CurrentTheme) { $script:CurrentTheme.CardBorder } else { [System.Drawing.Color]::LightGray }
+    $pen = New-Object System.Drawing.Pen($color)
+    try { $e.Graphics.DrawLine($pen, 0, $control.Height - 1, $control.Width, $control.Height - 1) } finally { $pen.Dispose() }
+}
+
+function Convert-NetGuiLogColors {
+    <#
+    .SYNOPSIS
+        Recolours the lines already in a log for another theme (swaps the entries of
+        the RTF colour table, so it is fast for long logs too).
+    #>
+    param([System.Windows.Forms.RichTextBox]$LogBox, [hashtable]$From, [hashtable]$To)
+    if ($null -eq $LogBox -or $LogBox.TextLength -eq 0 -or $null -eq $From -or $From.Name -eq $To.Name) { return }
+    $rtf = $LogBox.Rtf
+    foreach ($key in 'LogSuccessColor', 'LogErrorColor', 'LogWarningColor', 'LogInfoColor', 'LogDebugColor', 'Text') {
+        $old = $From[$key]; $new = $To[$key]
+        $rtf = $rtf.Replace(('\red{0}\green{1}\blue{2};' -f $old.R, $old.G, $old.B), ('\red{0}\green{1}\blue{2};' -f $new.R, $new.G, $new.B))
+    }
+    $LogBox.Rtf = $rtf
+    $LogBox.SelectionStart = $LogBox.TextLength
+    $LogBox.ScrollToCaret()
+}
+
 function Set-ThemeToControl {
     <#
     .SYNOPSIS
         Applies a theme to a control and all of its children (iterative walk).
+    .DESCRIPTION
+        Panels and labels are coloured by their Tag: Card, Header, LogFrame, Page,
+        NavIndicator, InfoSuccess / InfoWarning (panels); Muted, Success, Warning,
+        Error, NavItem (labels). Buttons by role, see Set-NetGuiButtonStyle.
     #>
     param(
         [Parameter(Mandatory = $true)][System.Windows.Forms.Control]$Control,
@@ -584,37 +711,48 @@ function Set-ThemeToControl {
     $stack.Push($Control)
     while ($stack.Count -gt 0) {
         $c = $stack.Pop()
+        $tag = [string]$c.Tag
         try {
             switch ($c.GetType().Name) {
-                'Form' { $c.BackColor = $Theme.FormBackColor; $c.ForeColor = $Theme.FormForeColor }
-                'GroupBox' { $c.BackColor = $Theme.GroupBoxBackColor; $c.ForeColor = $Theme.GroupBoxForeColor }
-                'TextBox' { $c.BackColor = $Theme.TextBoxBackColor; $c.ForeColor = $Theme.TextBoxForeColor }
-                'RichTextBox' { $c.BackColor = $Theme.RichTextBoxBackColor; $c.ForeColor = $Theme.TextBoxForeColor }
-                'Button' {
-                    $c.BackColor = $Theme.ButtonBackColor; $c.ForeColor = $Theme.ButtonForeColor
-                    $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-                    $c.FlatAppearance.BorderColor = $Theme.TextBoxBorderColor
+                'Form' { $c.BackColor = $Theme.WindowBack; $c.ForeColor = $Theme.Text }
+                'Panel' {
+                    switch ($tag) {
+                        'Card' { $c.BackColor = $Theme.CardBack }
+                        'Header' { $c.BackColor = $Theme.HeaderBack }
+                        'LogFrame' { $c.BackColor = $Theme.LogBack }
+                        'NavIndicator' { $c.BackColor = $Theme.Accent }
+                        'InfoSuccess' { $c.BackColor = $Theme.SuccessBack }
+                        'InfoWarning' { $c.BackColor = $Theme.WarningBack }
+                        default { $c.BackColor = $Theme.WindowBack }
+                    }
+                    $c.ForeColor = $Theme.Text
+                    $c.Invalidate()
                 }
-                'TabControl' { $c.BackColor = $Theme.TabBackColor; $c.ForeColor = $Theme.TabForeColor }
-                'TabPage' { $c.BackColor = $Theme.FormBackColor; $c.ForeColor = $Theme.FormForeColor }
-                'Label' { $c.ForeColor = $Theme.ControlForeColor }
-                'TreeView' { $c.BackColor = $Theme.TreeViewBackColor; $c.ForeColor = $Theme.TreeViewForeColor; $c.LineColor = $Theme.TreeViewLineColor }
-                'ComboBox' { $c.BackColor = $Theme.ControlBackColor; $c.ForeColor = $Theme.ControlForeColor; $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat }
-                'StatusStrip' { $c.BackColor = $Theme.StatusStripBackColor; $c.ForeColor = $Theme.StatusStripForeColor }
-                'Panel' { $c.BackColor = $Theme.ControlBackColor; $c.ForeColor = $Theme.ControlForeColor }
-                default {
-                    if ($c.BackColor -ne [System.Drawing.Color]::Transparent) { $c.BackColor = $Theme.ControlBackColor }
-                    $c.ForeColor = $Theme.ControlForeColor
+                'TableLayoutPanel' { $c.BackColor = $Theme.WindowBack; $c.ForeColor = $Theme.Text }
+                'Label' {
+                    if ($tag -eq 'NavItem') { $c.ForeColor = $Theme.NavText } else { $c.ForeColor = Get-NetGuiToneColor -Tone $tag -Theme $Theme }
                 }
+                'Button' { Set-NetGuiButtonStyle -Button $c -Theme $Theme }
+                { $_ -in 'CheckBox', 'RadioButton' } { $c.ForeColor = $Theme.Text }
+                { $_ -in 'TextBox', 'NumericUpDown', 'ComboBox', 'ListBox', 'CheckedListBox' } {
+                    # Inside a frame (the template editor) the box takes the frame colour
+                    $c.BackColor = if ($c.Parent -and [string]$c.Parent.Tag -eq 'LogFrame') { $Theme.LogBack } else { $Theme.InputBack }
+                    $c.ForeColor = $Theme.InputText
+                    # A standard drop-down list is drawn like a button and ignores the colours
+                    if ($_ -eq 'ComboBox') { $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat }
+                }
+                'RichTextBox' { $c.BackColor = if ($tag -eq 'Card') { $Theme.CardBack } else { $Theme.LogBack }; $c.ForeColor = $Theme.Text }
+                'TreeView' { $c.BackColor = $Theme.InputBack; $c.ForeColor = $Theme.InputText; $c.LineColor = $Theme.TextMuted }
+                { $_ -in 'MenuStrip', 'StatusStrip' } {
+                    $c.BackColor = $Theme.HeaderBack
+                    $c.ForeColor = if ($_ -eq 'StatusStrip') { $Theme.TextMuted } else { $Theme.Text }
+                    foreach ($item in $c.Items) { if ($item.Tag) { $item.ForeColor = Get-NetGuiToneColor -Tone ([string]$item.Tag) -Theme $Theme } }
+                }
+                default { $c.ForeColor = $Theme.Text }
             }
         } catch { }
         foreach ($child in $c.Controls) { $stack.Push($child) }
     }
-}
-
-function Add-IconToTab {
-    param([System.Windows.Forms.TabPage]$Tab, [string]$Icon)
-    if ($Icon) { $Tab.Text = "$Icon $($Tab.Text)" }
 }
 
 # ============================================
@@ -647,7 +785,7 @@ function Write-SecurityAudit {
         if (-not [System.IO.Directory]::Exists($dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
         [System.IO.File]::AppendAllText($script:AuditLogFile, $entry + [Environment]::NewLine)
         if ($Level -eq 'Critical') {
-            Write-EventLog -LogName Application -Source 'OctoNav' -EventId 1001 -EntryType Error -Message $entry -ErrorAction SilentlyContinue
+            Write-EventLog -LogName Application -Source 'NetGUI' -EventId 1001 -EntryType Error -Message $entry -ErrorAction SilentlyContinue
         }
     } catch {
         # Auditing must never stop the tool (e.g. read-only folder)
@@ -804,7 +942,7 @@ function Start-SessionMonitor {
         $idle = ((Get-Date) - $script:LastActivityTime).TotalMinutes
         if ($idle -ge $script:SessionTimeoutMinutes) {
             Write-SecurityAudit -Level Warning -Event 'Auto-lock triggered' -Details "Session timeout after $script:SessionTimeoutMinutes minutes"
-            [System.Windows.Forms.MessageBox]::Show("Session expired due to inactivity.`n`nOctoNav will now close for security.", 'Session Timeout', 'OK', 'Warning') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("Session expired due to inactivity.`n`nNetGUI will now close for security.", 'Session Timeout', 'OK', 'Warning') | Out-Null
             $this.Tag.Close()
         }
     })
@@ -812,11 +950,18 @@ function Start-SessionMonitor {
     Update-SessionActivity
 }
 
+function Set-NetGuiDialogStyle {
+    # Fonts and colours of the main window for a dialog (when the theme is loaded)
+    param($Form)
+    $Form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    if ($script:CurrentTheme) { Set-ThemeToControl -Control $Form -Theme $script:CurrentTheme }
+}
+
 function Show-StartupPasswordDialog {
     param([switch]$IsFirstRun)
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = if ($IsFirstRun) { 'Set OctoNav Startup Password' } else { 'OctoNav Authentication' }
+    $form.Text = if ($IsFirstRun) { 'Set NetGUI Startup Password' } else { 'NetGUI Authentication' }
     $form.Size = New-Object System.Drawing.Size(500, 400)
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
@@ -826,11 +971,11 @@ function Show-StartupPasswordDialog {
     $y = 20
 
     $lblTitle = New-Object System.Windows.Forms.Label
-    $lblTitle.Text = if ($IsFirstRun) { 'Welcome to OctoNav' } else { 'Please authenticate to continue' }
+    $lblTitle.Text = if ($IsFirstRun) { 'Welcome to NetGUI' } else { 'Please authenticate to continue' }
     $lblTitle.Location = New-Object System.Drawing.Point(20, $y)
     $lblTitle.Size = New-Object System.Drawing.Size(450, 25)
-    $lblTitle.Font = New-Object System.Drawing.Font('Arial', 12, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor = [System.Drawing.Color]::DarkBlue
+    $lblTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 13)
+    $lblTitle.Tag = 'Accent'
     $form.Controls.Add($lblTitle)
     $y += 35
 
@@ -838,9 +983,9 @@ function Show-StartupPasswordDialog {
         $lblInstructions = New-Object System.Windows.Forms.Label
         $lblInstructions.Text = "Please create a strong startup password.`n`nPassword Requirements:`n- Minimum $script:PasswordMinLength characters`n- At least one uppercase letter (A-Z)`n- At least one lowercase letter (a-z)`n- At least one number (0-9)`n- At least one special character (!@#$%^&*)`n`nWARNING: If you forget this password, you will be locked out!"
         $lblInstructions.Location = New-Object System.Drawing.Point(20, $y)
-        $lblInstructions.Size = New-Object System.Drawing.Size(450, 140)
+        $lblInstructions.Size = New-Object System.Drawing.Size(450, 185)
         $form.Controls.Add($lblInstructions)
-        $y += 150
+        $y += 195
 
         $lblPassword = New-Object System.Windows.Forms.Label
         $lblPassword.Text = 'Enter Password:'
@@ -871,7 +1016,7 @@ function Show-StartupPasswordDialog {
         $btnSetPassword.Text = 'Set Password'
         $btnSetPassword.Location = New-Object System.Drawing.Point(180, $y)
         $btnSetPassword.Size = New-Object System.Drawing.Size(140, 35)
-        $btnSetPassword.BackColor = [System.Drawing.Color]::LightGreen
+        $btnSetPassword.Tag = 'Primary'
         $form.Controls.Add($btnSetPassword)
         $form.AcceptButton = $btnSetPassword
         $btnSetPassword.Add_Click({
@@ -886,7 +1031,7 @@ function Show-StartupPasswordDialog {
             }
             try {
                 Set-StartupPassword -Password (ConvertTo-SecureString -String $txtPassword.Text -AsPlainText -Force)
-                [System.Windows.Forms.MessageBox]::Show("Password set successfully!`n`nOctoNav will now start.", 'Success', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Password set successfully!`n`nNetGUI will now start.", 'Success', 'OK', 'Information') | Out-Null
                 $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
                 $form.Close()
             } catch {
@@ -901,8 +1046,8 @@ function Show-StartupPasswordDialog {
         $lblLocked.Text = "ACCOUNT LOCKED`n`nToo many failed login attempts.`n`nRemaining lockout time: $remaining minutes`n`nPlease try again later."
         $lblLocked.Location = New-Object System.Drawing.Point(20, $y)
         $lblLocked.Size = New-Object System.Drawing.Size(450, 150)
-        $lblLocked.Font = New-Object System.Drawing.Font('Arial', 10, [System.Drawing.FontStyle]::Bold)
-        $lblLocked.ForeColor = [System.Drawing.Color]::Red
+        $lblLocked.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+        $lblLocked.Tag = 'Error'
         $form.Controls.Add($lblLocked)
         $y += 160
         $btnClose = New-Object System.Windows.Forms.Button
@@ -913,7 +1058,7 @@ function Show-StartupPasswordDialog {
         $form.Controls.Add($btnClose)
     } else {
         $lblPassword = New-Object System.Windows.Forms.Label
-        $lblPassword.Text = 'Enter your password to access OctoNav:'
+        $lblPassword.Text = 'Enter your password to access NetGUI:'
         $lblPassword.Location = New-Object System.Drawing.Point(20, $y)
         $lblPassword.Size = New-Object System.Drawing.Size(450, 20)
         $form.Controls.Add($lblPassword)
@@ -927,14 +1072,14 @@ function Show-StartupPasswordDialog {
         $lblStatus = New-Object System.Windows.Forms.Label
         $lblStatus.Location = New-Object System.Drawing.Point(20, $y)
         $lblStatus.Size = New-Object System.Drawing.Size(450, 20)
-        $lblStatus.ForeColor = [System.Drawing.Color]::Red
+        $lblStatus.Tag = 'Error'
         $form.Controls.Add($lblStatus)
         $y += 30
         $btnLogin = New-Object System.Windows.Forms.Button
         $btnLogin.Text = 'Login'
         $btnLogin.Location = New-Object System.Drawing.Point(150, $y)
         $btnLogin.Size = New-Object System.Drawing.Size(100, 35)
-        $btnLogin.BackColor = [System.Drawing.Color]::LightGreen
+        $btnLogin.Tag = 'Primary'
         $form.Controls.Add($btnLogin)
         $form.AcceptButton = $btnLogin
         $btnExit = New-Object System.Windows.Forms.Button
@@ -964,6 +1109,9 @@ function Show-StartupPasswordDialog {
         })
     }
 
+    # $y is the top of the button row: fit the window to it
+    $form.ClientSize = New-Object System.Drawing.Size(490, ($y + 55))
+    Set-NetGuiDialogStyle -Form $form
     $result = $form.ShowDialog()
     $form.Dispose()
     return ($result -eq [System.Windows.Forms.DialogResult]::OK)
@@ -1104,18 +1252,20 @@ function Get-DHCPCachePassword {
     $form.Controls.Add($textBox)
     $btnOK = New-Object System.Windows.Forms.Button
     $btnOK.Text = 'OK'
-    $btnOK.Location = New-Object System.Drawing.Point(220, 105)
-    $btnOK.Size = New-Object System.Drawing.Size(80, 30)
+    $btnOK.Tag = 'Primary'
+    $btnOK.Location = New-Object System.Drawing.Point(214, 105)
+    $btnOK.Size = New-Object System.Drawing.Size(84, 32)
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Controls.Add($btnOK)
     $form.AcceptButton = $btnOK
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(310, 105)
-    $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(306, 105)
+    $btnCancel.Size = New-Object System.Drawing.Size(84, 32)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
+    Set-NetGuiDialogStyle -Form $form
     $password = $null
     if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and -not [string]::IsNullOrWhiteSpace($textBox.Text)) {
         $password = ConvertTo-SecureString -String $textBox.Text -AsPlainText -Force
@@ -1204,7 +1354,7 @@ function Get-DhcpCacheSavePassword {
         $check = Test-DhcpCachePassword -Password $password
         if ($check -eq $true) { Set-SessionCachedPassword -Password $password; return $password }
         if ($check -eq $false) {
-            $answer = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNoCancel -Text (
+            $answer = Show-NetGuiMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNoCancel -Text (
                 "This password does not open your existing DHCP cache files.`n`n" +
                 "Yes = type your existing password again`n" +
                 "No = use this new password (a cache saved with the old password keeps it until that cache is refreshed)`n" +
@@ -1220,7 +1370,7 @@ function Get-DhcpCacheSavePassword {
         }
         Clear-SessionCachedPassword
         if (-not $confirm) { return $null }
-        Show-OctoMessage -Text 'The two passwords do not match. Please try again.' -Title 'DHCP Cache Password' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text 'The two passwords do not match. Please try again.' -Title 'DHCP Cache Password' -Icon Warning | Out-Null
     }
     return $null
 }
@@ -1254,7 +1404,7 @@ function Read-DhcpCache {
     if ((Test-Path -LiteralPath $jsonFile) -and -not (Test-Path -LiteralPath $datFile)) {
         try { $jsonContent = Get-Content -LiteralPath $jsonFile -Raw; $cache = $jsonContent | ConvertFrom-Json }
         catch { return $empty }
-        $answer = Show-OctoMessage -Title 'Encrypt Unencrypted Cache?' -Icon Warning -Buttons YesNo -Text (
+        $answer = Show-NetGuiMessage -Title 'Encrypt Unencrypted Cache?' -Icon Warning -Buttons YesNo -Text (
             "SECURITY WARNING: Unencrypted DHCP cache file detected!`n`nFile: $base.json`n`nThis file contains network information and is NOT encrypted.`n`n" +
             "Encrypt it now? (Recommended)`n`nThe unencrypted file is deleted after successful encryption.")
         if ("$answer" -eq 'Yes') {
@@ -1263,9 +1413,9 @@ function Read-DhcpCache {
                 try {
                     Write-DhcpCacheFile -File $datFile -PlainText $jsonContent -Password $password
                     Remove-Item -LiteralPath $jsonFile -Force
-                    Show-OctoMessage -Text "Cache encrypted successfully.`n`nYou will need this password to load the cache in the future." -Title 'Encryption Complete' | Out-Null
+                    Show-NetGuiMessage -Text "Cache encrypted successfully.`n`nYou will need this password to load the cache in the future." -Title 'Encryption Complete' | Out-Null
                 } catch {
-                    Show-OctoMessage -Text "Failed to encrypt cache file:`n`n$($_.Exception.Message)" -Title 'Encryption Failed' -Icon Error | Out-Null
+                    Show-NetGuiMessage -Text "Failed to encrypt cache file:`n`n$($_.Exception.Message)" -Title 'Encryption Failed' -Icon Error | Out-Null
                 }
             }
         }
@@ -1275,7 +1425,7 @@ function Read-DhcpCache {
     if (-not (Test-Path -LiteralPath $datFile)) { return $empty }
     try { $encrypted = Get-Content -LiteralPath $datFile -Raw }
     catch {
-        Show-OctoMessage -Text "The $label file could not be read:`n$($_.Exception.Message)" -Title 'DHCP Cache' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text "The $label file could not be read:`n$($_.Exception.Message)" -Title 'DHCP Cache' -Icon Warning | Out-Null
         return $empty
     }
     $session = Get-SessionCachedPassword -Action 'Load' -Hint $label
@@ -1287,10 +1437,10 @@ function Read-DhcpCache {
         $attempt++
         try { $plain = Unprotect-DHCPCache -EncryptedText $encrypted -Password $password; break } catch { }
         if ($attempt -ge 3) {
-            Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Text "The $label could not be opened after $attempt tries and is skipped for now.`n`nClick 'Refresh Cache' to rebuild it - it is then saved with your current password." | Out-Null
+            Show-NetGuiMessage -Title 'DHCP Cache Password' -Icon Warning -Text "The $label could not be opened after $attempt tries and is skipped for now.`n`nClick 'Refresh Cache' to rebuild it - it is then saved with your current password." | Out-Null
             return $empty
         }
-        $retry = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNo -Text (
+        $retry = Show-NetGuiMessage -Title 'DHCP Cache Password' -Icon Warning -Buttons YesNo -Text (
             "The $label could not be opened with this password.`n`n" +
             "It was probably saved with a different password - the password is asked again after 5 minutes, " +
             "so the servers and scopes caches can end up with different ones - or the password was mistyped.`n`n" +
@@ -1302,7 +1452,7 @@ function Read-DhcpCache {
 
     try { $cache = $plain | ConvertFrom-Json }
     catch {
-        Show-OctoMessage -Title 'DHCP Cache' -Icon Warning -Text "The $label was decrypted, but its content could not be read:`n$($_.Exception.Message)`n`nClick 'Refresh Cache' to rebuild it." | Out-Null
+        Show-NetGuiMessage -Title 'DHCP Cache' -Icon Warning -Text "The $label was decrypted, but its content could not be read:`n$($_.Exception.Message)`n`nClick 'Refresh Cache' to rebuild it." | Out-Null
         return $empty
     }
 
@@ -1311,12 +1461,12 @@ function Read-DhcpCache {
         Set-SessionCachedPassword -Password $password
     } else {
         # The session password already opened the other cache: keep one password for both
-        $answer = Show-OctoMessage -Title 'DHCP Cache Password' -Icon Question -Buttons YesNo -Text (
+        $answer = Show-NetGuiMessage -Title 'DHCP Cache Password' -Icon Question -Buttons YesNo -Text (
             "The $label uses a different password than your other DHCP cache.`n`n" +
             "Re-save it with the password you entered first, so one password opens both caches from now on?")
         if ("$answer" -eq 'Yes') {
             try { Write-DhcpCacheFile -File $datFile -PlainText $plain -Password $session }
-            catch { Show-OctoMessage -Title 'DHCP Cache' -Icon Warning -Text "Could not re-save the $($label):`n$($_.Exception.Message)" | Out-Null }
+            catch { Show-NetGuiMessage -Title 'DHCP Cache' -Icon Warning -Text "Could not re-save the $($label):`n$($_.Exception.Message)" | Out-Null }
         }
     }
     return @{ Items = @($cache.$Kind | Where-Object { $null -ne $_ }); LastUpdated = $cache.LastUpdated }
@@ -1331,7 +1481,7 @@ function Save-DhcpCache {
     $base = if ($Kind -eq 'Servers') { 'dhcp_servers_cache' } else { 'dhcp_scopes_cache' }
     $password = Get-DhcpCacheSavePassword -Hint "DHCP $($Kind.ToLower()) cache"
     if (-not $password) {
-        Show-OctoMessage -Title 'Cache Not Saved' -Icon Warning -Text "The DHCP $($Kind.ToLower()) cache was NOT saved because no password was provided.`n`nThe data is still loaded for this session." | Out-Null
+        Show-NetGuiMessage -Title 'Cache Not Saved' -Icon Warning -Text "The DHCP $($Kind.ToLower()) cache was NOT saved because no password was provided.`n`nThe data is still loaded for this session." | Out-Null
         return $false
     }
     $cache = [ordered]@{ LastUpdated = (Get-Date).ToString('o') }
@@ -1342,7 +1492,7 @@ function Save-DhcpCache {
         Write-DhcpCacheFile -File (Join-Path $script:DataDir "$base.dat") -PlainText $json -Password $password
         return $true
     } catch {
-        Show-OctoMessage -Title 'Encryption Failed' -Icon Error -Text "Failed to save the encrypted DHCP cache.`n`nError: $($_.Exception.Message)" | Out-Null
+        Show-NetGuiMessage -Title 'Encryption Failed' -Icon Error -Text "Failed to save the encrypted DHCP cache.`n`nError: $($_.Exception.Message)" | Out-Null
         return $false
     }
 }
@@ -1356,7 +1506,7 @@ function Save-DhcpCache {
 # Worker scripts are plain text with param($Item, $Shared) and must return ONE
 # object. $Shared is a synchronized hashtable (Shared.Stop = cancellation flag).
 
-function New-OctoRunspacePool {
+function New-NetGuiRunspacePool {
     <#
     .SYNOPSIS
         Opens a runspace pool; the named functions of this script are copied into it.
@@ -1382,7 +1532,7 @@ function New-OctoRunspacePool {
     return $pool
 }
 
-function Close-OctoRunspacePool {
+function Close-NetGuiRunspacePool {
     <#
     .SYNOPSIS
         Closes a pool without blocking the caller when work is still running.
@@ -1395,7 +1545,7 @@ function Close-OctoRunspacePool {
     } catch { }
 }
 
-function Start-OctoTask {
+function Start-NetGuiTask {
     param($Pool, [string]$Script, $Argument, $Shared)
     $ps = [powershell]::Create()
     $ps.RunspacePool = $Pool
@@ -1403,7 +1553,7 @@ function Start-OctoTask {
     return @{ PS = $ps; Handle = $ps.BeginInvoke(); Item = $Argument; Descriptor = $null; Index = -1 }
 }
 
-function Receive-OctoTask {
+function Receive-NetGuiTask {
     <#
     .SYNOPSIS
         Ends a finished task. Returns @{ Output = <last output object>; Error = <text or $null> }.
@@ -1423,12 +1573,12 @@ function Receive-OctoTask {
     }
 }
 
-function Stop-OctoTask {
+function Stop-NetGuiTask {
     param($Task)
     try { [void]$Task.PS.BeginStop($null, $null) } catch { }
 }
 
-function Invoke-OctoParallel {
+function Invoke-NetGuiParallel {
     <#
     .SYNOPSIS
         Runs a worker script for every item in parallel and waits (UI stays responsive).
@@ -1436,6 +1586,9 @@ function Invoke-OctoParallel {
         Results are returned index-aligned with Items: @{ Output; Error } each.
         Only 2x Throttle tasks are queued at a time, so thousands of items cost
         no more memory than a few dozen. Shared.Stop = $true cancels.
+    .PARAMETER MaxInFlight
+        At most this many items sent at once (default 2x Throttle); lets a
+        caller-owned pool run fewer requests at a time than it has runspaces.
     .OUTPUTS
         object[] (returned with the unary comma so a single result is not unrolled)
     #>
@@ -1448,6 +1601,7 @@ function Invoke-OctoParallel {
         [string[]]$FunctionNames = @(),
         [hashtable]$ExtraFunctions = @{},
         $Pool,
+        [int]$MaxInFlight = 0,
         [switch]$NoUi
     )
     if ($null -eq $Items) { $Items = @() }
@@ -1457,14 +1611,15 @@ function Invoke-OctoParallel {
 
     # A caller-owned pool (-Pool) is reused and left open
     $ownPool = ($null -eq $Pool)
-    $pool = if ($ownPool) { New-OctoRunspacePool -MaxRunspaces ([Math]::Min($Throttle, $Items.Count)) -FunctionNames $FunctionNames -ExtraFunctions $ExtraFunctions } else { $Pool }
+    $pool = if ($ownPool) { New-NetGuiRunspacePool -MaxRunspaces ([Math]::Min($Throttle, $Items.Count)) -FunctionNames $FunctionNames -ExtraFunctions $ExtraFunctions } else { $Pool }
     $pending = [System.Collections.Generic.List[object]]::new()
     $next = 0; $done = 0; $maxQueued = [Math]::Max(2, $Throttle * 2)
+    if ($MaxInFlight -gt 0) { $maxQueued = $MaxInFlight }
     $stopped = $false
     try {
         while ($done -lt $Items.Count) {
             while (-not $stopped -and $next -lt $Items.Count -and $pending.Count -lt $maxQueued) {
-                $task = Start-OctoTask -Pool $pool -Script $Script -Argument $Items[$next] -Shared $Shared
+                $task = Start-NetGuiTask -Pool $pool -Script $Script -Argument $Items[$next] -Shared $Shared
                 $task.Index = $next
                 $pending.Add($task)
                 $next++
@@ -1475,7 +1630,7 @@ function Invoke-OctoParallel {
                 $task = $pending[$i]
                 if ($task.Handle.IsCompleted) {
                     $pending.RemoveAt($i)
-                    $result = Receive-OctoTask -Task $task
+                    $result = Receive-NetGuiTask -Task $task
                     $results[$task.Index] = $result
                     $done++
                     $progressed = $true
@@ -1485,7 +1640,7 @@ function Invoke-OctoParallel {
 
             if ($Shared.Stop -and -not $stopped) {
                 $stopped = $true
-                foreach ($task in $pending) { Stop-OctoTask -Task $task }
+                foreach ($task in $pending) { Stop-NetGuiTask -Task $task }
                 $pending.Clear()
                 break
             }
@@ -1495,22 +1650,22 @@ function Invoke-OctoParallel {
             }
         }
     } finally {
-        if ($ownPool) { Close-OctoRunspacePool -Pool $pool -Wait:(-not $stopped) }
+        if ($ownPool) { Close-NetGuiRunspacePool -Pool $pool -Wait:(-not $stopped) }
     }
     return ,$results
 }
 
 # --- Asynchronous jobs (WinForms timer polls the pool; the click handler returns at once)
 
-function Start-OctoJob {
+function Start-NetGuiJob {
     <#
     .SYNOPSIS
         Creates a timer-driven job around a runspace pool.
     .PARAMETER OnTaskComplete
         param($Job, $Task, $Result) - runs on the UI thread for each finished task;
-        may queue follow-up work with Add-OctoJobTask.
+        may queue follow-up work with Add-NetGuiJobTask.
     .PARAMETER OnJobComplete
-        param($Job) - runs once when nothing is pending (or after Stop-OctoJob).
+        param($Job) - runs once when nothing is pending (or after Stop-NetGuiJob).
     #>
     param(
         [Parameter(Mandatory = $true)]$Pool,
@@ -1528,21 +1683,21 @@ function Start-OctoJob {
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = $IntervalMs
     $timer.Tag = $job
-    $timer.Add_Tick({ Invoke-OctoJobTick -Job $this.Tag })
+    $timer.Add_Tick({ Invoke-NetGuiJobTick -Job $this.Tag })
     $job.Timer = $timer
     return $job
 }
 
-function Add-OctoJobTask {
+function Add-NetGuiJobTask {
     param($Job, [string]$Script, $Argument, $Descriptor)
     if ($Job.Completed -or $Job.Stopped) { return }
-    $task = Start-OctoTask -Pool $Job.Pool -Script $Script -Argument $Argument -Shared $Job.Shared
+    $task = Start-NetGuiTask -Pool $Job.Pool -Script $Script -Argument $Argument -Shared $Job.Shared
     $task.Descriptor = $Descriptor
     $Job.Pending.Add($task)
     if ($Job.Timer -and -not $Job.Timer.Enabled) { $Job.Timer.Start() }
 }
 
-function Invoke-OctoJobTick {
+function Invoke-NetGuiJobTick {
     param($Job)
     # A handler that opens a dialog keeps the message loop (and this timer) running:
     # skip nested ticks instead of processing the same job twice
@@ -1554,24 +1709,24 @@ function Invoke-OctoJobTick {
             $task = $Job.Pending[$i]
             if (-not $task.Handle.IsCompleted) { continue }
             $Job.Pending.RemoveAt($i)
-            $result = Receive-OctoTask -Task $task
+            $result = Receive-NetGuiTask -Task $task
             try { & $Job.OnTaskComplete $Job $task $result } catch { Write-Warning "Task handler error: $($_.Exception.Message)" }
             if ($Job.Completed) { return }
         }
     } finally { $Job.InTick = $false }
-    if ($Job.Pending.Count -eq 0) { Complete-OctoJob -Job $Job }
+    if ($Job.Pending.Count -eq 0) { Complete-NetGuiJob -Job $Job }
 }
 
-function Complete-OctoJob {
+function Complete-NetGuiJob {
     param($Job)
     if ($Job.Completed) { return }
     $Job.Completed = $true
     if ($Job.Timer) { try { $Job.Timer.Stop(); $Job.Timer.Dispose() } catch { } }
-    Close-OctoRunspacePool -Pool $Job.Pool -Wait:(-not $Job.Stopped)
+    Close-NetGuiRunspacePool -Pool $Job.Pool -Wait:(-not $Job.Stopped)
     try { & $Job.OnJobComplete $Job } catch { Write-Warning "Job completion error: $($_.Exception.Message)" }
 }
 
-function Stop-OctoJob {
+function Stop-NetGuiJob {
     <#
     .SYNOPSIS
         Cancels outstanding work and completes the job immediately with what is done.
@@ -1580,9 +1735,9 @@ function Stop-OctoJob {
     if ($null -eq $Job -or $Job.Completed) { return }
     $Job.Stopped = $true
     $Job.Shared.Stop = $true
-    foreach ($task in $Job.Pending) { Stop-OctoTask -Task $task }
+    foreach ($task in $Job.Pending) { Stop-NetGuiTask -Task $task }
     $Job.Pending.Clear()
-    Complete-OctoJob -Job $Job
+    Complete-NetGuiJob -Job $Job
 }
 # ============================================
 # DHCP MATH - REDUNDANCY-AWARE SCOPE ANALYSIS
@@ -1598,7 +1753,7 @@ function Stop-OctoJob {
 # The failover relationship reported by Get-DhcpServerv4Failover decides which
 # case applies - the number of servers holding a ScopeId cannot tell them apart.
 
-function ConvertTo-OctoInt64 {
+function ConvertTo-NetGuiInt64 {
     param($Value)
     if ($null -eq $Value) { return [long]0 }
     try { return [long]$Value } catch { return [long]0 }
@@ -1667,18 +1822,29 @@ function Merge-DhcpServerList {
     .DESCRIPTION
         Querying the same server twice would count its standalone scopes twice,
         so duplicates are removed:
-          - names are compared case-insensitively
-          - an entry whose IP matches an earlier entry is the same server
-            (Get-DhcpServerInDC lists multi-homed servers once per IP)
+          - names are compared case-insensitively (Get-DhcpServerInDC lists a
+            multi-homed server once per IP address)
+          - an entry whose IP matches an earlier entry is the same server, unless
+            DNS says otherwise: a name that no longer resolves is a stale Active
+            Directory entry (the name that does resolve is kept), and two names
+            that resolve to different addresses are different servers (both kept)
           - a bare host name ("dhcp01") is dropped when exactly one FQDN with that
             first label ("dhcp01.contoso.com") is also present
     .PARAMETER Entries
         Strings, or objects/hashtables with Name and optional IP.
+    .PARAMETER Resolved
+        Optional: name -> addresses the name resolves to now (empty = does not resolve).
+    .PARAMETER Notes
+        Optional list that receives one line for every entry that is not queried on its own.
     #>
-    param([AllowEmptyCollection()][object[]]$Entries)
+    param(
+        [AllowEmptyCollection()][object[]]$Entries,
+        [hashtable]$Resolved,
+        [AllowNull()][System.Collections.Generic.List[string]]$Notes
+    )
 
     $seenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $seenIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ipOwner = @{}
     $kept = [System.Collections.Generic.List[object]]::new()
 
     foreach ($entry in $Entries) {
@@ -1691,17 +1857,49 @@ function Merge-DhcpServerList {
         $parsed = $null
         $nameIsIp = [System.Net.IPAddress]::TryParse($name, [ref]$parsed)
         if ($nameIsIp -and [string]::IsNullOrWhiteSpace($ipText)) { $ipText = $name }
+        $ip = if ([string]::IsNullOrWhiteSpace($ipText)) { '' } else { $ipText.Trim() }
+        $item = [pscustomobject]@{ Name = $name; IP = $ip; IsFqdn = ((-not $nameIsIp) -and $name.IndexOf('.') -gt 0) }
 
-        if (-not $seenNames.Add($name)) { continue }
-        if (-not [string]::IsNullOrWhiteSpace($ipText) -and -not $seenIPs.Add($ipText.Trim())) { continue }
-        $kept.Add([pscustomobject]@{ Name = $name; IsFqdn = ((-not $nameIsIp) -and $name.IndexOf('.') -gt 0) })
+        if (-not $seenNames.Add($name)) {
+            if ($null -ne $Notes) { $Notes.Add("$name$(if ($ip) { " ($ip)" }): the same server listed again (one entry per IP address)") }
+            continue
+        }
+        if ($ip -and $ipOwner.ContainsKey($ip)) {
+            $ownerIndex = $ipOwner[$ip]
+            $owner = $kept[$ownerIndex]
+            $ownerAddr = $null; $newAddr = $null
+            if ($Resolved -and $Resolved.ContainsKey($owner.Name) -and $Resolved.ContainsKey($name)) {
+                $ownerAddr = @($Resolved[$owner.Name] | Where-Object { $_ })
+                $newAddr = @($Resolved[$name] | Where-Object { $_ })
+            }
+            if ($null -ne $ownerAddr -and $ownerAddr.Count -eq 0 -and $newAddr.Count -gt 0) {
+                # the earlier entry is stale: the live server now has this address
+                $kept[$ownerIndex] = $item
+                if ($null -ne $Notes) { $Notes.Add("$($owner.Name) ($ip): stale Active Directory entry - the name no longer resolves; $name has this address now") }
+                continue
+            }
+            if ($null -ne $newAddr -and $newAddr.Count -gt 0 -and $ownerAddr.Count -gt 0 -and
+                @($newAddr | Where-Object { $ownerAddr -contains $_ }).Count -eq 0) {
+                # same address in Active Directory, different machines in DNS: query both
+                if ($null -ne $Notes) { $Notes.Add("$name and $($owner.Name) share $ip in Active Directory but resolve to different addresses - both are queried") }
+                $kept.Add($item)
+                continue
+            }
+            if ($null -ne $Notes) {
+                if ($null -ne $newAddr -and $newAddr.Count -eq 0) { $Notes.Add("$name ($ip): stale Active Directory entry - the name does not resolve; $($owner.Name) has this address") }
+                else { $Notes.Add("$name ($ip): same IP address as $($owner.Name) - treated as the same server") }
+            }
+            continue
+        }
+        $kept.Add($item)
+        if ($ip) { $ipOwner[$ip] = $kept.Count - 1 }
     }
 
-    $fqdnLabelCount = @{}
+    $fqdnByLabel = @{}
     foreach ($k in $kept) {
         if ($k.IsFqdn) {
             $label = Get-DhcpServerShortName -Name $k.Name
-            if ($fqdnLabelCount.ContainsKey($label)) { $fqdnLabelCount[$label]++ } else { $fqdnLabelCount[$label] = 1 }
+            if ($fqdnByLabel.ContainsKey($label)) { $fqdnByLabel[$label] = '' } else { $fqdnByLabel[$label] = $k.Name }
         }
     }
 
@@ -1709,14 +1907,17 @@ function Merge-DhcpServerList {
     foreach ($k in $kept) {
         if (-not $k.IsFqdn -and $k.Name.IndexOf('.') -lt 0) {
             $label = $k.Name.ToLowerInvariant()
-            if ($fqdnLabelCount.ContainsKey($label) -and $fqdnLabelCount[$label] -eq 1) { continue }
+            if ($fqdnByLabel.ContainsKey($label) -and $fqdnByLabel[$label]) {
+                if ($null -ne $Notes) { $Notes.Add("$($k.Name): short name of $($fqdnByLabel[$label])") }
+                continue
+            }
         }
         $result.Add($k.Name)
     }
     return $result.ToArray()
 }
 
-function Join-OctoDistinct {
+function Join-NetGuiDistinct {
     <#
     .SYNOPSIS
         Joins the distinct non-empty values (case-insensitive, first-seen order).
@@ -1787,6 +1988,7 @@ function Get-DhcpScopeAnalysis {
 
     # Distinct-value collectors, allocated once and cleared per scope
     $distinctFields = @('ScopeState', 'FailoverRelationship', 'FailoverPartner', 'FailoverState', 'Option60', 'Option43', 'AllOptions', 'DNSServers')
+    $optionFields = @('DNSServers', 'Option60', 'Option43', 'AllOptions')
     $collect = @{}
     foreach ($name in $distinctFields) {
         $collect[$name] = @{ List = [System.Collections.Generic.List[string]]::new(); Seen = [System.Collections.Generic.HashSet[string]]::new($ignoreCase) }
@@ -1800,6 +2002,7 @@ function Get-DhcpScopeAnalysis {
     $clusters = [System.Collections.Generic.List[object]]::new()
     $unknown = [System.Collections.Generic.List[object]]::new()
     $scopeNames = [System.Collections.Generic.List[string]]::new()
+    $optionFailedServers = [System.Collections.Generic.List[string]]::new()
     $noStatsRows = 0
 
     $groups = [System.Collections.Generic.List[object]]::new()
@@ -1813,7 +2016,7 @@ function Get-DhcpScopeAnalysis {
         $all = $byScope[$scopeId]
         foreach ($c in $collect.Values) { $c.List.Clear(); $c.Seen.Clear() }
         $members.Clear(); $active.Clear(); $inactiveServers.Clear(); $serverSeen.Clear()
-        $servers.Clear(); $notes.Clear(); $clusters.Clear(); $unknown.Clear()
+        $servers.Clear(); $notes.Clear(); $clusters.Clear(); $unknown.Clear(); $optionFailedServers.Clear()
         $desc = ''
 
         # --- 1. one row per server; own numbers; distinct display values
@@ -1839,7 +2042,11 @@ function Get-DhcpScopeAnalysis {
             if ($isInactive) { $inactiveServers.Add($server) } else { $active.Add($m) }
             if (-not $desc -and -not $isInactive -and -not [string]::IsNullOrWhiteSpace([string]$m.Description)) { $desc = [string]$m.Description }
 
+            $optionsFailed = [bool]$m.OptionsFailed
+            if ($optionsFailed) { $optionFailedServers.Add($server) }
             foreach ($name in $distinctFields) {
+                # A server whose options could not be read adds none (the partner's values stand)
+                if ($optionsFailed -and $optionFields -contains $name) { continue }
                 $v = $m.$name
                 if ($null -eq $v) { continue }
                 $col = $collect[$name]
@@ -1852,6 +2059,18 @@ function Get-DhcpScopeAnalysis {
         }
         if (-not $desc) {
             foreach ($m in $members) { if (-not [string]::IsNullOrWhiteSpace([string]$m.Description)) { $desc = [string]$m.Description; break } }
+        }
+        if ($optionFailedServers.Count -gt 0) {
+            if ($optionFailedServers.Count -lt $members.Count) {
+                $notes.Add("DHCP options could not be read from $($optionFailedServers -join ', ') - the option values shown come from the other server(s)")
+            } else {
+                # No server answered: the grouped row says '(lookup failed)' too
+                foreach ($name in $optionFields) {
+                    $v = $members[0].$name
+                    if ($null -ne $v) { $collect[$name].List.Add([string]$v) }
+                }
+                $notes.Add("DHCP options could not be read from $($optionFailedServers -join ', ')")
+            }
         }
 
         # --- 2. active copies only (unless every copy is inactive)
@@ -2115,6 +2334,7 @@ function New-DhcpScopeRow {
         Option60              = $null
         Option43              = $null
         AllOptions            = $null
+        OptionsFailed         = $false
         TotalAddresses        = $null
         PercentageInUse       = $null
         Redundancy            = $null
@@ -2167,7 +2387,23 @@ try {
         if ($null -eq $s) { continue }
         $list.Add([pscustomobject]@{ Name = [string]$s.DnsName; IP = [string]$s.IPAddress })
     }
-    [pscustomobject]@{ Success = $true; Servers = $list.ToArray(); Message = '' }
+    # Different names registered with the same IP: look the names up now, so a stale
+    # entry (server gone, address reused) is not taken for the live server
+    $namesByIp = @{}
+    foreach ($e in $list) {
+        if (-not $e.IP -or -not $e.Name) { continue }
+        if (-not $namesByIp.ContainsKey($e.IP)) { $namesByIp[$e.IP] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase) }
+        [void]$namesByIp[$e.IP].Add($e.Name)
+    }
+    $resolved = @{}
+    foreach ($ip in @($namesByIp.Keys)) {
+        if ($namesByIp[$ip].Count -lt 2) { continue }
+        foreach ($n in $namesByIp[$ip]) {
+            try { $resolved[$n] = @([System.Net.Dns]::GetHostAddresses($n) | ForEach-Object { $_.IPAddressToString }) }
+            catch { $resolved[$n] = @() }
+        }
+    }
+    [pscustomobject]@{ Success = $true; Servers = $list.ToArray(); Resolved = $resolved; Message = '' }
 } catch {
     [pscustomobject]@{ Success = $false; Servers = @(); Message = $_.Exception.Message }
 }
@@ -2189,6 +2425,7 @@ try {
     if ($Item.Retry) {
         $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
         while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        $sw.Restart()
     }
     if ($Shared.Stop) {
         $out.Cancelled = $true
@@ -2300,6 +2537,7 @@ try {
                     Option60              = $null
                     Option43              = $null
                     AllOptions            = $null
+                    OptionsFailed         = $false
                     TotalAddresses        = $null
                     PercentageInUse       = $null
                     Redundancy            = $null
@@ -2325,14 +2563,30 @@ param($Item, $Shared)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $scopeOptions = @{}
-$failed = 0
+$failures = @{}
 $message = ''
 try {
+    $failingSince = $null
+    if ($Item.Retry) {
+        # Second try (the scopes that failed): give the server a moment first. It
+        # runs as one batch, so the server is asked one scope at a time.
+        $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
+        while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        if (-not $Shared.Stop -and -not (Test-DhcpServerReachable -ComputerName ([string]$Item.Server))) {
+            throw 'Unreachable (no ping reply and RPC port 135 closed)'
+        }
+    }
     try { $null = Get-Command -Name Get-DhcpServerv4OptionValue -ErrorAction Stop } catch { Import-Module DhcpServer -ErrorAction Stop }
     # -Brief skips the option-name lookup (Microsoft's recommended fast path)
     $useBrief = (Get-Command -Name Get-DhcpServerv4OptionValue).Parameters.ContainsKey('Brief')
     foreach ($id in $Item.ScopeIds) {
         if ($Shared.Stop) { break }
+        if ($null -ne $failingSince -and ([DateTime]::UtcNow - $failingSince).TotalMilliseconds -ge [int]$Item.GiveUpMs) {
+            # Every lookup has failed for a while: do not wait out each remaining one
+            $failures[[string]$id] = 'Skipped - every lookup on this server had failed for {0:N0} s' -f ([int]$Item.GiveUpMs / 1000)
+            continue
+        }
+        $callStart = [DateTime]::UtcNow
         $entry = @{ DNSServers = $null; Option60 = $null; Option43 = $null; AllOptions = $null }
         try {
             $splat = @{ ComputerName = [string]$Item.Server; ScopeId = [string]$id; ErrorAction = 'Stop' }
@@ -2352,15 +2606,23 @@ try {
                 $all.Add(('{0}:{1}' -f $oid, ($vals -join ';')))
             }
             if ($all.Count -gt 0) { $entry.AllOptions = $all -join ' | ' }
+            $scopeOptions[[string]$id] = $entry
+            $failingSince = $null
         } catch {
-            $failed++
+            # A failed lookup is reported as failed, never as "no options set"
+            $failures[[string]$id] = $_.Exception.Message
+            if ($Item.Retry -and $null -eq $failingSince) { $failingSince = $callStart }
         }
-        $scopeOptions[[string]$id] = $entry
     }
 } catch {
+    # The whole batch failed (e.g. the module did not load): every scope not answered failed
     $message = $_.Exception.Message
+    foreach ($id in $Item.ScopeIds) {
+        $key = [string]$id
+        if (-not $scopeOptions.ContainsKey($key) -and -not $failures.ContainsKey($key)) { $failures[$key] = $message }
+    }
 }
-[pscustomobject]@{ Server = [string]$Item.Server; ScopeOptions = $scopeOptions; Failed = $failed; Message = $message }
+[pscustomobject]@{ Server = [string]$Item.Server; ScopeOptions = $scopeOptions; Failures = $failures; Cancelled = [bool]$Shared.Stop; Message = $message }
 '@
 
 $script:DhcpWorkerScripts.ScopeList = @'
@@ -2370,6 +2632,11 @@ $ProgressPreference = 'SilentlyContinue'
 $server = [string]$Item.Server
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 try {
+    if ($Item.Retry) {
+        $until = [DateTime]::UtcNow.AddMilliseconds([int]$Item.RetryDelayMs)
+        while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stop) { Start-Sleep -Milliseconds 100 }
+        $sw.Restart()
+    }
     if ($Shared.Stop) { return [pscustomobject]@{ Server = $server; Success = $false; Scopes = @(); Message = 'Cancelled'; ElapsedMs = 0 } }
     if (-not (Test-DhcpServerReachable -ComputerName $server)) {
         return [pscustomobject]@{ Server = $server; Success = $false; Scopes = @(); Message = 'Unreachable (no ping reply and RPC port 135 closed)'; ElapsedMs = [int]$sw.ElapsedMilliseconds }
@@ -2409,6 +2676,8 @@ function New-DhcpCollectionState {
     if (-not $Request.OptionBatchSize) { $Request.OptionBatchSize = 25 }
     if (-not $Request.Throttle) { $Request.Throttle = 20 }
     if ($null -eq $Request.RetryDelayMs) { $Request.RetryDelayMs = 3000 }
+    # Second try of option lookups: a server failing every lookup for this long is skipped
+    if ($null -eq $Request.RetryGiveUpMs) { $Request.RetryGiveUpMs = 60000 }
     return @{
         Request           = $Request
         Rows              = [System.Collections.Generic.List[object]]::new()
@@ -2423,7 +2692,12 @@ function New-DhcpCollectionState {
         OptionBatchesDone = 0
         OptionScopes      = 0
         OptionScopesDone  = 0
-        OptionFailures    = 0
+        OptionPending     = @{}   # server -> @{ Batches = first-try batches still running; Failed = scope ID -> error }
+        OptionRetries     = 0     # scope lookups asked a second time
+        OptionRetriesDone = 0
+        OptionRecovered   = 0     # ... that succeeded on it
+        OptionFailures    = 0     # scope lookups that failed twice
+        OptionFailed      = [System.Collections.Generic.List[object]]::new()
         Log               = [System.Collections.Generic.List[object]]::new()
         Error             = $null
         Stopwatch         = [System.Diagnostics.Stopwatch]::StartNew()
@@ -2477,12 +2751,13 @@ function Receive-DhcpTaskResult {
     switch ($Descriptor.Kind) {
         'Discover' {
             if ($out -and $out.Success) {
-                $names = @(Merge-DhcpServerList -Entries @($out.Servers))
+                $mergeNotes = [System.Collections.Generic.List[string]]::new()
+                $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $mergeNotes)
                 if ($names.Count -eq 0) {
                     $State.Error = 'No DHCP servers are registered in Active Directory.'
                     Add-DhcpLog $State 'Error' $State.Error
                 } else {
-                    Add-DhcpLog $State 'Success' "Found $($names.Count) DHCP server(s) in Active Directory"
+                    foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $mergeNotes)) { $State.Log.Add($line) }
                     foreach ($t in @(New-DhcpServerTasks -State $State -Servers $names)) { $next.Add($t) }
                 }
             } else {
@@ -2538,20 +2813,25 @@ function Receive-DhcpTaskResult {
                 $message = $out.Message
 
                 if ((Test-DhcpOptionsRequested $req) -and $scopeCount -gt 0) {
+                    $batchCount = 0
+                    $order = [System.Collections.Generic.List[string]]::new()
                     $batch = [System.Collections.Generic.List[string]]::new()
                     foreach ($row in $rows) {
+                        $order.Add([string]$row.ScopeId)
                         $batch.Add([string]$row.ScopeId)
                         if ($batch.Count -ge $req.OptionBatchSize) {
                             $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $batch.ToArray() } })
-                            $State.OptionBatches++
+                            $batchCount++
                             $batch.Clear()
                         }
                     }
                     if ($batch.Count -gt 0) {
                         $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $batch.ToArray() } })
-                        $State.OptionBatches++
+                        $batchCount++
                     }
+                    $State.OptionBatches += $batchCount
                     $State.OptionScopes += $scopeCount
+                    $State.OptionPending[$server] = @{ Batches = $batchCount; Order = $order.ToArray(); Failed = @{} }
                 }
             }
             if ($status -ne 'OK') {
@@ -2565,26 +2845,89 @@ function Receive-DhcpTaskResult {
         'Options' {
             $State.OptionBatchesDone++
             $server = [string]$Descriptor.Item.Server
-            $count = @($Descriptor.Item.ScopeIds).Count
-            $State.OptionScopesDone += $count
+            $isRetry = [bool]$Descriptor.Item.Retry
+            $ids = @($Descriptor.Item.ScopeIds)
+            $answers = @{}
+            $failures = @{}
             if ($null -eq $out) {
-                $State.OptionFailures += $count
+                # The batch itself failed: none of its scopes were read
+                $reason = if ($Result.Error) { $Result.Error } else { 'No result returned' }
+                foreach ($id in $ids) { $failures[[string]$id] = $reason }
             } else {
-                $State.OptionFailures += [int]$out.Failed
-                foreach ($id in @($out.ScopeOptions.Keys)) {
-                    $row = $null
-                    if ($State.RowIndex.TryGetValue($server + '|' + $id, [ref]$row)) {
-                        $v = $out.ScopeOptions[$id]
-                        if ($req.IncludeDNS) { $row.DNSServers = $v.DNSServers }
-                        if ($req.IncludeOption60) { $row.Option60 = $v.Option60 }
-                        if ($req.IncludeOption43) { $row.Option43 = $v.Option43 }
-                        if ($req.ShowAllOptions) { $row.AllOptions = $v.AllOptions }
-                    }
+                if ($out.ScopeOptions) { $answers = $out.ScopeOptions }
+                if ($out.Failures) { $failures = $out.Failures }
+            }
+            foreach ($id in @($answers.Keys)) {
+                $row = $null
+                if ($State.RowIndex.TryGetValue($server + '|' + $id, [ref]$row)) {
+                    $v = $answers[$id]
+                    if ($req.IncludeDNS) { $row.DNSServers = $v.DNSServers }
+                    if ($req.IncludeOption60) { $row.Option60 = $v.Option60 }
+                    if ($req.IncludeOption43) { $row.Option43 = $v.Option43 }
+                    if ($req.ShowAllOptions) { $row.AllOptions = $v.AllOptions }
                 }
+            }
+            # Failed scopes in the order they were asked for
+            $failedIds = [System.Collections.Generic.List[string]]::new()
+            foreach ($id in $ids) { if ($failures.ContainsKey([string]$id)) { $failedIds.Add([string]$id) } }
+
+            if ($isRetry) {
+                $State.OptionRetriesDone += $ids.Count
+                $State.OptionRecovered += $answers.Count
+                if ($failedIds.Count -gt 0) {
+                    foreach ($id in $failedIds) { Set-DhcpOptionsFailed -State $State -Server $server -ScopeId $id -Message ([string]$failures[$id]) }
+                    $shown = @($failedIds | Select-Object -First 5) -join ', '
+                    if ($failedIds.Count -gt 5) { $shown += " and $($failedIds.Count - 5) more" }
+                    Add-DhcpLog $State 'Error' ('{0} - options still unreadable on the second try for {1} scope(s): {2} ({3})' -f $server, $failedIds.Count, $shown, $failures[$failedIds[0]])
+                }
+                return $next.ToArray()
+            }
+
+            # First try: failures wait until every batch of this server is back, then
+            # get ONE second try together (one scope at a time, after a pause) - the
+            # server is no longer busy with the parallel first round by then
+            $State.OptionScopesDone += $ids.Count
+            $pending = $State.OptionPending[$server]
+            if ($null -eq $pending) {
+                $pending = @{ Batches = 1; Order = [string[]]$ids; Failed = @{} }
+                $State.OptionPending[$server] = $pending
+            }
+            foreach ($id in $failedIds) { $pending.Failed[$id] = [string]$failures[$id] }
+            $pending.Batches--
+            if ($pending.Batches -le 0 -and $pending.Failed.Count -gt 0) {
+                $retryIds = [string[]]@(foreach ($id in $pending.Order) { if ($pending.Failed.ContainsKey($id)) { $id } })
+                $firstReason = $pending.Failed[$retryIds[0]]
+                if ($null -ne $out -and $out.Cancelled) {
+                    foreach ($id in $retryIds) { Set-DhcpOptionsFailed -State $State -Server $server -ScopeId $id -Message $pending.Failed[$id] }
+                } else {
+                    $next.Add(@{ Kind = 'Options'; Item = @{ Server = $server; ScopeIds = $retryIds; Retry = 1; RetryDelayMs = $req.RetryDelayMs; GiveUpMs = $req.RetryGiveUpMs } })
+                    $State.OptionBatches++
+                    $State.OptionRetries += $retryIds.Count
+                    Add-DhcpLog $State 'Warning' ('{0} - options could not be read for {1} scope(s) ({2}) - trying them again, one at a time' -f $server, $retryIds.Count, $firstReason)
+                }
+                $pending.Failed.Clear()
             }
         }
     }
     return $next.ToArray()
+}
+
+function Set-DhcpOptionsFailed {
+    # Marks a scope whose options could not be read (after the second try): its
+    # option columns say so instead of looking like "no option set"
+    param($State, [string]$Server, [string]$ScopeId, [string]$Message)
+    $req = $State.Request
+    $row = $null
+    if ($State.RowIndex.TryGetValue($Server + '|' + $ScopeId, [ref]$row)) {
+        $row.OptionsFailed = $true
+        $marker = '(lookup failed)'
+        if ($req.IncludeDNS) { $row.DNSServers = $marker }
+        if ($req.IncludeOption60) { $row.Option60 = $marker }
+        if ($req.IncludeOption43) { $row.Option43 = $marker }
+        if ($req.ShowAllOptions) { $row.AllOptions = $marker }
+    }
+    $State.OptionFailures++
+    $State.OptionFailed.Add([pscustomobject]@{ Server = $Server; ScopeId = $ScopeId; Message = $Message })
 }
 
 function Get-DhcpSummaryLines {
@@ -2607,11 +2950,29 @@ function Get-DhcpSummaryLines {
             $more = if ($failedServers.Count -gt 10) { " and $($failedServers.Count - 10) more" } else { '' }
             $lines.Add(@{ Color = 'Error'; Message = ('{0} server(s) could not be read: {1}{2} - scopes that only they serve are missing (failover partners still report theirs)' -f $failedServers.Count, ($names -join ', '), $more) })
         }
-        if ($State.OptionScopes -gt 0 -and $State.OptionFailures -gt 0) {
-            $lines.Add(@{ Color = 'Warning'; Message = ('Options: {0} of {1} scope lookups failed' -f $State.OptionFailures, $State.OptionScopes) })
+        if ($State.OptionRetries -gt 0) {
+            $lines.Add(@{ Color = 'Info'; Message = ('Options: {0} scope lookup(s) needed a second try - {1} succeeded on it' -f $State.OptionRetries, $State.OptionRecovered) })
+        }
+        if ($State.OptionFailures -gt 0) {
+            $lines.Add(@{ Color = 'Warning'; Message = ("Options: {0} of {1} scope lookup(s) failed twice - their option columns say '(lookup failed)':" -f $State.OptionFailures, $State.OptionScopes) })
+            foreach ($f in @($State.OptionFailed | Select-Object -First 10)) {
+                $lines.Add(@{ Color = 'Warning'; Message = ('  {0,-15} {1}: {2}' -f $f.ScopeId, $f.Server, $f.Message) })
+            }
+            if ($State.OptionFailed.Count -gt 10) { $lines.Add(@{ Color = 'Warning'; Message = ('  ... and {0} more' -f ($State.OptionFailed.Count - 10)) }) }
         }
     }
-    $lines.Add(@{ Color = 'Info'; Message = ('Unique scopes: {0} (active {1}, inactive {2})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes) })
+    $unique = 'Unique scopes: {0:N0} (active {1:N0}, inactive {2:N0})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes
+    if ($s.ServerRows -gt $s.UniqueScopes) {
+        $unique += (' from {0:N0} scope rows - {1:N0} row(s) are the same scope on another server (failover partner or split scope) and count once' -f $s.ServerRows, ($s.ServerRows - $s.UniqueScopes))
+    }
+    $lines.Add(@{ Color = 'Info'; Message = $unique })
+    if ($State) {
+        # (assigned first: the function returns its list of groups as one array)
+        $identical = Find-DhcpIdenticalServers -Rows $State.Rows.ToArray()
+        foreach ($twins in $identical) {
+            $lines.Add(@{ Color = 'Warning'; Message = ('{0} returned identical scopes (same IDs, names, ranges and pool sizes) without a failover relationship - probably one server listed twice in Active Directory under different names, so its scopes are counted twice' -f (@($twins) -join ' and ')) })
+        }
+    }
     $lines.Add(@{ Color = 'Info'; Message = ('Redundancy: failover {0} (degraded {1}) | single server {2} | split {3} | mixed {4} | unknown {5}' -f $s.FailoverScopes, $s.DegradedFailover, $s.SingleServer, $s.SplitScopes, $s.MixedScopes, $s.UnknownScopes) })
     if ($s.NoStatsRows -gt 0) {
         $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) returned no statistics, even when asked one by one - listed with 0 / 0 (see Notes)' -f $s.NoStatsRows) })
@@ -2632,6 +2993,70 @@ function Get-DhcpSummaryLines {
         }
     }
     return $lines.ToArray()
+}
+
+function Get-DhcpServerListLines {
+    # Log lines for "N Active Directory entries -> M servers", with every skipped entry
+    param([int]$EntryCount, [int]$ServerCount, [AllowNull()][System.Collections.Generic.List[string]]$Notes)
+    $lines = [System.Collections.Generic.List[object]]::new()
+    $lines.Add(@{ Color = 'Success'; Message = ('Active Directory lists {0} DHCP server entr{1} - {2} server(s) to query' -f $EntryCount, $(if ($EntryCount -eq 1) { 'y' } else { 'ies' }), $ServerCount) })
+    if ($Notes) {
+        foreach ($n in $Notes) {
+            $color = if ($n -like '*stale*' -or $n -like '*both are queried*') { 'Warning' } else { 'Info' }
+            $lines.Add(@{ Color = $color; Message = "  $n" })
+        }
+    }
+    return $lines.ToArray()
+}
+
+function Find-DhcpIdenticalServers {
+    <#
+    .SYNOPSIS
+        Groups of servers that returned exactly the same scopes (IDs, names, ranges,
+        states and pool sizes) without a failover relationship between them -
+        usually one server listed twice in Active Directory under two names.
+    .DESCRIPTION
+        Pool size (free + in use) is part of the comparison, so the two halves of a
+        split scope (different exclusions) and failover partners are not reported.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows)
+    $scopesByServer = @{}
+    $partners = @{}
+    foreach ($r in $Rows) {
+        $server = [string]$r.DHCPServer
+        if (-not $scopesByServer.ContainsKey($server)) {
+            $scopesByServer[$server] = [System.Collections.Generic.List[string]]::new()
+            $partners[$server] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        }
+        $pool = [long]$r.AddressesFree + [long]$r.AddressesInUse
+        $scopesByServer[$server].Add(('{0}|{1}|{2}|{3}|{4}|{5}' -f $r.ScopeId, $r.Name, $r.StartRange, $r.EndRange, $r.ScopeState, $pool).ToLowerInvariant())
+        if ($r.FailoverPartner) { [void]$partners[$server].Add((Get-DhcpServerShortName -Name ([string]$r.FailoverPartner))) }
+    }
+    $serversBySignature = @{}
+    foreach ($server in $scopesByServer.Keys) {
+        $items = $scopesByServer[$server].ToArray()
+        [Array]::Sort($items, [System.StringComparer]::Ordinal)
+        $signature = [string]::Join("`n", $items)
+        if (-not $serversBySignature.ContainsKey($signature)) { $serversBySignature[$signature] = [System.Collections.Generic.List[string]]::new() }
+        $serversBySignature[$signature].Add($server)
+    }
+    $groups = [System.Collections.Generic.List[object]]::new()
+    foreach ($signature in $serversBySignature.Keys) {
+        $servers = $serversBySignature[$signature]
+        if ($servers.Count -lt 2) { continue }
+        $linked = $false
+        foreach ($a in $servers) {
+            foreach ($b in $servers) {
+                if ($a -ne $b -and $partners[$a].Contains((Get-DhcpServerShortName -Name $b))) { $linked = $true }
+            }
+        }
+        if (-not $linked) {
+            $sorted = $servers.ToArray()
+            [Array]::Sort($sorted, [System.StringComparer]::OrdinalIgnoreCase)
+            $groups.Add($sorted)
+        }
+    }
+    return ,$groups.ToArray()
 }
 
 function Compare-DhcpScopeCache {
@@ -2688,6 +3113,321 @@ function Get-DhcpCacheCheckLines {
     return $lines.ToArray()
 }
 
+function Get-DhcpPrefixMask {
+    # 24 -> 4294967040 (255.255.255.0)
+    param([int]$Length)
+    return ([long]4294967295 -bxor (([long]1 -shl (32 - $Length)) - 1))
+}
+
+function ConvertTo-DhcpIPv4Text {
+    # 167838208 -> "10.1.0.0"
+    param([long]$Number)
+    return ('{0}.{1}.{2}.{3}' -f (($Number -shr 24) -band 255), (($Number -shr 16) -band 255), (($Number -shr 8) -band 255), ($Number -band 255))
+}
+
+function ConvertFrom-DhcpSubnetText {
+    <#
+    .SYNOPSIS
+        "10.20.0.0/22" (or "10.20/22") -> @{ Network; Length; Mask; Cidr }.
+        $null when the text is not a subnet, or is wider than a /8.
+    #>
+    param([string]$Text)
+    if ($Text.Trim() -notmatch '^(\d{1,3}(?:\.\d{1,3}){0,3})\.?/(\d{1,2})$') { return $null }
+    $length = [int]$Matches[2]
+    $octets = [System.Collections.Generic.List[long]]::new()
+    foreach ($o in $Matches[1].Split('.')) { $octets.Add([long]$o) }
+    if ($length -lt 8 -or $length -gt 32) { return $null }
+    foreach ($o in $octets) { if ($o -gt 255) { return $null } }
+    while ($octets.Count -lt 4) { $octets.Add(0) }
+    $mask = Get-DhcpPrefixMask -Length $length
+    $network = (($octets[0] -shl 24) -bor ($octets[1] -shl 16) -bor ($octets[2] -shl 8) -bor $octets[3]) -band $mask
+    return @{ Network = $network; Length = $length; Mask = $mask; Cidr = ('{0}/{1}' -f (ConvertTo-DhcpIPv4Text -Number $network), $length) }
+}
+
+function Sort-DhcpScopesByDisplayName {
+    <#
+    .SYNOPSIS
+        The scopes in display-name order (ordinal, ignoring case).
+    .DESCRIPTION
+        The names are sorted together with an index array. [Array]::Sort(names, objects)
+        can sort a converted copy of the object array and leave the original unsorted,
+        which made the scope filter show the wrong scopes. The result is checked, and
+        Sort-Object is used if the index array did not move with the names.
+    #>
+    param([AllowEmptyCollection()][object[]]$Scopes)
+    if ($null -eq $Scopes -or $Scopes.Count -eq 0) { return ,[object[]]@() }
+    $count = $Scopes.Count
+    $keys = [string[]]::new($count)
+    $order = [int[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) { $keys[$i] = [string]$Scopes[$i].DisplayName; $order[$i] = $i }
+    [Array]::Sort($keys, $order, [System.StringComparer]::OrdinalIgnoreCase)
+    $sorted = [object[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) {
+        $sorted[$i] = $Scopes[$order[$i]]
+        if (-not [string]::Equals([string]$sorted[$i].DisplayName, $keys[$i], [System.StringComparison]::Ordinal)) {
+            return ,[object[]]@($Scopes | Sort-Object -Property { [string]$_.DisplayName })
+        }
+    }
+    return ,$sorted
+}
+
+function Get-DhcpScopeFilterKeys {
+    <#
+    .SYNOPSIS
+        What the scope filter searches: the scope name (upper case) and the scope ID.
+    .DESCRIPTION
+        The DHCP server name is not searched. One server often serves several sites,
+        so a site code in its name would match the scopes of every site on it.
+        Numbers and PrefixLengths (for subnets) are filled in the first time a subnet
+        is used - see Initialize-DhcpScopeFilterNumbers.
+    .OUTPUTS
+        @{ Names; Ids; Numbers; PrefixLengths; Scopes } - arrays in the same order as -Scopes
+    #>
+    param([AllowEmptyCollection()][object[]]$Scopes)
+    if ($null -eq $Scopes) { $Scopes = @() }
+    $names = [string[]]::new($Scopes.Count)
+    $ids = [string[]]::new($Scopes.Count)
+    for ($i = 0; $i -lt $Scopes.Count; $i++) {
+        $s = $Scopes[$i]
+        $name = [string]$s.Name
+        $id = ([string]$s.ScopeId).Trim()
+        if ((-not $name -or -not $id) -and [string]$s.DisplayName -match '^(.*) \((\d{1,3}(?:\.\d{1,3}){3})\) - ') {
+            # entry without Name / ScopeId: read them from "Name (ScopeId) - Server"
+            if (-not $name) { $name = $Matches[1] }
+            if (-not $id) { $id = $Matches[2] }
+        }
+        $names[$i] = $name.ToUpperInvariant()
+        $ids[$i] = '.' + $id + '.'
+    }
+    return @{ Names = $names; Ids = $ids; Numbers = $null; PrefixLengths = $null; Scopes = $Scopes }
+}
+
+function Initialize-DhcpScopeFilterNumbers {
+    <#
+    .SYNOPSIS
+        Fills in Keys.Numbers (the scope ID as a number, -1 when it is not IPv4) and
+        Keys.PrefixLengths (the subnet mask length, 24 when unknown). Done once, the
+        first time a subnet is used, so loading the scope cache stays fast.
+    #>
+    param($Keys)
+    if ($null -ne $Keys.Numbers) { return }
+    $maskLengths = @{}
+    for ($len = 0; $len -le 32; $len++) { $maskLengths[(ConvertTo-DhcpIPv4Text -Number (Get-DhcpPrefixMask -Length $len))] = $len }
+    $ids = $Keys.Ids
+    $scopes = $Keys.Scopes
+    $count = $ids.Count
+    $withMask = [Math]::Min($count, $scopes.Count)
+    $numbers = [long[]]::new($count)
+    $lengths = [int[]]::new($count)
+    for ($i = 0; $i -lt $count; $i++) {
+        $ip = $null
+        $numbers[$i] = -1
+        if ([System.Net.IPAddress]::TryParse($ids[$i].Trim('.'), [ref]$ip)) {
+            $b = $ip.GetAddressBytes()
+            if ($b.Length -eq 4) { $numbers[$i] = (([long]$b[0] * 256 + $b[1]) * 256 + $b[2]) * 256 + $b[3] }
+        }
+        $mask = if ($i -lt $withMask) { [string]$scopes[$i].SubnetMask } else { '' }
+        $len = if ($mask -eq '255.255.255.0') { 24 } else { $maskLengths[$mask.Trim()] }
+        $lengths[$i] = if ($null -ne $len) { $len } else { 24 }
+    }
+    $Keys.Numbers = $numbers
+    $Keys.PrefixLengths = $lengths
+}
+
+function Split-DhcpScopeFilterTerms {
+    <#
+    .SYNOPSIS
+        Sorts filter terms into name terms, scope ID terms and subnets.
+    .DESCRIPTION
+        10.20 or 10.20.x.x - scope IDs that start with 10.20 (whole octets)
+        10.20.0.0/22       - scope IDs in that subnet (/8 or narrower)
+        100                - names containing 100, and scope IDs that start with 100
+        anything else      - a name term
+        Count includes terms that cannot match anything (a half-typed subnet), so they
+        show no scopes instead of all of them.
+    #>
+    param([AllowEmptyCollection()][string[]]$Terms)
+    $name = [System.Collections.Generic.List[string]]::new()
+    $id = [System.Collections.Generic.List[string]]::new()
+    $nets = [System.Collections.Generic.List[long]]::new()
+    $masks = [System.Collections.Generic.List[long]]::new()
+    $count = 0
+    foreach ($raw in $Terms) {
+        $t = ([string]$raw).Trim().ToUpperInvariant()
+        if (-not $t) { continue }
+        $count++
+        if ($t.Contains('/')) {
+            $subnet = ConvertFrom-DhcpSubnetText -Text $t
+            if ($subnet) { $nets.Add($subnet.Network); $masks.Add($subnet.Mask); continue }
+        }
+        $octets = ($t -replace '(\.(X|\*))+$', '').Trim('.')
+        if ($octets -match '^[0-9]+(\.[0-9]+)*$') {
+            $id.Add('.' + $octets + '.')
+            if ($t.Contains('.')) { continue }
+        }
+        $name.Add($t)
+    }
+    return @{ Name = $name.ToArray(); Id = $id.ToArray(); Net = $nets.ToArray(); Mask = $masks.ToArray(); Count = $count }
+}
+
+function Find-DhcpScopeMatches {
+    <#
+    .SYNOPSIS
+        Indexes of the scopes that pass the filter boxes (comma = OR inside a box,
+        both boxes = AND).
+    .DESCRIPTION
+        Contains box: the scope name contains the text. Prefix box: the name starts with it.
+        In both boxes, numbers match the scope ID from the first octet (10.1 finds
+        10.1.x.x but not 10.10.x.x or 110.1.x.x) and a subnet (10.1.0.0/20) matches the
+        scope IDs inside it.
+    .PARAMETER Keys
+        Output of Get-DhcpScopeFilterKeys
+    #>
+    param($Keys, [AllowEmptyCollection()][string[]]$ContainsTerms = @(), [AllowEmptyCollection()][string[]]$PrefixTerms = @())
+    $contains = Split-DhcpScopeFilterTerms -Terms $ContainsTerms
+    $prefix = Split-DhcpScopeFilterTerms -Terms $PrefixTerms
+    $nameIn = $contains.Name; $idIn = $contains.Id; $netIn = $contains.Net; $maskIn = $contains.Mask
+    $nameStart = $prefix.Name; $idStart = $prefix.Id; $netStart = $prefix.Net; $maskStart = $prefix.Mask
+    $usePrefix = $prefix.Count -gt 0
+    $useContains = $contains.Count -gt 0
+    $subnetIn = $netIn.Count -gt 0
+    $subnetStart = $netStart.Count -gt 0
+    if ($subnetIn -or $subnetStart) { Initialize-DhcpScopeFilterNumbers -Keys $Keys }
+    $ordinal = [System.StringComparison]::Ordinal
+    $names = $Keys.Names
+    $ids = $Keys.Ids
+    $numbers = $Keys.Numbers
+    $hits = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        if ($usePrefix) {
+            $ok = $false
+            foreach ($t in $nameStart) { if ($names[$i].StartsWith($t, $ordinal)) { $ok = $true; break } }
+            if (-not $ok) { foreach ($t in $idStart) { if ($ids[$i].StartsWith($t, $ordinal)) { $ok = $true; break } } }
+            if (-not $ok -and $subnetStart -and $numbers[$i] -ge 0) { for ($k = 0; $k -lt $netStart.Count; $k++) { if (($numbers[$i] -band $maskStart[$k]) -eq $netStart[$k]) { $ok = $true; break } } }
+            if (-not $ok) { continue }
+        }
+        if ($useContains) {
+            $ok = $false
+            foreach ($t in $nameIn) { if ($names[$i].Contains($t)) { $ok = $true; break } }
+            if (-not $ok) { foreach ($t in $idIn) { if ($ids[$i].StartsWith($t, $ordinal)) { $ok = $true; break } } }
+            if (-not $ok -and $subnetIn -and $numbers[$i] -ge 0) { for ($k = 0; $k -lt $netIn.Count; $k++) { if (($numbers[$i] -band $maskIn[$k]) -eq $netIn[$k]) { $ok = $true; break } } }
+            if (-not $ok) { continue }
+        }
+        $hits.Add($i)
+    }
+    return ,$hits.ToArray()
+}
+
+function Get-DhcpCountInRange {
+    # How many values of the sorted, distinct array lie between Low and High (inclusive)
+    param([long[]]$Sorted, [long]$Low, [long]$High)
+    $from = [Array]::BinarySearch($Sorted, $Low)
+    if ($from -lt 0) { $from = -bnot $from }
+    $to = [Array]::BinarySearch($Sorted, $High)
+    if ($to -lt 0) { $to = -bnot $to } else { $to++ }
+    return ($to - $from)
+}
+
+function Get-DhcpScopeSubnets {
+    <#
+    .SYNOPSIS
+        The subnets that the scopes with matching names sit in ("Add Subnets"), and the
+        scopes with other names inside them.
+    .DESCRIPTION
+        Each matching scope starts as its own subnet. A subnet is widened to the next
+        larger block that holds more scopes, up to a /16, while the scopes in it with
+        other names stay fewer than the matching ones. So a badly named scope among a
+        site's scopes is taken in, and a neighbouring site's block is not.
+        Scopes are counted once per scope ID (failover partners list the same ID twice).
+    .OUTPUTS
+        @{ Matched = indexes of the scopes whose names match;
+           Subnets = @(@{ Cidr; Network; Length; MatchedIds; Added = indexes of the scopes
+                          with other names in the subnet }) }
+    #>
+    param($Keys, [AllowEmptyCollection()][string[]]$NameTerms)
+    Initialize-DhcpScopeFilterNumbers -Keys $Keys
+    $names = $Keys.Names
+    $numbers = $Keys.Numbers
+    $terms = @(foreach ($t in $NameTerms) { $u = ([string]$t).Trim().ToUpperInvariant(); if ($u) { $u } })
+    $isMatch = [bool[]]::new($names.Count)
+    $matched = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        foreach ($t in $terms) { if ($names[$i].Contains($t)) { $isMatch[$i] = $true; $matched.Add($i); break } }
+    }
+    $allSet = [System.Collections.Generic.SortedSet[long]]::new()
+    $matchSet = [System.Collections.Generic.SortedSet[long]]::new()
+    for ($i = 0; $i -lt $numbers.Count; $i++) {
+        if ($numbers[$i] -lt 0) { continue }
+        [void]$allSet.Add($numbers[$i])
+        if ($isMatch[$i]) { [void]$matchSet.Add($numbers[$i]) }
+    }
+    $all = [long[]]::new($allSet.Count); $allSet.CopyTo($all)
+    $named = [long[]]::new($matchSet.Count); $matchSet.CopyTo($named)
+
+    # start: the subnet of each matching scope (a subnet inside another one is dropped)
+    $blocks = [System.Collections.Generic.List[object]]::new()
+    foreach ($i in $matched) {
+        if ($numbers[$i] -lt 0) { continue }
+        $len = $Keys.PrefixLengths[$i]
+        $blocks.Add(@{ Network = ($numbers[$i] -band (Get-DhcpPrefixMask -Length $len)); Length = $len })
+    }
+    $ordered = @($blocks | Sort-Object -Property @{ Expression = { $_.Length } }, @{ Expression = { $_.Network } })
+    $blocks.Clear()
+    foreach ($b in $ordered) {
+        $inside = $false
+        foreach ($o in $blocks) { if (($b.Network -band (Get-DhcpPrefixMask -Length $o.Length)) -eq $o.Network) { $inside = $true; break } }
+        if (-not $inside) { $blocks.Add($b) }
+    }
+
+    # widen while the other names stay fewer than the matching ones
+    do {
+        $changed = $false
+        foreach ($b in @($blocks)) {
+            if (-not $blocks.Contains($b)) { continue }
+            $size = [long]1 -shl (32 - $b.Length)
+            $inside = Get-DhcpCountInRange -Sorted $all -Low $b.Network -High ($b.Network + $size - 1)
+            $wider = $null
+            for ($len = $b.Length - 1; $len -ge 16; $len--) {
+                $net = $b.Network -band (Get-DhcpPrefixMask -Length $len)
+                $high = $net + ([long]1 -shl (32 - $len)) - 1
+                $total = Get-DhcpCountInRange -Sorted $all -Low $net -High $high
+                if ($total -gt $inside) { $wider = @{ Network = $net; Length = $len; High = $high; Total = $total }; break }
+            }
+            if ($null -eq $wider) { continue }
+            $hits = Get-DhcpCountInRange -Sorted $named -Low $wider.Network -High $wider.High
+            if (($wider.Total - $hits) -ge $hits) { continue }
+            $mask = Get-DhcpPrefixMask -Length $wider.Length
+            for ($k = $blocks.Count - 1; $k -ge 0; $k--) {
+                if (($blocks[$k].Network -band $mask) -eq $wider.Network) { $blocks.RemoveAt($k) }
+            }
+            $blocks.Add(@{ Network = $wider.Network; Length = $wider.Length })
+            $changed = $true
+        }
+    } while ($changed)
+
+    $subnets = foreach ($b in @($blocks | Sort-Object -Property @{ Expression = { $_.Network } })) {
+        $mask = Get-DhcpPrefixMask -Length $b.Length
+        $added = [System.Collections.Generic.List[int]]::new()
+        for ($i = 0; $i -lt $numbers.Count; $i++) {
+            if (-not $isMatch[$i] -and $numbers[$i] -ge 0 -and ($numbers[$i] -band $mask) -eq $b.Network) { $added.Add($i) }
+        }
+        # in address order (stable for the same ID)
+        $addedIndexes = $added.ToArray()
+        $addedKeys = [long[]]::new($addedIndexes.Count)
+        for ($k = 0; $k -lt $addedIndexes.Count; $k++) { $addedKeys[$k] = $numbers[$addedIndexes[$k]] * 1048576 + $k }
+        [Array]::Sort($addedKeys, $addedIndexes)
+        $high = $b.Network + ([long]1 -shl (32 - $b.Length)) - 1
+        @{
+            Cidr       = ('{0}/{1}' -f (ConvertTo-DhcpIPv4Text -Number $b.Network), $b.Length)
+            Network    = $b.Network
+            Length     = $b.Length
+            MatchedIds = (Get-DhcpCountInRange -Sorted $named -Low $b.Network -High $high)
+            Added      = $addedIndexes
+        }
+    }
+    return @{ Matched = $matched.ToArray(); Subnets = @($subnets) }
+}
+
 function Get-DhcpExportColumns {
     param([hashtable]$Options, [switch]$Grouped)
     $cols = [System.Collections.Generic.List[string]]::new()
@@ -2710,6 +3450,8 @@ $script:Dna = @{
     Devices = @(); Selected = @(); DeviceById = @{}; Busy = $false; Shared = $null; Pool = $null
 }
 $script:DnaThrottle = 6
+# Pause before the second try of requests that failed with a temporary error
+$script:DnaRetryDelayMs = 5000
 
 # GET worker for parallel requests; retries HTTP 429 (rate limit) with back-off
 $script:DnaGetWorker = @'
@@ -2846,13 +3588,24 @@ function Invoke-DnaGet {
 function Get-DnaResult {
     param($Result)
     if ($Result -and $Result.Output) { return $Result.Output }
-    $err = if ($Result -and $Result.Error) { $Result.Error } else { 'No result' }
+    # No result at all = the run was stopped before this request was sent
+    if ($null -eq $Result) { return [pscustomobject]@{ Response = $null; Error = 'Not run (stopped)'; Status = -1 } }
+    $err = if ($Result.Error) { $Result.Error } else { 'No result' }
     return [pscustomobject]@{ Response = $null; Error = $err; Status = 0 }
+}
+
+function Test-DnaRetryable {
+    # Temporary failures worth a second try: no answer / timeout (0), 408, 429 and 5xx.
+    # 4xx answers (bad request, expired token, not found) would fail again.
+    param($Result)
+    if ($null -eq $Result -or -not $Result.Error) { return $false }
+    $status = [int]$Result.Status
+    return ($status -eq 0 -or $status -eq 408 -or $status -eq 429 -or $status -ge 500)
 }
 
 function Get-DnaPool {
     # One pool for the session: runspaces (and Invoke-RestMethod's module) load once
-    if ($null -eq $script:Dna.Pool) { $script:Dna.Pool = New-OctoRunspacePool -MaxRunspaces $script:DnaThrottle }
+    if ($null -eq $script:Dna.Pool) { $script:Dna.Pool = New-NetGuiRunspacePool -MaxRunspaces $script:DnaThrottle }
     return $script:Dna.Pool
 }
 
@@ -2860,22 +3613,67 @@ function Invoke-DnaParallel {
     <#
     .SYNOPSIS
         Runs a DNA worker for each item on the session pool, with progress in the status bar.
+    .PARAMETER RetryFailed
+        GET worker only: requests that failed with a temporary error (no answer,
+        timeout, HTTP 408 / 429 / 5xx - after the worker's own 429 back-off) are
+        sent once more after a pause, two at a time instead of six.
     #>
-    param([object[]]$Items, [string]$Script, [hashtable]$Extra = @{}, [string]$Activity = 'Working', [scriptblock]$OnResult)
+    param(
+        [object[]]$Items, [string]$Script, [hashtable]$Extra = @{}, [string]$Activity = 'Working', [scriptblock]$OnResult,
+        [switch]$RetryFailed, [System.Windows.Forms.RichTextBox]$LogBox
+    )
     $shared = [hashtable]::Synchronized(@{ Stop = $false; Headers = $script:Dna.Headers.Clone(); BaseUrl = $script:Dna.BaseUrl; TimeoutSec = 15 })
     foreach ($k in $Extra.Keys) { $shared[$k] = $Extra[$k] }
     $script:Dna.Shared = $shared
     try {
-        $results = Invoke-OctoParallel -Items $Items -Script $Script -Shared $shared -Throttle $script:DnaThrottle -Pool (Get-DnaPool) -OnProgress {
+        $results = Invoke-NetGuiParallel -Items $Items -Script $Script -Shared $shared -Throttle $script:DnaThrottle -Pool (Get-DnaPool) -OnProgress {
             param($done, $count, $r)
             if ($OnResult) { & $OnResult $done $count $r }
             if ($done -eq $count -or ($done % 5) -eq 0) {
-                Set-OctoStatus -Text "$Activity..." -Percent ([int](100 * $done / $count)) -ProgressText "$done/$count"
+                Set-NetGuiStatus -Text "$Activity..." -Percent ([int](100 * $done / $count)) -ProgressText "$done/$count"
+            }
+        }
+
+        if ($RetryFailed -and -not $shared.Stop) {
+            $retry = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $results.Count; $i++) {
+                if (Test-DnaRetryable -Result (Get-DnaResult -Result $results[$i])) { $retry.Add($i) }
+            }
+            if ($retry.Count -gt 0) {
+                $firstError = (Get-DnaResult -Result $results[$retry[0]]).Error
+                Write-Log -Message ('{0} - {1} request(s) failed ({2}) - trying them again, two at a time' -f $Activity, $retry.Count, $firstError) -Color 'Warning' -LogBox $LogBox
+                Set-NetGuiStatus -Text "$Activity - pausing before the second try..."
+                $until = [DateTime]::UtcNow.AddMilliseconds($script:DnaRetryDelayMs)
+                while ([DateTime]::UtcNow -lt $until -and -not $shared.Stop) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 40
+                }
+                $retryItems = @(foreach ($i in $retry) { $Items[$i] })
+                $tries = @{ NoAnswerInRow = 0; GaveUp = $false }
+                $second = Invoke-NetGuiParallel -Items $retryItems -Script $Script -Shared $shared -MaxInFlight 2 -Pool (Get-DnaPool) -OnProgress {
+                    param($done, $count, $r)
+                    $rr = Get-DnaResult -Result $r
+                    if ($rr.Error -and [int]$rr.Status -eq 0) { $tries.NoAnswerInRow++ } else { $tries.NoAnswerInRow = 0 }
+                    # DNA Center not answering at all: stop instead of waiting out every timeout again
+                    if ($tries.NoAnswerInRow -ge 6 -and $done -lt $count -and -not $tries.GaveUp) { $tries.GaveUp = $true; $shared.Stop = $true }
+                    Set-NetGuiStatus -Text "$Activity (second try)..." -Percent ([int](100 * $done / $count)) -ProgressText "$done/$count"
+                }
+                $recovered = 0; $notSent = 0
+                for ($k = 0; $k -lt $retry.Count; $k++) {
+                    if ($null -eq $second[$k]) { $notSent++; continue }   # stopped before it was answered
+                    $results[$retry[$k]] = $second[$k]
+                    if (-not (Get-DnaResult -Result $second[$k]).Error) { $recovered++ }
+                }
+                if ($tries.GaveUp) {
+                    Write-Log -Message ('{0} - DNA Center did not answer 6 second tries in a row - the other {1} request(s) were not tried again' -f $Activity, $notSent) -Color 'Warning' -LogBox $LogBox
+                }
+                $tried = $retry.Count - $notSent
+                Write-Log -Message ('{0} - second try: {1} of {2} succeeded' -f $Activity, $recovered, $tried) -Color $(if ($recovered -eq $retry.Count) { 'Success' } else { 'Warning' }) -LogBox $LogBox
             }
         }
     } finally {
         $script:Dna.Shared = $null
-        Set-OctoStatus -Text 'Ready'
+        Set-NetGuiStatus -Text 'Ready'
     }
     return ,$results
 }
@@ -2885,16 +3683,44 @@ function Invoke-DnaDeviceRequests {
     .SYNOPSIS
         GET <PathTemplate> for every device in parallel ({id} = device id).
         Returns index-aligned results: .Response / .Error per device.
+    .DESCRIPTION
+        Temporary failures get a second try; devices that still fail are named in the log.
     #>
-    param([object[]]$Devices, [string]$PathTemplate, [int]$TimeoutSec = 15, [string]$Activity = 'Querying devices')
+    param([object[]]$Devices, [string]$PathTemplate, [int]$TimeoutSec = 15, [string]$Activity = 'Querying devices', [System.Windows.Forms.RichTextBox]$LogBox)
     $items = New-Object object[] $Devices.Count
     for ($i = 0; $i -lt $Devices.Count; $i++) {
         $items[$i] = @{ Url = $script:Dna.BaseUrl + $PathTemplate.Replace('{id}', [System.Uri]::EscapeDataString([string]$Devices[$i].id)) }
     }
-    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = $TimeoutSec } -Activity $Activity
+    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = $TimeoutSec } -Activity $Activity -RetryFailed -LogBox $LogBox
     $out = New-Object object[] $raw.Count
     for ($i = 0; $i -lt $raw.Count; $i++) { $out[$i] = Get-DnaResult -Result $raw[$i] }
+    Write-DnaFailedDevices -Devices $Devices -Results $out -What $Activity -LogBox $LogBox
     return ,$out
+}
+
+function Write-DnaFailedDevices {
+    <#
+    .SYNOPSIS
+        Names the devices whose request failed (after the second try) in the log.
+    #>
+    param([object[]]$Devices, [object[]]$Results, [string]$What, [System.Windows.Forms.RichTextBox]$LogBox, [int]$MaxListed = 10)
+    $failed = [System.Collections.Generic.List[int]]::new()
+    $notRun = 0
+    for ($i = 0; $i -lt $Results.Count; $i++) {
+        $r = $Results[$i]
+        if ($null -eq $r -or -not $r.Error) { continue }
+        if ($r.Status -eq -1) { $notRun++ } else { $failed.Add($i) }
+    }
+    if ($notRun -gt 0) { Write-Log -Message ('{0} - {1} device(s) not queried (stopped)' -f $What, $notRun) -Color 'Warning' -LogBox $LogBox }
+    if ($failed.Count -eq 0) { return }
+    Write-Log -Message ('{0} - {1} of {2} device(s) failed:' -f $What, $failed.Count, $Results.Count) -Color 'Warning' -LogBox $LogBox
+    foreach ($i in @($failed | Select-Object -First $MaxListed)) {
+        $d = $Devices[$i]
+        $name = if ($d.hostname) { [string]$d.hostname } else { [string]$d.id }
+        $ip = if ($d.managementIpAddress) { " ($($d.managementIpAddress))" } else { '' }
+        Write-Log -Message ('  {0}{1}: {2}' -f $name, $ip, $Results[$i].Error) -Color 'Warning' -LogBox $LogBox
+    }
+    if ($failed.Count -gt $MaxListed) { Write-Log -Message ('  ... and {0} more' -f ($failed.Count - $MaxListed)) -Color 'Warning' -LogBox $LogBox }
 }
 
 function Get-AllDNADevices {
@@ -2926,7 +3752,7 @@ function Get-AllDNADevices {
                 $items.Add(@{ Url = "$($script:Dna.BaseUrl)/dna/intent/api/v1/network-device?offset=$o&limit=$pageSize" })
             }
             Write-Log -Message "Inventory reports $count device(s) - fetching $($items.Count) pages in parallel" -Color 'Cyan' -LogBox $LogBox
-            $pages = Invoke-DnaParallel -Items $items.ToArray() -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 60 } -Activity 'Loading devices'
+            $pages = Invoke-DnaParallel -Items $items.ToArray() -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 60 } -Activity 'Loading devices' -RetryFailed -LogBox $LogBox
             foreach ($p in $pages) {
                 $r = Get-DnaResult -Result $p
                 if ($r.Error) { throw "Device page failed: $($r.Error)" }
@@ -2998,19 +3824,11 @@ function Export-DnaRows {
         Write-Log -Message "$Operation - no data returned, nothing exported" -Color 'Yellow' -LogBox $LogBox
         return $null
     }
-    $path = Get-OctoExportPath -Folder $script:outputDir -BaseName $BaseName
-    [void](Export-OctoCsv -Rows $Rows -Columns $Columns -Path $path)
+    $path = Get-NetGuiExportPath -Folder $script:outputDir -BaseName $BaseName
+    [void](Export-NetGuiCsv -Rows $Rows -Columns $Columns -Path $path)
     Write-Log -Message "Exported $($Rows.Count) row(s) to: $path" -Color 'Green' -LogBox $LogBox
     Add-ExportHistory -Settings $script:Settings -FilePath $path -Operation $Operation
     return $path
-}
-
-function Write-DnaFailureSummary {
-    param([object[]]$Results, [string]$What, [System.Windows.Forms.RichTextBox]$LogBox)
-    $failed = @($Results | Where-Object { $_.Error })
-    if ($failed.Count -gt 0) {
-        Write-Log -Message "$What - $($failed.Count) of $($Results.Count) request(s) failed (first: $($failed[0].Error))" -Color 'Yellow' -LogBox $LogBox
-    }
 }
 
 # ---------- Device information (local data) ----------
@@ -3230,7 +4048,7 @@ function Get-ComplianceStatus {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching compliance status for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/compliance/{id}' -Activity 'Compliance status'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/compliance/{id}' -Activity 'Compliance status' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         $d = $devices[$i]; $r = $results[$i]
         if ($r.Error) {
@@ -3250,7 +4068,7 @@ function Get-DnaNeighborReport {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching $What for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate $PathTemplate -Activity $What
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate $PathTemplate -Activity $What -LogBox $LogBox
     $rows = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
@@ -3261,7 +4079,6 @@ function Get-DnaNeighborReport {
             if ($row) { $rows.Add($row) }
         }
     }
-    Write-DnaFailureSummary -Results $results -What $What -LogBox $LogBox
     [void](Export-DnaRows -Rows $rows.ToArray() -BaseName $BaseName -Operation "DNA - $What" -LogBox $LogBox)
 }
 
@@ -3327,7 +4144,7 @@ function Get-VLANs {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching VLANs for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/interface/network-device/{id}' -Activity 'VLANs'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/interface/network-device/{id}' -Activity 'VLANs' -LogBox $LogBox
     $rows = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
@@ -3339,7 +4156,6 @@ function Get-VLANs {
             $rows.Add([PSCustomObject][ordered]@{ Hostname = $(if ($devices[$i].hostname) { $devices[$i].hostname } else { 'Unknown' }); IPAddress = $(if ($devices[$i].managementIpAddress) { $devices[$i].managementIpAddress } else { 'N/A' }); VlanId = $iface.vlanId })
         }
     }
-    Write-DnaFailureSummary -Results $results -What 'VLANs' -LogBox $LogBox
     [void](Export-DnaRows -Rows $rows.ToArray() -BaseName 'VLANs' -Operation 'DNA - VLANs' -LogBox $LogBox)
 }
 
@@ -3352,7 +4168,7 @@ function Get-DeviceConfigurations {
         $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
         $configFolder = Join-Path (Initialize-OutputDirectory -Path $script:outputDir) "DeviceConfigurations_$timestamp"
         [void][System.IO.Directory]::CreateDirectory($configFolder)
-        $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/config' -TimeoutSec 30 -Activity 'Device configurations'
+        $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/config' -TimeoutSec 30 -Activity 'Device configurations' -LogBox $LogBox
         $usedNames = @{}
         $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
             $d = $devices[$i]; $r = $results[$i]
@@ -3414,14 +4230,17 @@ function Get-DnaEventTimestamps {
     .SYNOPSIS
         Latest event timestamp per device (parallel), index-aligned; $null when none.
     #>
-    param([object[]]$Devices, [string]$EventName, [hashtable]$AdditionalQuery, [string]$Activity)
+    param([object[]]$Devices, [string]$EventName, [hashtable]$AdditionalQuery, [string]$Activity, [System.Windows.Forms.RichTextBox]$LogBox)
     $items = New-Object object[] $Devices.Count
     for ($i = 0; $i -lt $Devices.Count; $i++) {
         $items[$i] = @{ Url = (Get-DnaEventSeriesUrl -DeviceId ([string]$Devices[$i].id) -EventName $EventName -AdditionalQuery $AdditionalQuery) }
     }
-    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 30 } -Activity $Activity
+    $raw = Invoke-DnaParallel -Items $items -Script $script:DnaGetWorker -Extra @{ TimeoutSec = 30 } -Activity $Activity -RetryFailed -LogBox $LogBox
+    $results = New-Object object[] $raw.Count
+    for ($i = 0; $i -lt $raw.Count; $i++) { $results[$i] = Get-DnaResult -Result $raw[$i] }
+    Write-DnaFailedDevices -Devices $Devices -Results $results -What $Activity -LogBox $LogBox
     $out = New-Object object[] $Devices.Count
-    for ($i = 0; $i -lt $raw.Count; $i++) { $out[$i] = Get-DnaEventTimestamp -Response (Get-DnaResult -Result $raw[$i]).Response }
+    for ($i = 0; $i -lt $results.Count; $i++) { $out[$i] = Get-DnaEventTimestamp -Response $results[$i].Response }
     return ,$out
 }
 
@@ -3430,7 +4249,7 @@ function Get-LastDeviceAvailabilityEventTime {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching last availability events for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $times = Get-DnaEventTimestamps -Devices $devices -EventName 'Device Unreachable' -AdditionalQuery @{ tags = 'ASSURANCE' } -Activity 'Availability events'
+    $times = Get-DnaEventTimestamps -Devices $devices -EventName 'Device Unreachable' -AdditionalQuery @{ tags = 'ASSURANCE' } -Activity 'Availability events' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         [PSCustomObject][ordered]@{
             Hostname = $(if ($devices[$i].hostname) { $devices[$i].hostname } else { 'Unknown' }); IPAddress = $(if ($devices[$i].managementIpAddress) { $devices[$i].managementIpAddress } else { 'N/A' })
@@ -3446,7 +4265,7 @@ function Get-LastDisconnectTime {
     $devices = Get-DnaTargetDevices -LogBox $LogBox
     if (-not $devices) { return }
     Write-Log -Message "Fetching last disconnect times for $($devices.Count) device(s)..." -Color 'Yellow' -LogBox $LogBox
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/enrichment-details' -TimeoutSec 30 -Activity 'Last disconnect times'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}/enrichment-details' -TimeoutSec 30 -Activity 'Last disconnect times' -LogBox $LogBox
     $rows = for ($i = 0; $i -lt $devices.Count; $i++) {
         $r = $results[$i]
         $value = 'N/A'
@@ -3474,7 +4293,7 @@ function Get-LastPingReachableTime {
     Write-Log -Message "Retrieving last ping reachable times for $($devices.Count) device(s)..." -Color 'Cyan' -LogBox $LogBox
 
     $values = New-Object object[] $devices.Count
-    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}' -TimeoutSec 30 -Activity 'Device records'
+    $results = Invoke-DnaDeviceRequests -Devices $devices -PathTemplate '/dna/intent/api/v1/network-device/{id}' -TimeoutSec 30 -Activity 'Device records' -LogBox $LogBox
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $data = $results[$i].Response
         if (-not $data -or -not $data.response) { continue }
@@ -3491,7 +4310,7 @@ function Get-LastPingReachableTime {
         $missing = @(for ($i = 0; $i -lt $devices.Count; $i++) { if (-not $values[$i]) { $i } })
         if ($missing.Count -eq 0) { break }
         $subset = @(foreach ($i in $missing) { $devices[$i] })
-        $times = Get-DnaEventTimestamps -Devices $subset -EventName $eventName -AdditionalQuery @{} -Activity 'Reachability events'
+        $times = Get-DnaEventTimestamps -Devices $subset -EventName $eventName -AdditionalQuery @{} -Activity "Reachability events ($eventName)" -LogBox $LogBox
         for ($k = 0; $k -lt $missing.Count; $k++) { if ($times[$k]) { $values[$missing[$k]] = $times[$k] } }
     }
 
@@ -3504,7 +4323,7 @@ function Get-LastPingReachableTime {
     [void](Export-DnaRows -Rows @($rows) -BaseName 'DeviceLastPingReachable' -Operation 'DNA - Last Ping Reachable' -LogBox $LogBox)
 }
 
-function Wait-OctoUi {
+function Wait-NetGuiUi {
     <#
     .SYNOPSIS
         Sleeps while keeping the window responsive.
@@ -3543,8 +4362,8 @@ function Invoke-PathTrace {
     foreach ($f in $fields) {
         $lbl = New-Object System.Windows.Forms.Label
         $lbl.Text = $f.Label
-        $lbl.Location = New-Object System.Drawing.Point(20, $y)
-        $lbl.Size = New-Object System.Drawing.Size(125, 20)
+        $lbl.Location = New-Object System.Drawing.Point(20, ($y + 3))
+        $lbl.Size = New-Object System.Drawing.Size(145, 20)
         $form.Controls.Add($lbl)
         if ($f.Name -eq 'Protocol') {
             $ctl = New-Object System.Windows.Forms.ComboBox
@@ -3554,8 +4373,8 @@ function Invoke-PathTrace {
         } else {
             $ctl = New-Object System.Windows.Forms.TextBox
         }
-        $ctl.Location = New-Object System.Drawing.Point(150, $y)
-        $ctl.Size = New-Object System.Drawing.Size($f.Width, 20)
+        $ctl.Location = New-Object System.Drawing.Point(170, $y)
+        $ctl.Size = New-Object System.Drawing.Size($f.Width, 23)
         $form.Controls.Add($ctl)
         $inputs[$f.Name] = $ctl
         $y += 40
@@ -3563,16 +4382,19 @@ function Invoke-PathTrace {
     $y += 20
     $btnStart = New-Object System.Windows.Forms.Button
     $btnStart.Text = 'Start Path Trace'
-    $btnStart.Location = New-Object System.Drawing.Point(150, $y)
-    $btnStart.Size = New-Object System.Drawing.Size(120, 30)
+    $btnStart.Tag = 'Primary'
+    $btnStart.Location = New-Object System.Drawing.Point(170, $y)
+    $btnStart.Size = New-Object System.Drawing.Size(130, 32)
     $form.Controls.Add($btnStart)
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(280, $y)
-    $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(308, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 32)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
+    $form.ClientSize = New-Object System.Drawing.Size(490, ($y + 52))
+    Set-NetGuiDialogStyle -Form $form
     $btnStart.Add_Click({
         if (-not (Test-IPAddress -IPAddress $inputs.Source.Text.Trim())) { [System.Windows.Forms.MessageBox]::Show('Invalid source IP address', 'Validation Error', 'OK', 'Warning') | Out-Null; return }
         if (-not (Test-IPAddress -IPAddress $inputs.Dest.Text.Trim())) { [System.Windows.Forms.MessageBox]::Show('Invalid destination IP address', 'Validation Error', 'OK', 'Warning') | Out-Null; return }
@@ -3608,7 +4430,7 @@ function Invoke-PathTrace {
         $flowId = $response.response.flowAnalysisId
         Write-Log -Message "Flow analysis initiated (ID: $flowId) - waiting for completion..." -Color 'Green' -LogBox $LogBox
         for ($attempt = 1; $attempt -le 30; $attempt++) {
-            Wait-OctoUi -Milliseconds 2000
+            Wait-NetGuiUi -Milliseconds 2000
             $status = Invoke-RestMethod -Uri "$($script:Dna.BaseUrl)/dna/intent/api/v1/flow-analysis/$flowId" -Method Get -Headers $script:Dna.Headers -TimeoutSec 30
             if (-not ($status -and $status.response)) { continue }
             $state = $status.response.request.status
@@ -3739,8 +4561,8 @@ function Invoke-CommandRunner {
     $lblInfo.Text = "Execute CLI commands on $($devices.Count) selected device(s)"
     $lblInfo.Location = New-Object System.Drawing.Point(20, $y)
     $lblInfo.Size = New-Object System.Drawing.Size(650, 20)
-    $lblInfo.Font = New-Object System.Drawing.Font('Arial', 11, [System.Drawing.FontStyle]::Bold)
-    $lblInfo.ForeColor = [System.Drawing.Color]::DarkBlue
+    $lblInfo.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 11)
+    $lblInfo.Tag = 'Accent'
     $cmdForm.Controls.Add($lblInfo)
     $y += 30
     $lblCommand = New-Object System.Windows.Forms.Label
@@ -3758,10 +4580,10 @@ function Invoke-CommandRunner {
     $cmdForm.Controls.Add($txtCommand)
     $y += 130
     $lblWarning = New-Object System.Windows.Forms.Label
-    $lblWarning.Text = '! Note: Pipes (|) are not supported by DNA Center API. Use plain commands only.'
+    $lblWarning.Text = 'Note: pipes (|) are not supported by the DNA Center API - use plain commands only.'
     $lblWarning.Location = New-Object System.Drawing.Point(20, $y)
     $lblWarning.Size = New-Object System.Drawing.Size(650, 20)
-    $lblWarning.ForeColor = [System.Drawing.Color]::DarkOrange
+    $lblWarning.Tag = 'Warning'
     $cmdForm.Controls.Add($lblWarning)
     $y += 30
     $lblFormat = New-Object System.Windows.Forms.Label
@@ -3789,28 +4611,30 @@ function Invoke-CommandRunner {
     $lblFilterInfo = New-Object System.Windows.Forms.Label
     $lblFilterInfo.Text = 'Output Filters (optional - keeps lines containing any pattern, case-insensitive), e.g.: up, Gigabit, 192.168'
     $lblFilterInfo.Location = New-Object System.Drawing.Point(20, $y)
-    $lblFilterInfo.Size = New-Object System.Drawing.Size(650, 20)
+    $lblFilterInfo.Size = New-Object System.Drawing.Size(650, 36)
     $cmdForm.Controls.Add($lblFilterInfo)
-    $y += 25
+    $y += 40
     $txtFilter = New-Object System.Windows.Forms.TextBox
     $txtFilter.Location = New-Object System.Drawing.Point(20, $y)
-    $txtFilter.Size = New-Object System.Drawing.Size(650, 20)
+    $txtFilter.Size = New-Object System.Drawing.Size(650, 23)
     $txtFilter.Font = New-Object System.Drawing.Font('Consolas', 9)
     $cmdForm.Controls.Add($txtFilter)
     $y += 40
     $btnExecute = New-Object System.Windows.Forms.Button
     $btnExecute.Text = 'Execute Commands'
     $btnExecute.Location = New-Object System.Drawing.Point(20, $y)
-    $btnExecute.Size = New-Object System.Drawing.Size(140, 35)
-    $btnExecute.BackColor = [System.Drawing.Color]::LightGreen
+    $btnExecute.Size = New-Object System.Drawing.Size(150, 34)
+    $btnExecute.Tag = 'Primary'
     $cmdForm.Controls.Add($btnExecute)
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
-    $btnCancel.Location = New-Object System.Drawing.Point(170, $y)
-    $btnCancel.Size = New-Object System.Drawing.Size(100, 35)
+    $btnCancel.Location = New-Object System.Drawing.Point(178, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 34)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $cmdForm.Controls.Add($btnCancel)
     $cmdForm.CancelButton = $btnCancel
+    $cmdForm.ClientSize = New-Object System.Drawing.Size(690, ($y + 54))
+    Set-NetGuiDialogStyle -Form $cmdForm
     $btnExecute.Add_Click({
         if ([string]::IsNullOrWhiteSpace($txtCommand.Text)) {
             [System.Windows.Forms.MessageBox]::Show('Please enter at least one command', 'Validation Error', 'OK', 'Warning') | Out-Null
@@ -3892,7 +4716,7 @@ function Invoke-CommandRunner {
 
         $results = @($allResults | Where-Object { $null -ne $_ })
         if ($useCsv -and $results.Count -gt 0) {
-            $csvPath = Export-OctoCsv -Rows $results -Path (Join-Path $outputFolder "CommandRunner_Summary_$timestamp.csv")
+            $csvPath = Export-NetGuiCsv -Rows $results -Path (Join-Path $outputFolder "CommandRunner_Summary_$timestamp.csv")
             Write-Log -Message "Summary CSV: $csvPath" -Color 'Green' -LogBox $LogBox
         }
         if ($useConcat -and $concat.Length -gt 0) {
@@ -3924,9 +4748,9 @@ function Invoke-CommandRunner {
 function Show-AdminRequiredMessage {
     param([System.Windows.Forms.RichTextBox]$LogBox)
     Write-Log -Message 'Network configuration requires Administrator privileges' -Color 'Red' -LogBox $LogBox
-    Write-Log -Message 'Restart OctoNav with "Run as Administrator" to use this tab (everything else works without it)' -Color 'Yellow' -LogBox $LogBox
+    Write-Log -Message 'Restart NetGUI with "Run as Administrator" to use this tab (everything else works without it)' -Color 'Yellow' -LogBox $LogBox
     [System.Windows.Forms.MessageBox]::Show(
-        "Changing adapter settings requires Administrator privileges.`n`nClose OctoNav and start it with 'Run as Administrator' to use this tab. All other tabs work without it.",
+        "Changing adapter settings requires Administrator privileges.`n`nClose NetGUI and start it with 'Run as Administrator' to use this tab. All other tabs work without it.",
         'Administrator Required', 'OK', 'Warning') | Out-Null
 }
 
@@ -4306,7 +5130,7 @@ function Export-AllEmbeddedResources {
 # END EMBEDDED RESOURCES
 # ============================================
 
-function Export-OctoResources {
+function Export-NetGuiResources {
     <#
     .SYNOPSIS
         Writes the chosen embedded resources to a folder, asking before overwriting.
@@ -4333,10 +5157,11 @@ function Export-OctoResources {
 # APPLICATION STATE
 # ============================================
 
-$script:Settings = Get-OctoNavSettings
+$script:Settings = Get-NetGuiSettings
 $script:CurrentTheme = Get-Theme -ThemeName $script:Settings.Theme
 $script:IsRunningAsAdmin = Test-IsAdministrator
-$script:outputDir = if ($env:OCTONAV_OUTPUT_DIR) { $env:OCTONAV_OUTPUT_DIR }
+$script:outputDir = if ($env:NETGUI_OUTPUT_DIR) { $env:NETGUI_OUTPUT_DIR }
+    elseif ($env:OCTONAV_OUTPUT_DIR) { $env:OCTONAV_OUTPUT_DIR }
     elseif ($script:Settings.DefaultExportPath) { [string]$script:Settings.DefaultExportPath }
     else { 'C:\DNACenter_Reports' }
 $script:AppClosing = $false
@@ -4357,11 +5182,12 @@ $script:dhcpState = $null
 $script:dhcpCacheJob = $null
 $script:allDHCPScopes = @()
 $script:scopeByDisplayName = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-$script:scopeNamesUpper = @()
+$script:scopeFilterKeys = Get-DhcpScopeFilterKeys -Scopes @()
 $script:selectedScopeNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $script:suppressScopeItemCheck = $false
 $script:scopeCacheUpdated = $null
 $script:dhcpRunUsedSelection = $false
+$script:dhcpServerResolved = @{}
 
 # DNA Center tab
 $script:dnaVisibleDevices = [System.Collections.Generic.List[object]]::new()
@@ -4370,20 +5196,22 @@ $script:dnaUpdatingChecks = $false
 
 # Shared fonts (one GDI object each instead of one per control)
 $script:Fonts = @{
-    Normal    = New-Object System.Drawing.Font('Segoe UI', 9)
-    Bold      = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-    Italic    = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Italic)
-    Header    = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-    Title     = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
-    Dashboard = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-    Mono      = New-Object System.Drawing.Font('Consolas', 9)
-    MonoLarge = New-Object System.Drawing.Font('Consolas', 10)
-    Small     = New-Object System.Drawing.Font('Arial', 8, [System.Drawing.FontStyle]::Italic)
-    Tiny      = New-Object System.Drawing.Font('Arial', 7, [System.Drawing.FontStyle]::Italic)
-    ArialBold = New-Object System.Drawing.Font('Arial', 9, [System.Drawing.FontStyle]::Bold)
+    Normal      = New-Object System.Drawing.Font('Segoe UI', 9)
+    Semibold    = New-Object System.Drawing.Font('Segoe UI Semibold', 9)
+    CardTitle   = New-Object System.Drawing.Font('Segoe UI Semibold', 10.5)
+    Nav         = New-Object System.Drawing.Font('Segoe UI', 10)
+    NavSelected = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+    StatValue   = New-Object System.Drawing.Font('Segoe UI Semibold', 18)
+    Body        = New-Object System.Drawing.Font('Segoe UI', 10)
+    HelpTitle   = New-Object System.Drawing.Font('Segoe UI Semibold', 16)
+    HelpHeading = New-Object System.Drawing.Font('Segoe UI Semibold', 12.5)
+    HelpLabel   = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+    Spacer      = New-Object System.Drawing.Font('Segoe UI', 5)
+    Mono        = New-Object System.Drawing.Font('Consolas', 9)
+    MonoLarge   = New-Object System.Drawing.Font('Consolas', 10)
 }
 
-function New-OctoControl {
+function New-NetGuiControl {
     <#
     .SYNOPSIS
         Creates a WinForms control: -Bounds x,y[,w,h], ordered -Props, optional -Parent.
@@ -4395,6 +5223,8 @@ function New-OctoControl {
         $Parent
     )
     $c = New-Object -TypeName ('System.Windows.Forms.' + $Type)
+    # Buttons are recoloured whenever they are enabled or disabled
+    if ($Type -eq 'Button') { $c.Add_EnabledChanged({ Set-NetGuiButtonStyle -Button $this }) }
     if ($Bounds) {
         $c.Location = New-Object System.Drawing.Point($Bounds[0], $Bounds[1])
         if ($Bounds.Count -ge 4) { $c.Size = New-Object System.Drawing.Size($Bounds[2], $Bounds[3]) }
@@ -4404,8 +5234,41 @@ function New-OctoControl {
     return $c
 }
 
-function Show-OctoMessage {
-    param([string]$Text, [string]$Title = 'OctoNav', [string]$Icon = 'Information', [string]$Buttons = 'OK')
+function New-NetGuiCard {
+    <#
+    .SYNOPSIS
+        A bordered panel with a title - the building block of every tab.
+        Content starts at y = 48 (the title row is 12..40).
+    #>
+    param([int[]]$Bounds, [string]$Title, $Parent, [string]$Anchor = 'Top,Left')
+    $card = New-NetGuiControl Panel $Bounds ([ordered]@{ Tag = 'Card'; Anchor = $Anchor }) $Parent
+    $card.Add_Paint($script:NetGuiBorderPainter)
+    $card.Add_Resize({ $this.Invalidate() })
+    if ($Title) { [void](New-NetGuiControl Label @(15, 15) ([ordered]@{ Text = $Title; AutoSize = $true; Font = $script:Fonts.CardTitle; Tag = 'CardTitle' }) $card) }
+    return $card
+}
+
+function New-NetGuiFrame {
+    # Bordered area with a little padding for one docked text control (logs, editor)
+    param([int[]]$Bounds, $Parent, [string]$Anchor = 'Top,Bottom,Left,Right')
+    $frame = New-NetGuiControl Panel $Bounds ([ordered]@{ Tag = 'LogFrame'; Anchor = $Anchor; Padding = (New-Object System.Windows.Forms.Padding(8, 6, 1, 1)) }) $Parent
+    $frame.Add_Paint($script:NetGuiBorderPainter)
+    $frame.Add_Resize({ $this.Invalidate() })
+    return $frame
+}
+
+function New-NetGuiLogBox {
+    # Read-only log inside a frame
+    param([int[]]$Bounds, $Parent, [string]$Anchor = 'Top,Bottom,Left,Right', [bool]$WordWrap = $true)
+    $frame = New-NetGuiFrame -Bounds $Bounds -Parent $Parent -Anchor $Anchor
+    return New-NetGuiControl RichTextBox $null ([ordered]@{
+        Dock = 'Fill'; BorderStyle = 'None'; Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'
+        WordWrap = $WordWrap; HideSelection = $false; DetectUrls = $false; Multiline = $true
+    }) $frame
+}
+
+function Show-NetGuiMessage {
+    param([string]$Text, [string]$Title = 'NetGUI', [string]$Icon = 'Information', [string]$Buttons = 'OK')
     return [System.Windows.Forms.MessageBox]::Show($Text, $Title, $Buttons, $Icon)
 }
 
@@ -4416,26 +5279,26 @@ function Show-OctoMessage {
 try {
     if ($script:RequireStartupPassword) {
         if (Test-StartupPasswordExists) {
-            Write-SecurityAudit -Level Info -Event 'OctoNav startup' -Details 'Password authentication required'
+            Write-SecurityAudit -Level Info -Event 'NetGUI startup' -Details 'Password authentication required'
             if (-not (Show-StartupPasswordDialog)) {
                 Write-SecurityAudit -Level Warning -Event 'Authentication failed or cancelled' -Details 'Application exit'
                 exit 0
             }
-            Write-SecurityAudit -Level Success -Event 'Authentication successful' -Details 'OctoNav starting'
+            Write-SecurityAudit -Level Success -Event 'Authentication successful' -Details 'NetGUI starting'
         } else {
             Write-SecurityAudit -Level Info -Event 'First run detected' -Details 'Setting up startup password'
             if (-not (Show-StartupPasswordDialog -IsFirstRun)) {
-                Show-OctoMessage -Text "Startup password is required for security.`n`nOctoNav will now exit." -Title 'Password Required' -Icon Warning | Out-Null
+                Show-NetGuiMessage -Text "Startup password is required for security.`n`nNetGUI will now exit." -Title 'Password Required' -Icon Warning | Out-Null
                 Write-SecurityAudit -Level Warning -Event 'First run - password not set' -Details 'Application exit'
                 exit 0
             }
-            Write-SecurityAudit -Level Success -Event 'First run - password configured' -Details 'OctoNav starting'
+            Write-SecurityAudit -Level Success -Event 'First run - password configured' -Details 'NetGUI starting'
         }
     } else {
-        Write-SecurityAudit -Level Info -Event 'OctoNav startup' -Details 'Team mode - no startup password'
+        Write-SecurityAudit -Level Info -Event 'NetGUI startup' -Details 'Team mode - no startup password'
     }
 } catch {
-    Show-OctoMessage -Text "Security initialization failed:`n`n$($_.Exception.Message)`n`nOctoNav will now exit." -Title 'Security Error' -Icon Error | Out-Null
+    Show-NetGuiMessage -Text "Security initialization failed:`n`n$($_.Exception.Message)`n`nNetGUI will now exit." -Title 'Security Error' -Icon Error | Out-Null
     Write-SecurityAudit -Level Critical -Event 'Security initialization failed' -Details $_.Exception.Message
     exit 1
 }
@@ -4446,8 +5309,8 @@ try {
 
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.SuspendLayout()
-$mainForm.Text = 'OctoNav - Network Management Tool'
-$windowWidth = 1200; $windowHeight = 800
+$mainForm.Text = 'NetGUI - Network Management Tool'
+$windowWidth = 1245; $windowHeight = 800
 try {
     if ($script:Settings.WindowSize.Width -ge 800) { $windowWidth = [int]$script:Settings.WindowSize.Width }
     if ($script:Settings.WindowSize.Height -ge 500) { $windowHeight = [int]$script:Settings.WindowSize.Height }
@@ -4455,7 +5318,7 @@ try {
 $mainForm.Size = New-Object System.Drawing.Size($windowWidth, $windowHeight)
 $mainForm.StartPosition = 'CenterScreen'
 $mainForm.FormBorderStyle = 'Sizable'
-$mainForm.MinimumSize = New-Object System.Drawing.Size(1245, 600)
+$mainForm.MinimumSize = New-Object System.Drawing.Size(1000, 600)
 $mainForm.Font = $script:Fonts.Normal
 if ($script:Settings.WindowMaximized) { $mainForm.WindowState = 'Maximized' }
 
@@ -4464,6 +5327,7 @@ if ($script:Settings.WindowMaximized) { $mainForm.WindowState = 'Maximized' }
 # ============================================
 
 $menuStrip = New-Object System.Windows.Forms.MenuStrip
+$menuStrip.Padding = New-Object System.Windows.Forms.Padding(6, 3, 0, 1)
 
 $menuFile = New-Object System.Windows.Forms.ToolStripMenuItem('&File')
 $menuFileExit = New-Object System.Windows.Forms.ToolStripMenuItem('E&xit')
@@ -4480,14 +5344,14 @@ $menuToolsRefresh.Add_Click({ Update-Dashboard -IncludeAdapters })
 $menuToolsExportResources = New-Object System.Windows.Forms.ToolStripMenuItem('Export &Resources...')
 $menuToolsExportResources.Add_Click({
     if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
-        Show-OctoMessage -Text "No embedded resources found in this build.`n`nTo embed resources:`n1. Place files in the 'resources' folder`n2. Run Package-Resources.ps1" -Title 'No Resources' | Out-Null
+        Show-NetGuiMessage -Text "No embedded resources found in this build.`n`nTo embed resources:`n1. Place files in the 'resources' folder`n2. Run Package-Resources.ps1" -Title 'No Resources' | Out-Null
         return
     }
     $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
     $folderBrowser.Description = 'Select folder to export resources to'
     if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        try { Export-OctoResources -Names @($script:EmbeddedResources.Keys) -Folder $folderBrowser.SelectedPath }
-        catch { Show-OctoMessage -Text "Error exporting resources:`n`n$($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null }
+        try { Export-NetGuiResources -Names @($script:EmbeddedResources.Keys) -Folder $folderBrowser.SelectedPath }
+        catch { Show-NetGuiMessage -Text "Error exporting resources:`n`n$($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null }
     }
 })
 [void]$menuTools.DropDownItems.Add($menuToolsExportResources)
@@ -4496,77 +5360,143 @@ $menuView = New-Object System.Windows.Forms.ToolStripMenuItem('&View')
 $menuViewTheme = New-Object System.Windows.Forms.ToolStripMenuItem('Toggle &Theme')
 $menuViewTheme.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::T
 $menuViewTheme.Add_Click({
-    $newTheme = if ($script:CurrentTheme.Name -eq 'Light') { 'Dark' } else { 'Light' }
+    $previous = $script:CurrentTheme
+    $newTheme = if ($previous.Name -eq 'Light') { 'Dark' } else { 'Light' }
     $script:CurrentTheme = Get-Theme -ThemeName $newTheme
     $script:Settings.Theme = $newTheme
-    [void](Save-OctoNavSettings -Settings $script:Settings)
-    $mainForm.SuspendLayout()
-    try { Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme } finally { $mainForm.ResumeLayout() }
+    [void](Save-NetGuiSettings -Settings $script:Settings)
+    Set-NetGuiTheme
+    foreach ($log in @($netLogBox, $dhcpLogBox, $dnaLogBox)) { Convert-NetGuiLogColors -LogBox $log -From $previous -To $script:CurrentTheme }
 })
 [void]$menuView.DropDownItems.Add($menuViewTheme)
+[void]$menuView.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+# Menu shortcuts work wherever the focus is (Ctrl+Tab never reaches a form's KeyDown)
+$menuViewNextTab = New-Object System.Windows.Forms.ToolStripMenuItem('&Next Tab')
+$menuViewNextTab.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::Tab
+$menuViewNextTab.Add_Click({ Select-NetGuiPage -Index (($script:NetGuiPageIndex + 1) % $script:NetGuiPages.Count) })
+[void]$menuView.DropDownItems.Add($menuViewNextTab)
+$menuViewPreviousTab = New-Object System.Windows.Forms.ToolStripMenuItem('&Previous Tab')
+$menuViewPreviousTab.ShortcutKeys = [System.Windows.Forms.Keys]::Control -bor [System.Windows.Forms.Keys]::Shift -bor [System.Windows.Forms.Keys]::Tab
+$menuViewPreviousTab.Add_Click({ Select-NetGuiPage -Index (($script:NetGuiPageIndex + $script:NetGuiPages.Count - 1) % $script:NetGuiPages.Count) })
+[void]$menuView.DropDownItems.Add($menuViewPreviousTab)
 
 $menuHelp = New-Object System.Windows.Forms.ToolStripMenuItem('&Help')
 $menuHelpAbout = New-Object System.Windows.Forms.ToolStripMenuItem('&About')
 $menuHelpAbout.Add_Click({
-    $about = "OctoNav`n`n" +
+    $about = "NetGUI`n`n" +
         "- Dashboard`n- Network Configuration (requires admin)`n- DHCP Statistics (failover-aware)`n" +
         "- DNA Center API functions`n- File Compare, Port Config, RDOX Exports`n`n" +
         "Settings folder: $script:DataDir"
-    Show-OctoMessage -Text $about -Title 'About OctoNav' | Out-Null
+    Show-NetGuiMessage -Text $about -Title 'About NetGUI' | Out-Null
 })
 [void]$menuHelp.DropDownItems.Add($menuHelpAbout)
 
 $menuStrip.Items.AddRange([System.Windows.Forms.ToolStripItem[]]@($menuFile, $menuTools, $menuView, $menuHelp))
+
+# ============================================
+# NAVIGATION BAR AND PAGES
+# ============================================
+# Every page is laid out for PageSize: a smaller window scrolls, a larger one stretches
+$script:PageSize = New-Object System.Drawing.Size(1180, 610)
+$script:NetGuiPages = [System.Collections.Generic.List[object]]::new()
+$script:NetGuiNavItems = [System.Collections.Generic.List[object]]::new()
+$script:NetGuiPageIndex = -1
+
+$script:navBar = New-NetGuiControl Panel $null ([ordered]@{ Dock = 'Top'; Height = 42; Tag = 'Header' })
+$script:navBar.Add_Paint($script:NetGuiBottomLinePainter)
+$script:navBar.Add_Resize({ $this.Invalidate() })
+$script:navIndicator = New-NetGuiControl Panel @(0, 39, 10, 3) ([ordered]@{ Tag = 'NavIndicator' }) $script:navBar
+# Pages are filled while the host is suspended, so their controls are anchored to PageSize
+$script:pageHost = New-NetGuiControl Panel $null ([ordered]@{ Dock = 'Fill'; Tag = 'Page' })
+$script:pageHost.SuspendLayout()
+# Docking order (see Show): status bar, menu, navigation bar, then pages fill the rest
+$mainForm.Controls.Add($script:pageHost)
+$mainForm.Controls.Add($script:navBar)
 $mainForm.Controls.Add($menuStrip)
 $mainForm.MainMenuStrip = $menuStrip
 
-# ============================================
-# CREATE TAB CONTROL
-# ============================================
+function New-NetGuiTab {
+    <#
+    .SYNOPSIS
+        Adds a page and its entry in the navigation bar.
+    #>
+    param([string]$Text)
+    $page = New-Object System.Windows.Forms.Panel
+    $page.Text = $Text
+    $page.Tag = 'Page'
+    $page.Size = $script:PageSize
+    $page.AutoScroll = $true
+    $page.AutoScrollMinSize = $script:PageSize
+    $page.Dock = 'Fill'
+    $page.Visible = $false
+    $script:pageHost.Controls.Add($page)
+    $script:NetGuiPages.Add($page)
 
-$tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(16, 30)
-$tabControl.Size = New-Object System.Drawing.Size(($mainForm.ClientSize.Width - 32), ($mainForm.ClientSize.Height - 70))
-$tabControl.Anchor = 'Top,Bottom,Left,Right'
-$mainForm.Controls.Add($tabControl)
+    $x = 8
+    if ($script:NetGuiNavItems.Count -gt 0) { $x = $script:NetGuiNavItems[$script:NetGuiNavItems.Count - 1].Right }
+    $width = [System.Windows.Forms.TextRenderer]::MeasureText($Text, $script:Fonts.NavSelected).Width + 28
+    $navItem = New-NetGuiControl Label @($x, 0, $width, 39) ([ordered]@{ Text = $Text; TextAlign = 'MiddleCenter'; Font = $script:Fonts.Nav; Tag = 'NavItem'; Cursor = [System.Windows.Forms.Cursors]::Hand }) $script:navBar
+    $navItem.Add_Click({ Select-NetGuiPage -Index $script:NetGuiNavItems.IndexOf($this) })
+    $navItem.Add_MouseEnter({ if ($script:NetGuiNavItems.IndexOf($this) -ne $script:NetGuiPageIndex) { $this.ForeColor = $script:CurrentTheme.NavHover } })
+    $navItem.Add_MouseLeave({ Update-NetGuiNav })
+    $script:NetGuiNavItems.Add($navItem)
+    return $page
+}
 
-function New-OctoTab {
-    param([string]$Text, [string]$Icon, [int]$MinWidth, [int]$MinHeight)
-    $tab = New-Object System.Windows.Forms.TabPage
-    $tab.Text = $Text
-    $tab.AutoScroll = $true
-    if ($MinWidth) { $tab.AutoScrollMinSize = New-Object System.Drawing.Size($MinWidth, $MinHeight) }
-    $tab.Padding = New-Object System.Windows.Forms.Padding(5)
-    Add-IconToTab -Tab $tab -Icon $Icon
-    $tabControl.Controls.Add($tab)
-    return $tab
+function Select-NetGuiPage {
+    param([int]$Index)
+    if ($Index -lt 0 -or $Index -ge $script:NetGuiPages.Count) { return }
+    # Show the new page before hiding the old one (no flash of the empty host)
+    $script:NetGuiPages[$Index].Visible = $true
+    for ($i = 0; $i -lt $script:NetGuiPages.Count; $i++) { if ($i -ne $Index) { $script:NetGuiPages[$i].Visible = $false } }
+    $script:NetGuiPageIndex = $Index
+    Update-NetGuiNav
+}
+
+function Update-NetGuiNav {
+    # Selected entry: accent colour, semibold, underline
+    for ($i = 0; $i -lt $script:NetGuiNavItems.Count; $i++) {
+        $navItem = $script:NetGuiNavItems[$i]
+        if ($i -eq $script:NetGuiPageIndex) {
+            $navItem.ForeColor = $script:CurrentTheme.NavSelected
+            $navItem.Font = $script:Fonts.NavSelected
+            $script:navIndicator.Location = New-Object System.Drawing.Point(($navItem.Left + 12), 39)
+            $script:navIndicator.Size = New-Object System.Drawing.Size([Math]::Max(0, $navItem.Width - 24), 3)
+        } else {
+            $navItem.ForeColor = $script:CurrentTheme.NavText
+            $navItem.Font = $script:Fonts.Nav
+        }
+    }
 }
 
 # ============================================
 # TAB: DASHBOARD
 # ============================================
 
-$tab0 = New-OctoTab -Text 'Dashboard' -Icon '=' -MinWidth 980 -MinHeight 650
-[void](New-OctoControl Label @(15, 15, 900, 30) ([ordered]@{ Text = 'OctoNav System Dashboard'; Font = $script:Fonts.Title; Anchor = 'Top,Left,Right' }) $tab0)
-$healthGroupBox = New-OctoControl GroupBox @(15, 55, 920, 130) ([ordered]@{ Text = 'System Health'; Anchor = 'Top,Left,Right' }) $tab0
-$script:adminPanel = New-DashboardPanel -Title 'Admin Status' -Value '...' -X 20 -Y 25
-$script:networkPanel = New-DashboardPanel -Title 'Network Adapters' -Value '...' -X 255 -Y 25
-$script:dnaPanel = New-DashboardPanel -Title 'DNA Center' -Value 'Not Connected' -X 490 -Y 25
-$script:dhcpPanel = New-DashboardPanel -Title 'DHCP Servers' -Value '...' -X 725 -Y 25
-foreach ($p in @($script:adminPanel, $script:networkPanel, $script:dnaPanel, $script:dhcpPanel)) { $healthGroupBox.Controls.Add($p.Panel) }
-$recentActivityGroupBox = New-OctoControl GroupBox @(15, 195, 920, 390) ([ordered]@{ Text = 'Recent Activity'; Anchor = 'Top,Bottom,Left,Right' }) $tab0
-$script:lstRecentActivity = New-OctoControl ListBox @(15, 25, 885, 350) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Bottom,Left,Right' }) $recentActivityGroupBox
+$tab0 = New-NetGuiTab -Text 'Dashboard'
+# Four equal status cards that stretch with the window
+$statsTable = New-NetGuiControl TableLayoutPanel @(10, 16, 1160, 100) ([ordered]@{ ColumnCount = 4; RowCount = 1; Anchor = 'Top,Left,Right' }) $tab0
+foreach ($i in 1..4) { [void]$statsTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+[void]$statsTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$script:adminPanel = New-DashboardPanel -Title 'Admin Status' -Value '...'
+$script:networkPanel = New-DashboardPanel -Title 'Network Adapters' -Value '...'
+$script:dnaPanel = New-DashboardPanel -Title 'DNA Center' -Value 'Not Connected'
+$script:dhcpPanel = New-DashboardPanel -Title 'DHCP Servers' -Value '...'
+$column = 0
+foreach ($p in @($script:adminPanel, $script:networkPanel, $script:dnaPanel, $script:dhcpPanel)) { $statsTable.Controls.Add($p.Panel, $column, 0); $column++ }
+$activityCard = New-NetGuiCard -Bounds @(16, 128, 1148, 466) -Title 'Recent Activity' -Parent $tab0 -Anchor 'Top,Bottom,Left,Right'
+$script:lstRecentActivity = New-NetGuiControl ListBox @(16, 48, 1116, 402) ([ordered]@{ Font = $script:Fonts.Body; BorderStyle = 'None'; IntegralHeight = $false; Anchor = 'Top,Bottom,Left,Right' }) $activityCard
 
 function Update-Dashboard {
     param([switch]$IncludeAdapters)
     try {
-        if ($script:IsRunningAsAdmin) { Set-DashboardValue -Panel $script:adminPanel -Value 'Active' -Color ([System.Drawing.Color]::Green) }
-        else { Set-DashboardValue -Panel $script:adminPanel -Value 'Standard' -Color ([System.Drawing.Color]::Orange) }
+        if ($script:IsRunningAsAdmin) { Set-DashboardValue -Panel $script:adminPanel -Value 'Active' -Tone Success }
+        else { Set-DashboardValue -Panel $script:adminPanel -Value 'Standard' -Tone Warning }
         if ($IncludeAdapters) {
             Set-DashboardValue -Panel $script:networkPanel -Value ([string]@(Get-NetAdapter -ErrorAction SilentlyContinue).Count)
         }
-        if (Test-DNACTokenValid) { Set-DashboardValue -Panel $script:dnaPanel -Value 'Connected' -Color ([System.Drawing.Color]::Green) }
-        else { Set-DashboardValue -Panel $script:dnaPanel -Value 'Disconnected' -Color ([System.Drawing.Color]::Gray) }
+        if (Test-DNACTokenValid) { Set-DashboardValue -Panel $script:dnaPanel -Value 'Connected' -Tone Success }
+        else { Set-DashboardValue -Panel $script:dnaPanel -Value 'Disconnected' -Tone Muted }
         Set-DashboardValue -Panel $script:dhcpPanel -Value ([string]$script:lstDHCPServers.Items.Count)
         $script:lstRecentActivity.BeginUpdate()
         try {
@@ -4582,31 +5512,25 @@ function Update-Dashboard {
 # TAB: NETWORK CONFIGURATION
 # ============================================
 
-$tab1 = New-OctoTab -Text 'Network Configuration' -Icon '~' -MinWidth 980 -MinHeight 680
-$lblAdminStatus = New-OctoControl Label @(10, 10, 940, 25) ([ordered]@{ Font = $script:Fonts.Bold; TextAlign = 'MiddleLeft'; Anchor = 'Top,Left,Right' }) $tab1
-if ($script:IsRunningAsAdmin) {
-    $lblAdminStatus.Text = '[OK] Administrator Privileges: ACTIVE - Network configuration enabled'
-    $lblAdminStatus.ForeColor = [System.Drawing.Color]::Green
-    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(230, 255, 230)
-} else {
-    $lblAdminStatus.Text = "[i] Running as a standard user - this tab needs 'Run as Administrator'. All other tabs work normally."
-    $lblAdminStatus.ForeColor = [System.Drawing.Color]::DarkOrange
-    $lblAdminStatus.BackColor = [System.Drawing.Color]::FromArgb(255, 245, 230)
-}
-$netGroupBox = New-OctoControl GroupBox @(10, 40, 940, 250) ([ordered]@{ Text = 'Network Adapter Configuration'; Anchor = 'Top,Left,Right' }) $tab1
-$btnFindNetwork = New-OctoControl Button @(20, 30, 200, 30) ([ordered]@{ Text = 'Find Unidentified Network' }) $netGroupBox
-[void](New-OctoControl Label @(20, 80, 120, 20) ([ordered]@{ Text = 'New IP Address:' }) $netGroupBox)
-$txtIPAddress = New-OctoControl TextBox @(150, 78, 200, 20) ([ordered]@{ Text = '192.168.1.101' }) $netGroupBox
-[void](New-OctoControl Label @(20, 120, 120, 20) ([ordered]@{ Text = 'Gateway:' }) $netGroupBox)
-$txtGateway = New-OctoControl TextBox @(150, 118, 200, 20) ([ordered]@{ Text = '192.168.1.100' }) $netGroupBox
-[void](New-OctoControl Label @(20, 160, 120, 20) ([ordered]@{ Text = 'Prefix Length:' }) $netGroupBox)
-$txtPrefix = New-OctoControl TextBox @(150, 158, 200, 20) ([ordered]@{ Text = '24' }) $netGroupBox
-$btnApplyConfig = New-OctoControl Button @(20, 200, 200, 30) ([ordered]@{ Text = 'Apply Configuration' }) $netGroupBox
-$btnRestoreDefaults = New-OctoControl Button @(240, 200, 200, 30) ([ordered]@{ Text = 'Restore Defaults' }) $netGroupBox
-$netLogBox = New-OctoControl RichTextBox @(10, 300, 940, 310) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $false
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Bottom,Left,Right'
-}) $tab1
+$tab1 = New-NetGuiTab -Text 'Network Configuration'
+$adminTone = if ($script:IsRunningAsAdmin) { 'InfoSuccess' } else { 'InfoWarning' }
+$adminBar = New-NetGuiControl Panel @(16, 16, 1148, 40) ([ordered]@{ Tag = $adminTone; Anchor = 'Top,Left,Right' }) $tab1
+$lblAdminStatus = New-NetGuiControl Label $null ([ordered]@{ Dock = 'Fill'; TextAlign = 'MiddleLeft'; Font = $script:Fonts.Semibold; Tag = $adminTone; Padding = (New-Object System.Windows.Forms.Padding(12, 0, 12, 0)) }) $adminBar
+$lblAdminStatus.Text = if ($script:IsRunningAsAdmin) { 'Running as Administrator - network configuration is enabled' }
+    else { "Running as a standard user - this tab needs 'Run as Administrator'. All other tabs work normally." }
+$netCard = New-NetGuiCard -Bounds @(16, 68, 380, 316) -Title 'Adapter Configuration' -Parent $tab1
+$btnFindNetwork = New-NetGuiControl Button @(16, 48, 348, 32) ([ordered]@{ Text = 'Find Unidentified Network' }) $netCard
+[void](New-NetGuiControl Label @(16, 101, 120, 20) ([ordered]@{ Text = 'New IP Address' }) $netCard)
+$txtIPAddress = New-NetGuiControl TextBox @(140, 98, 224, 23) ([ordered]@{ Text = '192.168.1.101' }) $netCard
+[void](New-NetGuiControl Label @(16, 135, 120, 20) ([ordered]@{ Text = 'Gateway' }) $netCard)
+$txtGateway = New-NetGuiControl TextBox @(140, 132, 224, 23) ([ordered]@{ Text = '192.168.1.100' }) $netCard
+[void](New-NetGuiControl Label @(16, 169, 120, 20) ([ordered]@{ Text = 'Prefix Length' }) $netCard)
+$txtPrefix = New-NetGuiControl TextBox @(140, 166, 60, 23) ([ordered]@{ Text = '24' }) $netCard
+$btnApplyConfig = New-NetGuiControl Button @(16, 212, 170, 34) ([ordered]@{ Text = 'Apply Configuration'; Tag = 'Primary' }) $netCard
+$btnRestoreDefaults = New-NetGuiControl Button @(194, 212, 170, 34) ([ordered]@{ Text = 'Restore Defaults' }) $netCard
+[void](New-NetGuiControl Label @(16, 258, 348, 50) ([ordered]@{ Text = 'Apply sets this address on the unidentified (169.254.x.x) adapter and starts the TFTP server. Restore Defaults switches it back to DHCP.'; Tag = 'Muted' }) $netCard)
+$netLogCard = New-NetGuiCard -Bounds @(408, 68, 756, 526) -Title 'Log' -Parent $tab1 -Anchor 'Top,Bottom,Left,Right'
+$netLogBox = New-NetGuiLogBox -Bounds @(16, 48, 724, 462) -Parent $netLogCard -WordWrap $false
 
 function Set-TargetAdapter {
     param($NetworkInfo)
@@ -4639,17 +5563,17 @@ $btnApplyConfig.Add_Click({
         if (-not $script:IsRunningAsAdmin) { Show-AdminRequiredMessage -LogBox $netLogBox; return }
         if (-not (Test-IPAddress -IPAddress $ip)) {
             Write-Log -Message 'Invalid IP address format. Please enter a valid IPv4 address (e.g., 192.168.1.100)' -Color 'Error' -LogBox $netLogBox
-            Show-OctoMessage -Text 'Invalid IP address format!' -Title 'Validation Error' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text 'Invalid IP address format!' -Title 'Validation Error' -Icon Warning | Out-Null
             return
         }
         if (-not (Test-IPAddress -IPAddress $gateway)) {
             Write-Log -Message 'Invalid gateway format. Please enter a valid IPv4 address' -Color 'Error' -LogBox $netLogBox
-            Show-OctoMessage -Text 'Invalid gateway format!' -Title 'Validation Error' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text 'Invalid gateway format!' -Title 'Validation Error' -Icon Warning | Out-Null
             return
         }
         if (-not (Test-PrefixLength -Prefix $prefixText)) {
             Write-Log -Message 'Invalid prefix length. Must be a whole number between 0 and 32' -Color 'Error' -LogBox $netLogBox
-            Show-OctoMessage -Text 'Invalid prefix length! Must be between 0 and 32' -Title 'Validation Error' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text 'Invalid prefix length! Must be between 0 and 32' -Title 'Validation Error' -Icon Warning | Out-Null
             return
         }
         if (-not $script:TargetAdapter) {
@@ -4657,7 +5581,7 @@ $btnApplyConfig.Add_Click({
             $networkInfo = Find-UnidentifiedNetwork -LogBox $netLogBox
             if (-not $networkInfo) {
                 Write-Log -Message 'No unidentified network found. Cannot apply configuration.' -Color 'Error' -LogBox $netLogBox
-                Show-OctoMessage -Text 'No unidentified network found. Please ensure the network adapter is connected and has an APIPA address (169.254.x.x).' -Title 'No Network Found' -Icon Warning | Out-Null
+                Show-NetGuiMessage -Text 'No unidentified network found. Please ensure the network adapter is connected and has an APIPA address (169.254.x.x).' -Title 'No Network Found' -Icon Warning | Out-Null
                 return
             }
             Set-TargetAdapter -NetworkInfo $networkInfo
@@ -4684,18 +5608,18 @@ $btnApplyConfig.Add_Click({
             } else {
                 Write-Log -Message 'RunStandAloneMT.bat not found - TFTP server not started' -Color 'Warning' -LogBox $netLogBox
             }
-            Show-OctoMessage -Text 'Network configuration applied successfully!' -Title 'Success' | Out-Null
+            Show-NetGuiMessage -Text 'Network configuration applied successfully!' -Title 'Success' | Out-Null
         }
     } catch {
         Write-Log -Message "Error: $($_.Exception.Message)" -Color 'Error' -LogBox $netLogBox
-        Show-OctoMessage -Text "Error applying configuration: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error applying configuration: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     }
 })
 
 $btnRestoreDefaults.Add_Click({
     try {
         if (-not $script:IsRunningAsAdmin) { Show-AdminRequiredMessage -LogBox $netLogBox; return }
-        $answer = Show-OctoMessage -Text 'This will stop the TFTP server (if running), restore the network adapter to DHCP, and remove the static IP configuration. Continue?' -Title 'Confirm Restore Defaults' -Icon Question -Buttons YesNo
+        $answer = Show-NetGuiMessage -Text 'This will stop the TFTP server (if running), restore the network adapter to DHCP, and remove the static IP configuration. Continue?' -Title 'Confirm Restore Defaults' -Icon Question -Buttons YesNo
         if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
         if ($script:BatchProcess -and -not $script:BatchProcess.HasExited) {
             Write-Log -Message 'Stopping TFTP server...' -Color 'Yellow' -LogBox $netLogBox
@@ -4708,7 +5632,7 @@ $btnRestoreDefaults.Add_Click({
         }
         $script:BatchProcess = $null
         if (Restore-NetworkDefaults -LogBox $netLogBox) {
-            Show-OctoMessage -Text 'Network defaults restored!' -Title 'Success' | Out-Null
+            Show-NetGuiMessage -Text 'Network defaults restored!' -Title 'Success' | Out-Null
         }
         $script:TargetAdapter = $null
         $script:OriginalConfig = $null
@@ -4716,7 +5640,7 @@ $btnRestoreDefaults.Add_Click({
         $script:NewGateway = $null
     } catch {
         Write-Log -Message "Error: $($_.Exception.Message)" -Color 'Error' -LogBox $netLogBox
-        Show-OctoMessage -Text "Error restoring defaults: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error restoring defaults: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     }
 })
 
@@ -4724,69 +5648,65 @@ $btnRestoreDefaults.Add_Click({
 # TAB: DHCP STATISTICS
 # ============================================
 
-$tab2 = New-OctoTab -Text 'DHCP Statistics' -Icon '=' -MinWidth 1280 -MinHeight 600
+$tab2 = New-NetGuiTab -Text 'DHCP Statistics'
 $toolTip = New-Object System.Windows.Forms.ToolTip
 $toolTip.AutoPopDelay = 15000
 
-[void](New-OctoControl Label @(15, 15, 900, 20) ([ordered]@{ Text = 'Collect and analyze DHCP scope statistics from domain DHCP servers'; Font = $script:Fonts.Italic; ForeColor = [System.Drawing.Color]::DarkBlue }) $tab2)
+# --- Servers (left column)
+$dhcpServerCard = New-NetGuiCard -Bounds @(16, 16, 700, 200) -Title 'DHCP Servers' -Parent $tab2
+$script:lblLastRefresh = New-NetGuiControl Label @(140, 19, 380, 20) ([ordered]@{ Text = 'Last refreshed: Never'; Tag = 'Muted' }) $dhcpServerCard
+$btnRefreshDHCPServers = New-NetGuiControl Button @(534, 12, 150, 28) ([ordered]@{ Text = 'Refresh Server List' }) $dhcpServerCard
+$script:lstDHCPServers = New-NetGuiControl CheckedListBox @(16, 50, 420, 104) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false }) $dhcpServerCard
+$btnSelectAll = New-NetGuiControl Button @(448, 50, 114, 28) ([ordered]@{ Text = 'Select All' }) $dhcpServerCard
+$btnSelectNone = New-NetGuiControl Button @(570, 50, 114, 28) ([ordered]@{ Text = 'Select None' }) $dhcpServerCard
+[void](New-NetGuiControl Label @(448, 91, 236, 18) ([ordered]@{ Text = 'Or enter names (comma-separated)' }) $dhcpServerCard)
+$txtSpecificServers = New-NetGuiControl TextBox @(448, 111, 236, 23) ([ordered]@{ MaxLength = 1000 }) $dhcpServerCard
+[void](New-NetGuiControl Label @(16, 166, 668, 20) ([ordered]@{ Text = 'Nothing selected or entered = all DHCP servers in Active Directory. The server list is cached.'; Tag = 'Muted' }) $dhcpServerCard)
 
-# --- Server selection
-$dhcpServerGroupBox = New-OctoControl GroupBox @(10, 40, 920, 170) ([ordered]@{ Text = 'Server Selection'; Anchor = 'Top,Left,Right' }) $tab2
-[void](New-OctoControl Label @(15, 20, 350, 20) ([ordered]@{ Text = 'Select DHCP servers to query (check all that apply):'; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpServerGroupBox)
-$btnRefreshDHCPServers = New-OctoControl Button @(370, 17, 150, 25) ([ordered]@{ Text = 'Refresh Server List' }) $dhcpServerGroupBox
-$script:lblLastRefresh = New-OctoControl Label @(530, 21, 380, 20) ([ordered]@{ Text = 'Last refreshed: Never'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpServerGroupBox
-$script:lstDHCPServers = New-OctoControl CheckedListBox @(15, 45, 450, 95) ([ordered]@{ CheckOnClick = $true }) $dhcpServerGroupBox
-$btnSelectAll = New-OctoControl Button @(480, 45, 100, 25) ([ordered]@{ Text = 'Select All' }) $dhcpServerGroupBox
-$btnSelectNone = New-OctoControl Button @(480, 75, 100, 25) ([ordered]@{ Text = 'Select None' }) $dhcpServerGroupBox
-[void](New-OctoControl Label @(590, 72, 250, 20) ([ordered]@{ Text = 'Or enter manually (comma-separated):'; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpServerGroupBox)
-$txtSpecificServers = New-OctoControl TextBox @(590, 95, 320, 20) ([ordered]@{ MaxLength = 1000 }) $dhcpServerGroupBox
-[void](New-OctoControl Label @(15, 148, 900, 20) ([ordered]@{ Text = 'Servers are cached from Active Directory. If no servers are selected or entered, all domain DHCP servers are queried.'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpServerGroupBox)
+# --- Scopes (left column, grows with the window)
+$dhcpScopeCard = New-NetGuiCard -Bounds @(16, 228, 700, 314) -Title 'Scopes (Optional)' -Parent $tab2 -Anchor 'Top,Bottom,Left'
+$script:lblScopeCacheStatus = New-NetGuiControl Label @(162, 19, 380, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Tag = 'Muted' }) $dhcpScopeCard
+$script:btnRefreshScopeCache = New-NetGuiControl Button @(554, 12, 130, 28) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeCard
+[void](New-NetGuiControl Label @(16, 55, 40, 20) ([ordered]@{ Text = 'Filter' }) $dhcpScopeCard)
+$script:ScopeFilterPlaceholder = 'Name, ID or subnet, e.g., SITE1, 10.20.0.0/22'
+$script:PrefixFilterPlaceholder = 'e.g., ZA or 10.20'
+$script:txtScopeListFilter = New-NetGuiControl TextBox @(60, 52, 290, 23) ([ordered]@{ MaxLength = 500; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeCard
+[void](New-NetGuiControl Label @(366, 55, 40, 20) ([ordered]@{ Text = 'Prefix' }) $dhcpScopeCard)
+$script:txtPrefixFilter = New-NetGuiControl TextBox @(410, 52, 136, 23) ([ordered]@{ MaxLength = 100; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeCard
+$script:lstDHCPScopes = New-NetGuiControl CheckedListBox @(16, 86, 530, 168) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dhcpScopeCard
+$btnSelectAllScopes = New-NetGuiControl Button @(558, 86, 126, 28) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeCard
+$btnSelectNoneScopes = New-NetGuiControl Button @(558, 120, 126, 28) ([ordered]@{ Text = 'Select None' }) $dhcpScopeCard
+$script:btnAddSubnets = New-NetGuiControl Button @(558, 154, 126, 28) ([ordered]@{ Text = 'Add Subnets'; Enabled = $false }) $dhcpScopeCard
+$script:lblVisibleScopes = New-NetGuiControl Label @(558, 190, 126, 40) ([ordered]@{ Tag = 'Muted' }) $dhcpScopeCard
+[void](New-NetGuiControl Label @(16, 262, 668, 38) ([ordered]@{ Text = "Names match anywhere. IDs match from the start (10.1 = 10.1.x.x) or by subnet (10.1.0.0/20). Comma = OR.`nAdd Subnets adds differently named scopes in the same subnets. Server names are not searched."; Tag = 'Muted'; Anchor = 'Bottom,Left' }) $dhcpScopeCard)
 
-# --- Scope selection
-$dhcpScopeGroupBox = New-OctoControl GroupBox @(10, 220, 920, 160) ([ordered]@{ Text = 'Scope Selection (Optional)'; Anchor = 'Top,Left,Right' }) $tab2
-[void](New-OctoControl Label @(15, 20, 400, 20) ([ordered]@{ Text = 'Select specific scopes from cache (leave empty to collect all):' }) $dhcpScopeGroupBox)
-$script:btnRefreshScopeCache = New-OctoControl Button @(420, 17, 120, 25) ([ordered]@{ Text = 'Refresh Cache' }) $dhcpScopeGroupBox
-$script:lblScopeCacheStatus = New-OctoControl Label @(550, 21, 360, 20) ([ordered]@{ Text = 'Cache: Not loaded'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(15, 47, 40, 20) ([ordered]@{ Text = 'Filter:' }) $dhcpScopeGroupBox)
-$script:ScopeFilterPlaceholder = 'e.g., SITE1, SITE2 (min 3 chars)'
-$script:PrefixFilterPlaceholder = 'e.g., ZA (2+ chars)'
-$script:txtScopeListFilter = New-OctoControl TextBox @(55, 45, 300, 20) ([ordered]@{ MaxLength = 500; ForeColor = [System.Drawing.Color]::Gray; Text = $script:ScopeFilterPlaceholder }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(365, 47, 40, 20) ([ordered]@{ Text = 'Prefix:' }) $dhcpScopeGroupBox)
-$script:txtPrefixFilter = New-OctoControl TextBox @(405, 45, 120, 20) ([ordered]@{ MaxLength = 10; ForeColor = [System.Drawing.Color]::Gray; Text = $script:PrefixFilterPlaceholder }) $dhcpScopeGroupBox
-$script:lstDHCPScopes = New-OctoControl CheckedListBox @(15, 70, 690, 75) ([ordered]@{ CheckOnClick = $true; IntegralHeight = $false }) $dhcpScopeGroupBox
-$btnSelectAllScopes = New-OctoControl Button @(720, 70, 120, 30) ([ordered]@{ Text = 'Select All Visible' }) $dhcpScopeGroupBox
-$btnSelectNoneScopes = New-OctoControl Button @(720, 105, 100, 30) ([ordered]@{ Text = 'Select None' }) $dhcpScopeGroupBox
-$script:lblVisibleScopes = New-OctoControl Label @(845, 72, 70, 60) ([ordered]@{ Font = $script:Fonts.Tiny; ForeColor = [System.Drawing.Color]::DarkBlue }) $dhcpScopeGroupBox
-[void](New-OctoControl Label @(15, 145, 900, 15) ([ordered]@{ Text = 'Workflow: Refresh cache -> Filter/Prefix (optional) -> Select All Visible -> Collect DHCP Statistics. Selections are kept when the filter changes.'; Font = $script:Fonts.Tiny; ForeColor = [System.Drawing.Color]::DarkGreen }) $dhcpScopeGroupBox)
+# --- Actions (bottom left)
+$btnCollectDHCP = New-NetGuiControl Button @(16, 554, 220, 40) ([ordered]@{ Text = 'Collect DHCP Statistics'; Tag = 'Primary'; Anchor = 'Bottom,Left' }) $tab2
+$btnStopDHCP = New-NetGuiControl Button @(244, 554, 90, 40) ([ordered]@{ Text = 'Stop'; Tag = 'Danger'; Enabled = $false; Anchor = 'Bottom,Left' }) $tab2
 
-# --- Options
-$dhcpOptionsGroupBox = New-OctoControl GroupBox @(10, 390, 920, 90) ([ordered]@{ Text = 'Collection Options'; Anchor = 'Top,Left,Right' }) $tab2
-$chkIncludeDNS = New-OctoControl CheckBox @(15, 25, 180, 20) ([ordered]@{ Text = 'Include DNS (Option 6)' }) $dhcpOptionsGroupBox
-$chkIncludeOption60 = New-OctoControl CheckBox @(210, 25, 230, 20) ([ordered]@{ Text = 'Include Option 60 (Vendor Class)' }) $dhcpOptionsGroupBox
-$chkIncludeOption43 = New-OctoControl CheckBox @(455, 25, 260, 20) ([ordered]@{ Text = 'Include Option 43 (Vendor-Specific)' }) $dhcpOptionsGroupBox
-$script:chkGroupByScope = New-OctoControl CheckBox @(15, 55, 190, 20) ([ordered]@{ Text = 'Group by Scope ID on Export' }) $dhcpOptionsGroupBox
-$script:chkShowAllOptions = New-OctoControl CheckBox @(210, 55, 200, 20) ([ordered]@{ Text = 'Show All Configured Options' }) $dhcpOptionsGroupBox
-[void](New-OctoControl Label @(455, 55, 120, 20) ([ordered]@{ Text = 'Parallel Operations:' }) $dhcpOptionsGroupBox)
+# --- Options (right column)
+$dhcpOptionsCard = New-NetGuiCard -Bounds @(728, 16, 436, 136) -Title 'Options' -Parent $tab2 -Anchor 'Top,Left,Right'
+$chkIncludeDNS = New-NetGuiControl CheckBox @(16, 46, 200, 22) ([ordered]@{ Text = 'DNS Servers (Option 6)' }) $dhcpOptionsCard
+$chkIncludeOption60 = New-NetGuiControl CheckBox @(224, 46, 200, 22) ([ordered]@{ Text = 'Option 60 (Vendor Class)' }) $dhcpOptionsCard
+$chkIncludeOption43 = New-NetGuiControl CheckBox @(16, 72, 200, 22) ([ordered]@{ Text = 'Option 43 (Vendor-Specific)' }) $dhcpOptionsCard
+$script:chkShowAllOptions = New-NetGuiControl CheckBox @(224, 72, 200, 22) ([ordered]@{ Text = 'All Configured Options' }) $dhcpOptionsCard
+$script:chkGroupByScope = New-NetGuiControl CheckBox @(16, 98, 200, 22) ([ordered]@{ Text = 'Group by Scope ID on Export' }) $dhcpOptionsCard
+[void](New-NetGuiControl Label @(224, 100, 100, 20) ([ordered]@{ Text = 'Parallel queries' }) $dhcpOptionsCard)
 $defaultParallel = 20
 try { if ([int]$script:Settings.DHCPParallelServers -ge 1 -and [int]$script:Settings.DHCPParallelServers -le 64) { $defaultParallel = [int]$script:Settings.DHCPParallelServers } } catch { }
-$script:numConcurrency = New-OctoControl NumericUpDown @(575, 53, 60, 20) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsGroupBox
-[void](New-OctoControl Label @(640, 55, 260, 20) ([ordered]@{ Text = '(servers / option lookups at once)'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpOptionsGroupBox)
+$script:numConcurrency = New-NetGuiControl NumericUpDown @(328, 97, 60, 23) ([ordered]@{ Minimum = 1; Maximum = 64; Value = $defaultParallel }) $dhcpOptionsCard
 $toolTip.SetToolTip($script:chkGroupByScope, "One row per Scope ID:`n- failover partners report the whole scope, so they are counted once`n- split scopes (same ID, no failover) have their pools added together`n- inactive copies are not counted")
 $toolTip.SetToolTip($script:numConcurrency, 'How many DHCP servers (and option lookups) are queried at the same time.')
+$toolTip.SetToolTip($script:txtScopeListFilter, "Finds scopes whose name contains the text, or whose scope ID starts with the numbers or is in the subnet:`n  SITE1 - scopes with SITE1 in their name`n  10.20 - 10.20.x.x (not 10.200.x.x or 110.20.x.x)`n  10.20.0.0/22 - 10.20.0.x to 10.20.3.x`nComma = OR. The DHCP server name is not searched.")
+$toolTip.SetToolTip($script:txtPrefixFilter, "Finds scopes whose name starts with the text, or whose scope ID starts with the numbers or is in the subnet:`n  ZA - names starting with ZA`n  10 - every 10.x.x.x scope`nComma = OR. With a Filter as well, both must match.")
+$toolTip.SetToolTip($script:btnAddSubnets, "Adds the subnets of the scopes whose names match the Filter (for example 10.45.0.0/20) to the filter,`nso scopes in them that are named differently are listed too. The log names every scope this adds.`nA subnet is only widened while differently named scopes stay fewer than the matching ones,`nso a neighbouring site's block is not added.")
 
-# --- Actions
-$dhcpActionsGroupBox = New-OctoControl GroupBox @(10, 490, 920, 65) ([ordered]@{ Text = 'Actions'; Anchor = 'Top,Left,Right' }) $tab2
-$btnCollectDHCP = New-OctoControl Button @(15, 20, 200, 35) ([ordered]@{ Text = 'Collect DHCP Statistics'; BackColor = [System.Drawing.Color]::LightGreen }) $dhcpActionsGroupBox
-$btnStopDHCP = New-OctoControl Button @(230, 20, 100, 35) ([ordered]@{ Text = 'Stop'; BackColor = [System.Drawing.Color]::LightCoral; Enabled = $false }) $dhcpActionsGroupBox
-$btnExportDHCPWorkDir = New-OctoControl Button @(345, 20, 140, 35) ([ordered]@{ Text = 'Export to Working Dir'; Enabled = $false }) $dhcpActionsGroupBox
-$btnExportDHCPFolder = New-OctoControl Button @(495, 20, 130, 35) ([ordered]@{ Text = 'Export to Folder...'; Enabled = $false }) $dhcpActionsGroupBox
-[void](New-OctoControl Label @(640, 28, 270, 20) ([ordered]@{ Text = 'Results are auto-exported after collection'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dhcpActionsGroupBox)
-
-[void](New-OctoControl Label @(945, 15, 200, 20) ([ordered]@{ Text = 'Collection Log'; Font = $script:Fonts.Header; ForeColor = [System.Drawing.Color]::DarkBlue; Anchor = 'Top,Right' }) $tab2)
-$dhcpLogBox = New-OctoControl RichTextBox @(945, 40, 320, 515) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $true
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Bottom,Right'
-}) $tab2
+# --- Log and export (right column)
+$dhcpLogCard = New-NetGuiCard -Bounds @(728, 164, 436, 430) -Title 'Collection Log' -Parent $tab2 -Anchor 'Top,Bottom,Left,Right'
+$btnExportDHCPWorkDir = New-NetGuiControl Button @(140, 12, 148, 28) ([ordered]@{ Text = 'Export to Working Dir'; Enabled = $false; Anchor = 'Top,Right' }) $dhcpLogCard
+$btnExportDHCPFolder = New-NetGuiControl Button @(296, 12, 124, 28) ([ordered]@{ Text = 'Export to Folder...'; Enabled = $false; Anchor = 'Top,Right' }) $dhcpLogCard
+$dhcpLogBox = New-NetGuiLogBox -Bounds @(16, 50, 404, 340) -Parent $dhcpLogCard
+[void](New-NetGuiControl Label @(16, 398, 404, 20) ([ordered]@{ Text = 'Results are exported automatically after each collection.'; Tag = 'Muted'; Anchor = 'Bottom,Left,Right' }) $dhcpLogCard)
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -4831,11 +5751,9 @@ function Set-DhcpScopeList {
     param([object[]]$Scopes)
     $valid = [System.Collections.Generic.List[object]]::new()
     foreach ($s in $Scopes) { if ($null -ne $s -and $s.DisplayName) { $valid.Add($s) } }
-    $sorted = $valid.ToArray()
-    $keys = [string[]]@(foreach ($s in $sorted) { [string]$s.DisplayName })
-    [Array]::Sort($keys, $sorted, [System.StringComparer]::OrdinalIgnoreCase)
+    $sorted = Sort-DhcpScopesByDisplayName -Scopes $valid.ToArray()
     $script:allDHCPScopes = $sorted
-    $script:scopeNamesUpper = [string[]]@(foreach ($k in $keys) { $k.ToUpperInvariant() })
+    $script:scopeFilterKeys = Get-DhcpScopeFilterKeys -Scopes $sorted
     $script:scopeByDisplayName.Clear()
     foreach ($s in $sorted) { $script:scopeByDisplayName[[string]$s.DisplayName] = $s }
     $script:selectedScopeNames.Clear()
@@ -4847,16 +5765,22 @@ function Reset-ScopeFilterBoxes {
     $script:filterChangeFromCode = $true
     try {
         $script:txtScopeListFilter.Text = $script:ScopeFilterPlaceholder
-        $script:txtScopeListFilter.ForeColor = [System.Drawing.Color]::Gray
         $script:txtPrefixFilter.Text = $script:PrefixFilterPlaceholder
-        $script:txtPrefixFilter.ForeColor = [System.Drawing.Color]::Gray
     } finally { $script:filterChangeFromCode = $false }
+    Update-ScopeFilterColors
+}
+
+function Update-ScopeFilterColors {
+    # Placeholder text is muted, typed text is normal (also after a theme change)
+    foreach ($pair in @(@($script:txtScopeListFilter, $script:ScopeFilterPlaceholder), @($script:txtPrefixFilter, $script:PrefixFilterPlaceholder))) {
+        $pair[0].ForeColor = if ($pair[0].Text -eq $pair[1]) { $script:CurrentTheme.TextMuted } else { $script:CurrentTheme.InputText }
+    }
 }
 
 function Update-ScopeCountLabel {
     $visible = $script:lstDHCPScopes.Items.Count
     $selected = $script:selectedScopeNames.Count
-    $script:lblVisibleScopes.Text = if ($selected -gt 0) { "($visible visible,`n$selected selected)" } else { "($visible visible)" }
+    $script:lblVisibleScopes.Text = if ($selected -gt 0) { "$visible visible`n$selected selected" } else { "$visible visible" }
 }
 
 function Update-ScopeListView {
@@ -4864,6 +5788,7 @@ function Update-ScopeListView {
     .SYNOPSIS
         Applies the Contains filter (3+ chars, comma = OR) and Prefix filter (2+ chars)
         to the cached scopes and shows the matches, keeping earlier selections.
+        Scope names and scope IDs are searched, server names are not (Find-DhcpScopeMatches).
     #>
     $containsText = $script:txtScopeListFilter.Text.Trim()
     if ($containsText -eq $script:ScopeFilterPlaceholder) { $containsText = '' }
@@ -4872,6 +5797,7 @@ function Update-ScopeListView {
 
     $containsTerms = @($containsText.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 3 })
     $prefixTerms = @($prefixText.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 2 })
+    $script:btnAddSubnets.Enabled = @((Split-DhcpScopeFilterTerms -Terms $containsTerms).Name).Count -gt 0
     $containsWaiting = $containsText -and $containsTerms.Count -eq 0
     $prefixWaiting = $prefixText -and $prefixTerms.Count -eq 0
     if ($containsWaiting -and $prefixWaiting) { $script:lblVisibleScopes.Text = '(filter: 3+ chars, prefix: 2+ chars)'; return }
@@ -4879,20 +5805,8 @@ function Update-ScopeListView {
     if ($prefixWaiting) { $script:lblVisibleScopes.Text = '(type 2+ chars for prefix)'; return }
 
     $matchesList = [System.Collections.Generic.List[object]]::new()
-    $names = $script:scopeNamesUpper
     $scopes = $script:allDHCPScopes
-    for ($i = 0; $i -lt $names.Count; $i++) {
-        $upper = $names[$i]
-        if ($prefixTerms.Count -gt 0) {
-            $ok = $false
-            foreach ($p in $prefixTerms) { if ($upper.StartsWith($p, [System.StringComparison]::Ordinal)) { $ok = $true; break } }
-            if (-not $ok) { continue }
-        }
-        if ($containsTerms.Count -gt 0) {
-            $ok = $false
-            foreach ($t in $containsTerms) { if ($upper.Contains($t)) { $ok = $true; break } }
-            if (-not $ok) { continue }
-        }
+    foreach ($i in (Find-DhcpScopeMatches -Keys $script:scopeFilterKeys -ContainsTerms $containsTerms -PrefixTerms $prefixTerms)) {
         $matchesList.Add([string]$scopes[$i].DisplayName)
     }
 
@@ -4914,6 +5828,55 @@ function Update-ScopeListView {
     Update-ScopeCountLabel
 }
 
+function Add-DhcpScopeSubnetsToFilter {
+    <#
+    .SYNOPSIS
+        "Add Subnets": adds the subnets of the scopes whose names match the Filter box
+        to the filter, so differently named scopes in them are listed too. The log
+        names every scope that comes in this way.
+    #>
+    $text = $script:txtScopeListFilter.Text.Trim()
+    if ($text -eq $script:ScopeFilterPlaceholder) { $text = '' }
+    $terms = @($text.Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_.Length -ge 3 })
+    $nameTerms = @((Split-DhcpScopeFilterTerms -Terms $terms).Name)
+    if ($nameTerms.Count -eq 0) { return }
+    $found = Get-DhcpScopeSubnets -Keys $script:scopeFilterKeys -NameTerms $nameTerms
+    $what = $nameTerms -join ' or '
+    if ($found.Matched.Count -eq 0) {
+        Write-Log -Message "Add Subnets: no scope name contains $what" -Color 'Warning' -LogBox $dhcpLogBox
+        return
+    }
+    Write-Log -Message ('Add Subnets: {0} scope(s) have {1} in their name. Their subnets:' -f $found.Matched.Count, $what) -Color 'Info' -LogBox $dhcpLogBox
+    $inFilter = [System.Collections.Generic.HashSet[string]]::new([string[]]$terms, [System.StringComparer]::OrdinalIgnoreCase)
+    $new = [System.Collections.Generic.List[string]]::new()
+    foreach ($subnet in $found.Subnets) {
+        $others = [System.Collections.Generic.List[string]]::new()
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($i in $subnet.Added) {
+            $s = $script:allDHCPScopes[$i]
+            $label = if ($s.ScopeId) { '{0} ({1})' -f $s.Name, $s.ScopeId } else { [string]$s.DisplayName }
+            if ($seen.Add($label)) { $others.Add($label) }
+        }
+        if ($others.Count -eq 0) {
+            Write-Log -Message ('  {0} - no differently named scopes' -f $subnet.Cidr) -Color 'Info' -LogBox $dhcpLogBox
+            continue
+        }
+        $list = ($others | Select-Object -First 10) -join ', '
+        if ($others.Count -gt 10) { $list += (' and {0} more' -f ($others.Count - 10)) }
+        Write-Log -Message ('  {0} - adds {1} differently named scope(s): {2}' -f $subnet.Cidr, $others.Count, $list) -Color 'Success' -LogBox $dhcpLogBox
+        if ($inFilter.Add($subnet.Cidr)) { $new.Add($subnet.Cidr) }
+    }
+    if ($new.Count -eq 0) {
+        Write-Log -Message 'Add Subnets: nothing to add' -Color 'Info' -LogBox $dhcpLogBox
+        return
+    }
+    $script:filterChangeFromCode = $true
+    try { $script:txtScopeListFilter.Text = $text + ', ' + ($new -join ', ') }
+    finally { $script:filterChangeFromCode = $false }
+    Update-ScopeFilterColors
+    Update-ScopeListView
+}
+
 function Set-DhcpBusy {
     param([bool]$Busy)
     $btnCollectDHCP.Enabled = -not $Busy
@@ -4933,15 +5896,23 @@ function Start-DhcpServerDiscovery {
     $btnStopDHCP.Enabled = $false
     $script:lblLastRefresh.Text = 'Discovering servers...'
     if (-not $Quiet) { Write-Log -Message 'Discovering DHCP servers from Active Directory...' -Color 'Info' -LogBox $dhcpLogBox }
-    $pool = New-OctoRunspacePool -MaxRunspaces 1 -FunctionNames $script:DhcpWorkerFunctions
-    $script:dhcpJob = Start-OctoJob -Pool $pool -OnTaskComplete {
+    $pool = New-NetGuiRunspacePool -MaxRunspaces 1 -FunctionNames $script:DhcpWorkerFunctions
+    $script:dhcpJob = Start-NetGuiJob -Pool $pool -OnTaskComplete {
         param($job, $task, $result)
         $out = $result.Output
         if ($out -and $out.Success) {
-            $servers = @(foreach ($s in $out.Servers) { [pscustomobject]@{ DnsName = $s.Name; IPAddress = $s.IP } })
+            # Show the servers that will actually be queried (duplicates / stale entries merged)
+            $script:dhcpServerResolved = $out.Resolved
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $notes)
+            $ipByName = @{}
+            foreach ($s in $out.Servers) { if ($s.Name -and -not $ipByName.ContainsKey([string]$s.Name)) { $ipByName[[string]$s.Name] = [string]$s.IP } }
+            $servers = @(foreach ($n in $names) { [pscustomobject]@{ DnsName = $n; IPAddress = $ipByName[$n] } })
             Set-DhcpServerList -Servers $servers
             $script:lblLastRefresh.Text = "Last refreshed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-            Write-Log -Message "Found $($script:lstDHCPServers.Items.Count) DHCP server(s)" -Color 'Success' -LogBox $dhcpLogBox
+            foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $notes)) {
+                Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+            }
             if ($servers.Count -gt 0) { [void](Save-DhcpCache -Kind Servers -Items $servers) }
         } else {
             $msg = if ($out) { $out.Message } else { $result.Error }
@@ -4952,69 +5923,86 @@ function Start-DhcpServerDiscovery {
         param($job)
         Set-DhcpBusy -Busy $false
     }
-    Add-OctoJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.Discover -Argument @{} -Descriptor @{ Kind = 'Discover' }
+    Add-NetGuiJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.Discover -Argument @{} -Descriptor @{ Kind = 'Discover' }
 }
 
 function Start-DhcpScopeCacheRefresh {
     if ($script:dhcpJob -and -not $script:dhcpJob.Completed) { return }
-    $servers = @(Merge-DhcpServerList -Entries @(Get-CheckedDhcpServerEntries))
+    $servers = @(Merge-DhcpServerList -Entries @(Get-CheckedDhcpServerEntries) -Resolved $script:dhcpServerResolved)
     Set-DhcpBusy -Busy $true
     $script:lblScopeCacheStatus.Text = 'Cache: Updating...'
-    $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Orange
-    $pool = New-OctoRunspacePool -MaxRunspaces ([int]$script:numConcurrency.Value) -FunctionNames $script:DhcpWorkerFunctions
-    $script:dhcpJob = Start-OctoJob -Pool $pool -OnTaskComplete {
+    Set-NetGuiTone -Control $script:lblScopeCacheStatus -Tone Warning
+    $pool = New-NetGuiRunspacePool -MaxRunspaces ([int]$script:numConcurrency.Value) -FunctionNames $script:DhcpWorkerFunctions
+    $script:dhcpJob = Start-NetGuiJob -Pool $pool -OnTaskComplete {
         param($job, $task, $result)
         $data = $job.Data
         $out = $result.Output
         if ($task.Descriptor.Kind -eq 'Discover') {
             if ($out -and $out.Success) {
-                $names = @(Merge-DhcpServerList -Entries @($out.Servers))
-                Write-Log -Message "Found $($names.Count) DHCP server(s) in Active Directory" -Color 'Success' -LogBox $dhcpLogBox
+                $script:dhcpServerResolved = $out.Resolved
+                $notes = [System.Collections.Generic.List[string]]::new()
+                $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $notes)
+                foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $notes)) {
+                    Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+                }
                 $data.Total = $names.Count
-                foreach ($n in $names) { Add-OctoJobTask -Job $job -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $n } -Descriptor @{ Kind = 'ScopeList' } }
+                foreach ($n in $names) { Add-NetGuiJobTask -Job $job -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $n } -Descriptor @{ Kind = 'ScopeList' } }
             } else {
                 Write-Log -Message "Server discovery failed: $(if ($out) { $out.Message } else { $result.Error })" -Color 'Error' -LogBox $dhcpLogBox
             }
             return
         }
-        $data.Done++
-        if ($out -and $out.Success) {
-            foreach ($s in $out.Scopes) { $data.Scopes.Add($s) }
-            Write-Log -Message ('[{0}/{1}] {2}: {3} scope(s) ({4:N1}s)' -f $data.Done, $data.Total, $out.Server, @($out.Scopes).Count, ($out.ElapsedMs / 1000)) -Color 'Success' -LogBox $dhcpLogBox
-        } else {
-            $server = if ($out) { $out.Server } else { $task.Item.Server }
-            $msg = if ($out) { $out.Message } else { $result.Error }
-            Write-Log -Message ('[{0}/{1}] {2}: FAILED - {3}' -f $data.Done, $data.Total, $server, $msg) -Color 'Error' -LogBox $dhcpLogBox
+        $ok = $out -and $out.Success
+        $server = if ($out) { $out.Server } else { [string]$task.Item.Server }
+        $msg = if ($out) { $out.Message } elseif ($result.Error) { $result.Error } else { 'No result returned' }
+        if (-not $ok -and -not $task.Item.Retry -and $msg -ne 'Cancelled') {
+            # A busy server or RPC hiccup must not leave its scopes out of the cache: one more try after a pause
+            Write-Log -Message ('{0}: {1} - trying again' -f $server, $msg) -Color 'Warning' -LogBox $dhcpLogBox
+            Add-NetGuiJobTask -Job $job -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $server; Retry = 1; RetryDelayMs = 3000 } -Descriptor @{ Kind = 'ScopeList' }
+            return
         }
-        if ($data.Total -gt 0) { Set-OctoStatus -Text 'Refreshing scope cache...' -Percent ([int](100 * $data.Done / $data.Total)) -ProgressText "$($data.Done)/$($data.Total) servers" }
+        $data.Done++
+        $label = if ($task.Item.Retry) { "$server (2nd try)" } else { $server }
+        if ($ok) {
+            foreach ($s in $out.Scopes) { $data.Scopes.Add($s) }
+            Write-Log -Message ('[{0}/{1}] {2}: {3} scope(s) ({4:N1}s)' -f $data.Done, $data.Total, $label, @($out.Scopes).Count, ($out.ElapsedMs / 1000)) -Color 'Success' -LogBox $dhcpLogBox
+        } else {
+            $data.Failed.Add($server)
+            Write-Log -Message ('[{0}/{1}] {2}: FAILED - {3}' -f $data.Done, $data.Total, $label, $msg) -Color 'Error' -LogBox $dhcpLogBox
+        }
+        if ($data.Total -gt 0) { Set-NetGuiStatus -Text 'Refreshing scope cache...' -Percent ([int](100 * $data.Done / $data.Total)) -ProgressText "$($data.Done)/$($data.Total) servers" }
     } -OnJobComplete {
         param($job)
         $data = $job.Data
-        Set-OctoStatus -Text 'Ready'
+        Set-NetGuiStatus -Text 'Ready'
         Set-DhcpBusy -Busy $false
         if ($job.Stopped) {
             $script:lblScopeCacheStatus.Text = 'Cache: refresh cancelled'
-            $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Gray
+            Set-NetGuiTone -Control $script:lblScopeCacheStatus -Tone Muted
             return
         }
         $scopes = $data.Scopes.ToArray()
         Set-DhcpScopeList -Scopes $scopes
         $script:scopeCacheUpdated = Get-Date
         $script:lblScopeCacheStatus.Text = "Cache: $($scopes.Count) scope(s) loaded ($(Get-Date -Format 'HH:mm:ss'))"
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        Set-NetGuiTone -Control $script:lblScopeCacheStatus -Tone Success
         Write-Log -Message "Scope cache refreshed: $($scopes.Count) scope(s) in $([math]::Round($data.Stopwatch.Elapsed.TotalSeconds, 1))s" -Color 'Success' -LogBox $dhcpLogBox
+        if ($data.Failed.Count -gt 0) {
+            Write-Log -Message ('{0} server(s) failed twice and are not in the cache: {1} - Refresh Cache again to add them' -f $data.Failed.Count, ($data.Failed -join ', ')) -Color 'Warning' -LogBox $dhcpLogBox
+        }
         if ($scopes.Count -gt 0) { [void](Save-DhcpCache -Kind Scopes -Items $scopes) }
     }
     $script:dhcpJob.Data.Scopes = [System.Collections.Generic.List[object]]::new()
+    $script:dhcpJob.Data.Failed = [System.Collections.Generic.List[string]]::new()
     $script:dhcpJob.Data.Done = 0
     $script:dhcpJob.Data.Total = $servers.Count
     $script:dhcpJob.Data.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     if ($servers.Count -gt 0) {
         Write-Log -Message "Refreshing scope cache from $($servers.Count) selected server(s)..." -Color 'Info' -LogBox $dhcpLogBox
-        foreach ($s in $servers) { Add-OctoJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $s } -Descriptor @{ Kind = 'ScopeList' } }
+        foreach ($s in $servers) { Add-NetGuiJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $s } -Descriptor @{ Kind = 'ScopeList' } }
     } else {
         Write-Log -Message 'Refreshing scope cache from all domain DHCP servers...' -Color 'Info' -LogBox $dhcpLogBox
-        Add-OctoJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.Discover -Argument @{} -Descriptor @{ Kind = 'Discover' }
+        Add-NetGuiJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts.Discover -Argument @{} -Descriptor @{ Kind = 'Discover' }
     }
 }
 
@@ -5091,7 +6079,9 @@ function Start-DhcpCollection {
                 return
             }
         }
-        $request.Servers = @(Merge-DhcpServerList -Entries $entries.ToArray())
+        $notes = [System.Collections.Generic.List[string]]::new()
+        $request.Servers = @(Merge-DhcpServerList -Entries $entries.ToArray() -Resolved $script:dhcpServerResolved -Notes $notes)
+        foreach ($n in $notes) { Write-Log -Message "  $n" -Color 'Info' -LogBox $dhcpLogBox }
     }
 
     $script:dhcpState = New-DhcpCollectionState -Request $request
@@ -5099,28 +6089,30 @@ function Start-DhcpCollection {
     Set-DhcpBusy -Busy $true
     $btnExportDHCPWorkDir.Enabled = $false
     $btnExportDHCPFolder.Enabled = $false
-    Set-OctoStatus -Text 'Collecting DHCP statistics...' -Percent 0
+    Set-NetGuiStatus -Text 'Collecting DHCP statistics...' -Percent 0
 
-    $pool = New-OctoRunspacePool -MaxRunspaces $request.Throttle -FunctionNames $script:DhcpWorkerFunctions
-    $script:dhcpJob = Start-OctoJob -Pool $pool -OnTaskComplete {
+    $pool = New-NetGuiRunspacePool -MaxRunspaces $request.Throttle -FunctionNames $script:DhcpWorkerFunctions
+    $script:dhcpJob = Start-NetGuiJob -Pool $pool -OnTaskComplete {
         param($job, $task, $result)
         $state = $script:dhcpState
         foreach ($next in @(Receive-DhcpTaskResult -State $state -Descriptor $task.Descriptor -Result $result)) {
-            Add-OctoJobTask -Job $job -Script $script:DhcpWorkerScripts[$next.Kind] -Argument $next.Item -Descriptor $next
+            Add-NetGuiJobTask -Job $job -Script $script:DhcpWorkerScripts[$next.Kind] -Argument $next.Item -Descriptor $next
         }
         Write-DhcpStateLog -State $state
         $serverCount = [Math]::Max(1, $state.Servers.Count)
         if ($state.ServersDone -lt $state.Servers.Count -or $state.OptionBatches -eq 0) {
-            Set-OctoStatus -Text 'Collecting DHCP statistics...' -Percent ([int](100 * $state.ServersDone / $serverCount)) -ProgressText "$($state.ServersDone)/$($state.Servers.Count) servers"
+            Set-NetGuiStatus -Text 'Collecting DHCP statistics...' -Percent ([int](100 * $state.ServersDone / $serverCount)) -ProgressText "$($state.ServersDone)/$($state.Servers.Count) servers"
+        } elseif ($state.OptionScopesDone -ge $state.OptionScopes -and $state.OptionRetriesDone -lt $state.OptionRetries) {
+            Set-NetGuiStatus -Text 'Retrying failed option lookups...' -Percent ([int](100 * $state.OptionRetriesDone / $state.OptionRetries)) -ProgressText "$($state.OptionRetriesDone)/$($state.OptionRetries) scopes"
         } else {
-            Set-OctoStatus -Text 'Collecting DHCP options...' -Percent ([int](100 * $state.OptionScopesDone / [Math]::Max(1, $state.OptionScopes))) -ProgressText "$($state.OptionScopesDone)/$($state.OptionScopes) scopes"
+            Set-NetGuiStatus -Text 'Collecting DHCP options...' -Percent ([int](100 * $state.OptionScopesDone / [Math]::Max(1, $state.OptionScopes))) -ProgressText "$($state.OptionScopesDone)/$($state.OptionScopes) scopes"
         }
     } -OnJobComplete {
         param($job)
         Complete-DhcpCollection -Job $job
     }
     foreach ($t in @(Get-DhcpStartTasks -State $script:dhcpState)) {
-        Add-OctoJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts[$t.Kind] -Argument $t.Item -Descriptor $t
+        Add-NetGuiJobTask -Job $script:dhcpJob -Script $script:DhcpWorkerScripts[$t.Kind] -Argument $t.Item -Descriptor $t
     }
     Write-DhcpStateLog -State $script:dhcpState
 }
@@ -5131,7 +6123,7 @@ function Complete-DhcpCollection {
     $state = $script:dhcpState
     Write-DhcpStateLog -State $state
     Set-DhcpBusy -Busy $false
-    Set-OctoStatus -Text 'Ready'
+    Set-NetGuiStatus -Text 'Ready'
     if ($Job.Stopped) { Write-Log -Message 'Collection stopped by user - keeping the results collected so far' -Color 'Warning' -LogBox $dhcpLogBox }
 
     $rows = $state.Rows.ToArray()
@@ -5139,7 +6131,7 @@ function Complete-DhcpCollection {
         $script:dhcpResults = @()
         $script:dhcpAnalysis = $null
         if ($state.Error) {
-            if (-not $Job.Stopped) { Show-OctoMessage -Text "DHCP collection failed: $($state.Error)" -Title 'Error' -Icon Error | Out-Null }
+            if (-not $Job.Stopped) { Show-NetGuiMessage -Text "DHCP collection failed: $($state.Error)" -Title 'Error' -Icon Error | Out-Null }
         } else {
             Write-Log -Message 'No DHCP scopes found matching the criteria' -Color 'Warning' -LogBox $dhcpLogBox
         }
@@ -5174,19 +6166,19 @@ function Export-DhcpResults {
     #>
     param([string]$Folder, [switch]$ShowMessage)
     if (-not $script:dhcpResults -or $script:dhcpResults.Count -eq 0) {
-        Show-OctoMessage -Text 'No DHCP results to export. Please collect statistics first.' -Title 'Warning' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text 'No DHCP results to export. Please collect statistics first.' -Title 'Warning' -Icon Warning | Out-Null
         return $null
     }
     $grouped = $script:chkGroupByScope.Checked
     $rows = if ($grouped) { $script:dhcpAnalysis.Groups } else { $script:dhcpResults }
     $columns = Get-DhcpExportColumns -Options $script:dhcpRunOptions -Grouped:$grouped
     $baseName = if ($grouped) { 'DHCPScopeStats_Grouped' } else { 'DHCPScopeStats' }
-    $path = Get-OctoExportPath -Folder $Folder -BaseName $baseName
-    [void](Export-OctoCsv -Rows $rows -Columns $columns -Path $path)
+    $path = Get-NetGuiExportPath -Folder $Folder -BaseName $baseName
+    [void](Export-NetGuiCsv -Rows $rows -Columns $columns -Path $path)
     $kind = if ($grouped) { 'unique scope(s), failover-aware' } else { 'server row(s)' }
     Write-Log -Message "Exported $(@($rows).Count) $kind to: $path" -Color 'Success' -LogBox $dhcpLogBox
     Add-ExportHistory -Settings $script:Settings -FilePath $path -Operation 'DHCP Statistics'
-    if ($ShowMessage) { Show-OctoMessage -Text "Export successful!`n`n$path" -Title 'Export Complete' | Out-Null }
+    if ($ShowMessage) { Show-NetGuiMessage -Text "Export successful!`n`n$path" -Title 'Export Complete' | Out-Null }
     return $path
 }
 
@@ -5202,7 +6194,7 @@ $btnCollectDHCP.Add_Click({
 $btnStopDHCP.Add_Click({
     Write-Log -Message 'Stop requested by user...' -Color 'Warning' -LogBox $dhcpLogBox
     $btnStopDHCP.Enabled = $false
-    Stop-OctoJob -Job $script:dhcpJob
+    Stop-NetGuiJob -Job $script:dhcpJob
 })
 $btnRefreshDHCPServers.Add_Click({
     try { Start-DhcpServerDiscovery } catch { Write-Log -Message "Error refreshing server list: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox; Set-DhcpBusy -Busy $false }
@@ -5213,7 +6205,7 @@ $script:btnRefreshScopeCache.Add_Click({
     try { Start-DhcpScopeCacheRefresh }
     catch {
         $script:lblScopeCacheStatus.Text = 'Cache: Error'
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Red
+        Set-NetGuiTone -Control $script:lblScopeCacheStatus -Tone Error
         Write-Log -Message "Error refreshing scope cache: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox
         Set-DhcpBusy -Busy $false
     }
@@ -5226,7 +6218,7 @@ foreach ($box in @($script:txtScopeListFilter, $script:txtPrefixFilter)) {
         if ($this.Text -eq $placeholder) {
             $script:filterChangeFromCode = $true
             $this.Text = ''
-            $this.ForeColor = $script:CurrentTheme.TextBoxForeColor
+            $this.ForeColor = $script:CurrentTheme.InputText
             $script:filterChangeFromCode = $false
         }
     })
@@ -5234,7 +6226,7 @@ foreach ($box in @($script:txtScopeListFilter, $script:txtPrefixFilter)) {
         if ([string]::IsNullOrWhiteSpace($this.Text)) {
             $script:filterChangeFromCode = $true
             $this.Text = if ($this -eq $script:txtScopeListFilter) { $script:ScopeFilterPlaceholder } else { $script:PrefixFilterPlaceholder }
-            $this.ForeColor = [System.Drawing.Color]::Gray
+            $this.ForeColor = $script:CurrentTheme.TextMuted
             $script:filterChangeFromCode = $false
         }
     })
@@ -5252,6 +6244,10 @@ $script:scopeFilterTimer.Add_Tick({
     Update-ScopeListView
 })
 
+$script:btnAddSubnets.Add_Click({
+    try { Add-DhcpScopeSubnetsToFilter }
+    catch { Write-Log -Message "Add Subnets failed: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox }
+})
 $btnSelectAllScopes.Add_Click({
     $list = $script:lstDHCPScopes
     $list.BeginUpdate()
@@ -5292,7 +6288,7 @@ $btnExportDHCPWorkDir.Add_Click({
     try { [void](Export-DhcpResults -Folder (Get-Location).Path -ShowMessage) }
     catch {
         Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox
-        Show-OctoMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     }
 })
 $btnExportDHCPFolder.Add_Click({
@@ -5304,7 +6300,7 @@ $btnExportDHCPFolder.Add_Click({
         }
     } catch {
         Write-Log -Message "Error exporting: $($_.Exception.Message)" -Color 'Error' -LogBox $dhcpLogBox
-        Show-OctoMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     }
 })
 
@@ -5341,43 +6337,46 @@ $script:dnaCenterServers = @(Get-DNACenterServers)
 $script:dnaDeviceEntries = @()
 $script:DnaFunctionNames = @{}
 
-$tab3 = New-OctoTab -Text 'DNA Center' -Icon '#' -MinWidth 980 -MinHeight 960
+$tab3 = New-NetGuiTab -Text 'DNA Center'
 
-# --- Connection
-$dnaConnGroupBox = New-OctoControl GroupBox @(10, 10, 940, 140) ([ordered]@{ Text = 'DNA Center Connection'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(20, 30, 120, 20) ([ordered]@{ Text = 'DNA Center Server:' }) $dnaConnGroupBox)
-$comboDNAServer = New-OctoControl ComboBox @(150, 28, 350, 20) ([ordered]@{ DropDownStyle = 'DropDownList' }) $dnaConnGroupBox
+# --- Connection (left column)
+$dnaConnCard = New-NetGuiCard -Bounds @(16, 16, 640, 162) -Title 'Connection' -Parent $tab3
+[void](New-NetGuiControl Label @(16, 51, 80, 20) ([ordered]@{ Text = 'Server' }) $dnaConnCard)
+$comboDNAServer = New-NetGuiControl ComboBox @(100, 48, 524, 23) ([ordered]@{ DropDownStyle = 'DropDownList' }) $dnaConnCard
 foreach ($server in $script:dnaCenterServers) { [void]$comboDNAServer.Items.Add("$($server.Name) - $($server.Url)") }
 if ($comboDNAServer.Items.Count -gt 0) { $comboDNAServer.SelectedIndex = 0 }
-[void](New-OctoControl Label @(20, 65, 120, 20) ([ordered]@{ Text = 'Username:' }) $dnaConnGroupBox)
-$txtDNAUser = New-OctoControl TextBox @(150, 63, 200, 20) $null $dnaConnGroupBox
-[void](New-OctoControl Label @(20, 100, 120, 20) ([ordered]@{ Text = 'Password:' }) $dnaConnGroupBox)
-$txtDNAPass = New-OctoControl TextBox @(150, 98, 200, 20) ([ordered]@{ UseSystemPasswordChar = $true }) $dnaConnGroupBox
-$btnDNAConnect = New-OctoControl Button @(370, 63, 120, 30) ([ordered]@{ Text = 'Connect' }) $dnaConnGroupBox
-$btnLoadDevices = New-OctoControl Button @(500, 63, 120, 30) ([ordered]@{ Text = 'Load Devices'; Enabled = $false }) $dnaConnGroupBox
-$btnDNAStop = New-OctoControl Button @(630, 63, 100, 30) ([ordered]@{ Text = 'Stop'; Enabled = $false; BackColor = [System.Drawing.Color]::LightCoral }) $dnaConnGroupBox
-[void](New-OctoControl Label @(370, 100, 550, 20) ([ordered]@{ Text = 'Device queries run in parallel; Stop cancels the running report.'; Font = $script:Fonts.Small; ForeColor = [System.Drawing.Color]::Gray }) $dnaConnGroupBox)
+[void](New-NetGuiControl Label @(16, 85, 80, 20) ([ordered]@{ Text = 'Username' }) $dnaConnCard)
+$txtDNAUser = New-NetGuiControl TextBox @(100, 82, 180, 23) $null $dnaConnCard
+[void](New-NetGuiControl Label @(300, 85, 70, 20) ([ordered]@{ Text = 'Password' }) $dnaConnCard)
+$txtDNAPass = New-NetGuiControl TextBox @(374, 82, 250, 23) ([ordered]@{ UseSystemPasswordChar = $true }) $dnaConnCard
+$btnDNAConnect = New-NetGuiControl Button @(16, 118, 110, 30) ([ordered]@{ Text = 'Connect'; Tag = 'Primary' }) $dnaConnCard
+$btnLoadDevices = New-NetGuiControl Button @(134, 118, 120, 30) ([ordered]@{ Text = 'Load Devices'; Enabled = $false }) $dnaConnCard
+$btnDNAStop = New-NetGuiControl Button @(262, 118, 80, 30) ([ordered]@{ Text = 'Stop'; Tag = 'Danger'; Enabled = $false }) $dnaConnCard
+[void](New-NetGuiControl Label @(354, 124, 230, 20) ([ordered]@{ Text = 'Stop cancels the running report'; Tag = 'Muted' }) $dnaConnCard)
 
-# --- Device filtering and selection
-$dnaFilterGroupBox = New-OctoControl GroupBox @(10, 160, 940, 350) ([ordered]@{ Text = 'Device Filtering & Selection'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(20, 30, 110, 20) ([ordered]@{ Text = 'Hostname Search:' }) $dnaFilterGroupBox)
-$txtFilterHostname = New-OctoControl TextBox @(135, 28, 200, 20) ([ordered]@{ Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(360, 30, 50, 20) ([ordered]@{ Text = 'Family:' }) $dnaFilterGroupBox)
-$cmbFilterFamily = New-OctoControl ComboBox @(415, 28, 180, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(620, 30, 40, 20) ([ordered]@{ Text = 'Role:' }) $dnaFilterGroupBox)
-$cmbFilterRole = New-OctoControl ComboBox @(665, 28, 180, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(20, 65, 110, 20) ([ordered]@{ Text = 'IP Address:' }) $dnaFilterGroupBox)
-$cmbFilterIPAddress = New-OctoControl ComboBox @(135, 63, 200, 25) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaFilterGroupBox
-$chkSelectAll = New-OctoControl CheckBox @(360, 63, 180, 25) ([ordered]@{ Text = 'Select All (Current Filter)'; Enabled = $false }) $dnaFilterGroupBox
-$btnApplyDeviceFilter = New-OctoControl Button @(565, 61, 120, 28) ([ordered]@{ Text = 'Apply Selection'; Enabled = $false }) $dnaFilterGroupBox
-$btnResetDeviceFilter = New-OctoControl Button @(695, 61, 120, 28) ([ordered]@{ Text = 'Reset All'; Enabled = $false }) $dnaFilterGroupBox
-[void](New-OctoControl Label @(20, 100, 700, 20) ([ordered]@{ Text = 'Available Devices (check devices to select - checks are kept when the filter changes):'; Font = $script:Fonts.ArialBold }) $dnaFilterGroupBox)
-$lstDevices = New-OctoControl CheckedListBox @(20, 125, 900, 180) ([ordered]@{ CheckOnClick = $true; Enabled = $false; Font = $script:Fonts.Mono; IntegralHeight = $false; Anchor = 'Top,Left,Right' }) $dnaFilterGroupBox
-$lblDeviceSelectionStatus = New-OctoControl Label @(20, 315, 700, 20) ([ordered]@{ Text = 'Showing: 0 devices | Selected: 0'; Font = $script:Fonts.ArialBold; ForeColor = [System.Drawing.Color]::DarkBlue }) $dnaFilterGroupBox
+# --- Device filtering and selection (left column, grows with the window)
+$dnaDeviceCard = New-NetGuiCard -Bounds @(16, 190, 640, 404) -Title 'Devices' -Parent $tab3 -Anchor 'Top,Bottom,Left'
+[void](New-NetGuiControl Label @(16, 51, 72, 20) ([ordered]@{ Text = 'Hostname' }) $dnaDeviceCard)
+$txtFilterHostname = New-NetGuiControl TextBox @(90, 48, 210, 23) ([ordered]@{ Enabled = $false }) $dnaDeviceCard
+[void](New-NetGuiControl Label @(316, 51, 66, 20) ([ordered]@{ Text = 'Family' }) $dnaDeviceCard)
+$cmbFilterFamily = New-NetGuiControl ComboBox @(384, 48, 240, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+[void](New-NetGuiControl Label @(16, 83, 72, 20) ([ordered]@{ Text = 'Role' }) $dnaDeviceCard)
+$cmbFilterRole = New-NetGuiControl ComboBox @(90, 80, 210, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+[void](New-NetGuiControl Label @(316, 83, 66, 20) ([ordered]@{ Text = 'IP Address' }) $dnaDeviceCard)
+$cmbFilterIPAddress = New-NetGuiControl ComboBox @(384, 80, 240, 23) ([ordered]@{ DropDownStyle = 'DropDownList'; Enabled = $false }) $dnaDeviceCard
+# Column captions line up with the fixed-width device list below
+[void](New-NetGuiControl Label @(35, 114, 589, 16) ([ordered]@{ Text = ('{0,-36} {1,-16} {2,-14} {3}' -f 'HOSTNAME', 'IP ADDRESS', 'ROLE', 'FAMILY'); Font = $script:Fonts.Mono; Tag = 'Muted' }) $dnaDeviceCard)
+$lstDevices = New-NetGuiControl CheckedListBox @(16, 132, 608, 186) ([ordered]@{ CheckOnClick = $true; Enabled = $false; Font = $script:Fonts.Mono; IntegralHeight = $false; Anchor = 'Top,Bottom,Left' }) $dnaDeviceCard
+$chkSelectAll = New-NetGuiControl CheckBox @(16, 326, 200, 22) ([ordered]@{ Text = 'Select All (Current Filter)'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$lblDeviceSelectionStatus = New-NetGuiControl Label @(224, 328, 400, 20) ([ordered]@{ Text = 'Showing: 0 devices | Selected: 0'; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$btnApplyDeviceFilter = New-NetGuiControl Button @(16, 358, 140, 30) ([ordered]@{ Text = 'Apply Selection'; Tag = 'Primary'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
+$btnResetDeviceFilter = New-NetGuiControl Button @(164, 358, 100, 30) ([ordered]@{ Text = 'Reset All'; Enabled = $false; Anchor = 'Bottom,Left' }) $dnaDeviceCard
 
-# --- Function tree
-$dnaTreeGroupBox = New-OctoControl GroupBox @(10, 520, 460, 270) ([ordered]@{ Text = 'DNA Center Functions (double-click to run)'; Anchor = 'Top,Left' }) $tab3
-$script:dnaTreeView = New-OctoControl TreeView @(15, 25, 430, 230) ([ordered]@{ ShowLines = $true; ShowPlusMinus = $true; ShowRootLines = $true; HideSelection = $false }) $dnaTreeGroupBox
+# --- Functions and favorites (right column)
+$dnaFunctionsCard = New-NetGuiCard -Bounds @(668, 16, 496, 248) -Title 'Functions (double-click to run)' -Parent $tab3 -Anchor 'Top,Left,Right'
+$script:dnaTreeView = New-NetGuiControl TreeView @(16, 48, 236, 184) ([ordered]@{ ShowLines = $true; ShowPlusMinus = $true; ShowRootLines = $true; HideSelection = $false }) $dnaFunctionsCard
+[void](New-NetGuiControl Label @(264, 50, 216, 18) ([ordered]@{ Text = 'Favorites (right-click a function to add)'; Tag = 'Muted' }) $dnaFunctionsCard)
+$script:lstFavorites = New-NetGuiControl ListBox @(264, 70, 216, 162) ([ordered]@{ IntegralHeight = $false; Anchor = 'Top,Left,Right' }) $dnaFunctionsCard
 
 $dnaTree = [ordered]@{
     'Device Information'     = @(
@@ -5414,22 +6413,16 @@ foreach ($category in $dnaTree.Keys) {
 $script:dnaTreeView.ExpandAll()
 $script:dnaTreeView.EndUpdate()
 
-# --- Favorites
-$dnaFavoritesGroupBox = New-OctoControl GroupBox @(480, 520, 470, 270) ([ordered]@{ Text = 'Favorite Functions (right-click a function to add)'; Anchor = 'Top,Left,Right' }) $tab3
-$script:lstFavorites = New-OctoControl ListBox @(15, 25, 440, 230) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $dnaFavoritesGroupBox
+# --- Log (right column, grows with the window)
+$dnaLogCard = New-NetGuiCard -Bounds @(668, 276, 496, 222) -Title 'Log' -Parent $tab3 -Anchor 'Top,Bottom,Left,Right'
+$dnaLogBox = New-NetGuiLogBox -Bounds @(16, 48, 464, 158) -Parent $dnaLogCard -WordWrap $false
 
-# --- Export settings
-$dnaExportGroupBox = New-OctoControl GroupBox @(10, 795, 940, 55) ([ordered]@{ Text = 'Export Settings'; Anchor = 'Top,Left,Right' }) $tab3
-[void](New-OctoControl Label @(15, 22, 75, 20) ([ordered]@{ Text = 'Export Path:' }) $dnaExportGroupBox)
-$script:txtDNAExportPath = New-OctoControl TextBox @(95, 20, 500, 20) ([ordered]@{ Text = $script:outputDir; ReadOnly = $true }) $dnaExportGroupBox
-$btnDNAExportWorkDir = New-OctoControl Button @(610, 18, 120, 25) ([ordered]@{ Text = 'Use Working Dir' }) $dnaExportGroupBox
-$btnDNAExportFolder = New-OctoControl Button @(740, 18, 120, 25) ([ordered]@{ Text = 'Browse Folder...' }) $dnaExportGroupBox
-$btnDNAExportDefault = New-OctoControl Button @(870, 18, 60, 25) ([ordered]@{ Text = 'Default' }) $dnaExportGroupBox
-
-$dnaLogBox = New-OctoControl RichTextBox @(10, 855, 940, 95) ([ordered]@{
-    Font = $script:Fonts.Mono; ReadOnly = $true; ScrollBars = 'Vertical'; WordWrap = $false
-    HideSelection = $false; DetectUrls = $false; Multiline = $true; Anchor = 'Top,Left,Right'
-}) $tab3
+# --- Export folder (right column, bottom)
+$dnaExportCard = New-NetGuiCard -Bounds @(668, 510, 496, 84) -Title 'Export Folder' -Parent $tab3 -Anchor 'Bottom,Left,Right'
+$btnDNAExportWorkDir = New-NetGuiControl Button @(166, 12, 112, 28) ([ordered]@{ Text = 'Use Working Dir'; Anchor = 'Top,Right' }) $dnaExportCard
+$btnDNAExportFolder = New-NetGuiControl Button @(286, 12, 116, 28) ([ordered]@{ Text = 'Browse Folder...'; Anchor = 'Top,Right' }) $dnaExportCard
+$btnDNAExportDefault = New-NetGuiControl Button @(410, 12, 70, 28) ([ordered]@{ Text = 'Default'; Anchor = 'Top,Right' }) $dnaExportCard
+$script:txtDNAExportPath = New-NetGuiControl TextBox @(16, 48, 464, 23) ([ordered]@{ Text = $script:outputDir; ReadOnly = $true; Anchor = 'Top,Left,Right' }) $dnaExportCard
 
 # --- Device list helpers ----------------------------------------------------------
 
@@ -5617,12 +6610,12 @@ function Invoke-DnaFunction {
     if (-not (Test-DNACTokenValid)) {
         $msg = if ($script:Dna.Token) { 'The DNA Center session has expired - please connect again' } else { 'Please connect to DNA Center first' }
         Write-Log -Message $msg -Color 'Warning' -LogBox $dnaLogBox
-        Show-OctoMessage -Text $msg -Title 'Not Connected' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text $msg -Title 'Not Connected' -Icon Warning | Out-Null
         return
     }
     if ($FunctionName -ne 'Invoke-PathTrace' -and (-not $script:Dna.Devices -or $script:Dna.Devices.Count -eq 0)) {
         Write-Log -Message "Please load devices first using the 'Load Devices' button" -Color 'Warning' -LogBox $dnaLogBox
-        Show-OctoMessage -Text "Please load devices first using the 'Load Devices' button" -Title 'No Devices' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text "Please load devices first using the 'Load Devices' button" -Title 'No Devices' -Icon Warning | Out-Null
         return
     }
     Write-Log -Message "Executing: $($script:DnaFunctionNames[$FunctionName])" -Color 'Info' -LogBox $dnaLogBox
@@ -5633,10 +6626,10 @@ function Invoke-DnaFunction {
         Write-Log -Message ('Finished: {0} ({1:N1}s)' -f $script:DnaFunctionNames[$FunctionName], $sw.Elapsed.TotalSeconds) -Color 'Info' -LogBox $dnaLogBox
     } catch {
         Write-Log -Message "Error executing function: $($_.Exception.Message)" -Color 'Error' -LogBox $dnaLogBox
-        Show-OctoMessage -Text "Error: $($_.Exception.Message)" -Title 'Execution Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error: $($_.Exception.Message)" -Title 'Execution Error' -Icon Error | Out-Null
     } finally {
         Set-DnaBusy -Busy $false
-        Set-OctoStatus -Text 'Ready'
+        Set-NetGuiStatus -Text 'Ready'
         Update-Dashboard
     }
 }
@@ -5645,7 +6638,7 @@ function Set-DnaExportPath {
     param([string]$Path)
     $script:outputDir = $Path
     $script:txtDNAExportPath.Text = $Path
-    $env:OCTONAV_OUTPUT_DIR = $Path
+    $env:NETGUI_OUTPUT_DIR = $Path
     Write-Log -Message "Export path set to: $Path" -Color 'Info' -LogBox $dnaLogBox
 }
 
@@ -5676,11 +6669,11 @@ $menuAddFavorite.Add_Click({
     $name = [string]$node.Tag
     $current = @($script:Settings.FavoriteFunctions | Where-Object { $_ })
     if ($current -contains $name) {
-        Show-OctoMessage -Text 'Already in favorites!' -Title 'Favorites' | Out-Null
+        Show-NetGuiMessage -Text 'Already in favorites!' -Title 'Favorites' | Out-Null
         return
     }
     $script:Settings.FavoriteFunctions = @($current + $name)
-    [void](Save-OctoNavSettings -Settings $script:Settings)
+    [void](Save-NetGuiSettings -Settings $script:Settings)
     Update-DnaFavorites
 })
 [void]$dnaTreeContextMenu.Items.Add($menuAddFavorite)
@@ -5708,7 +6701,7 @@ $menuRemoveFavorite.Add_Click({
     $name = Get-SelectedFavoriteName
     if (-not $name) { return }
     $script:Settings.FavoriteFunctions = @($script:Settings.FavoriteFunctions | Where-Object { $_ -and $_ -ne $name })
-    [void](Save-OctoNavSettings -Settings $script:Settings)
+    [void](Save-NetGuiSettings -Settings $script:Settings)
     Update-DnaFavorites
 })
 [void]$favoritesContextMenu.Items.Add($menuRemoveFavorite)
@@ -5719,17 +6712,17 @@ $btnDNAConnect.Add_Click({
     try {
         $selectedIndex = $comboDNAServer.SelectedIndex
         if ($selectedIndex -lt 0) {
-            Show-OctoMessage -Text 'Please select a DNA Center server' -Title 'Warning' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text 'Please select a DNA Center server' -Title 'Warning' -Icon Warning | Out-Null
             return
         }
         $server = $script:dnaCenterServers[$selectedIndex]
         $username = $txtDNAUser.Text.Trim()
         $password = $txtDNAPass.Text
         if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) {
-            Show-OctoMessage -Text 'Please enter username and password' -Title 'Warning' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text 'Please enter username and password' -Title 'Warning' -Icon Warning | Out-Null
             return
         }
-        Set-OctoStatus -Text 'Connecting to DNA Center...'
+        Set-NetGuiStatus -Text 'Connecting to DNA Center...'
         $previousUrl = $script:Dna.BaseUrl
         $mainForm.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try { $success = Connect-DNACenter -DnaCenter $server.Url -Username $username -Password $password -LogBox $dnaLogBox }
@@ -5744,19 +6737,19 @@ $btnDNAConnect.Add_Click({
                 Write-Log -Message 'Switched DNA Center - please load devices again' -Color 'Warning' -LogBox $dnaLogBox
             }
             $btnLoadDevices.Enabled = $true
-            Set-OctoStatus -Text 'Ready - Connected to DNA Center'
+            Set-NetGuiStatus -Text 'Ready - Connected to DNA Center'
             Update-ConnectionStatus -IsConnected $true -ServerName $server.Name
             Update-Dashboard
-            Show-OctoMessage -Text 'Successfully connected to DNA Center!' -Title 'Success' | Out-Null
+            Show-NetGuiMessage -Text 'Successfully connected to DNA Center!' -Title 'Success' | Out-Null
         } else {
-            Set-OctoStatus -Text 'Ready - Failed to connect to DNA Center' -IsError
+            Set-NetGuiStatus -Text 'Ready - Failed to connect to DNA Center' -IsError
             Update-ConnectionStatus -IsConnected $false
             Update-Dashboard
-            Show-OctoMessage -Text 'Failed to connect to DNA Center' -Title 'Error' -Icon Error | Out-Null
+            Show-NetGuiMessage -Text 'Failed to connect to DNA Center' -Title 'Error' -Icon Error | Out-Null
         }
     } catch {
         Write-Log -Message "Connection error: $($_.Exception.Message)" -Color 'Error' -LogBox $dnaLogBox
-        Show-OctoMessage -Text "Connection error: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Connection error: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     } finally {
         $password = $null
         $txtDNAPass.Text = ''
@@ -5766,26 +6759,26 @@ $btnDNAConnect.Add_Click({
 $btnLoadDevices.Add_Click({
     if ($script:Dna.Busy) { return }
     if (-not (Test-DNACTokenValid)) {
-        Show-OctoMessage -Text 'The DNA Center session has expired - please connect again' -Title 'Not Connected' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text 'The DNA Center session has expired - please connect again' -Title 'Not Connected' -Icon Warning | Out-Null
         return
     }
     Set-DnaBusy -Busy $true
     try {
-        Set-OctoStatus -Text 'Loading devices from DNA Center...'
+        Set-NetGuiStatus -Text 'Loading devices from DNA Center...'
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         if (Get-AllDNADevices -LogBox $dnaLogBox) {
             Initialize-DnaDeviceEntries
             Update-DnaDeviceList
             Set-DnaFilterControlsEnabled -Enabled $true
             Write-Log -Message ('Device list ready ({0:N1}s)' -f $sw.Elapsed.TotalSeconds) -Color 'Info' -LogBox $dnaLogBox
-            Set-OctoStatus -Text "Ready - Loaded $($script:Dna.Devices.Count) devices from DNA Center"
+            Set-NetGuiStatus -Text "Ready - Loaded $($script:Dna.Devices.Count) devices from DNA Center"
         } else {
-            Set-OctoStatus -Text 'Ready - Failed to load devices' -IsError
-            Show-OctoMessage -Text 'Failed to load devices' -Title 'Error' -Icon Error | Out-Null
+            Set-NetGuiStatus -Text 'Ready - Failed to load devices' -IsError
+            Show-NetGuiMessage -Text 'Failed to load devices' -Title 'Error' -Icon Error | Out-Null
         }
     } catch {
         Write-Log -Message "Error loading devices: $($_.Exception.Message)" -Color 'Error' -LogBox $dnaLogBox
-        Show-OctoMessage -Text "Error: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text "Error: $($_.Exception.Message)" -Title 'Error' -Icon Error | Out-Null
     } finally {
         Set-DnaBusy -Busy $false
     }
@@ -5809,12 +6802,12 @@ $btnApplyDeviceFilter.Add_Click({
         Update-DnaSelectionLabel
         if ($selected.Count -eq 0) {
             Write-Log -Message 'No devices selected - reports will use all loaded devices; CLI Command Runner needs a selection' -Color 'Yellow' -LogBox $dnaLogBox
-            Show-OctoMessage -Text "No devices selected.`nCheck devices to select them for DNA Center operations." -Title 'No Selection' -Icon Warning | Out-Null
+            Show-NetGuiMessage -Text "No devices selected.`nCheck devices to select them for DNA Center operations." -Title 'No Selection' -Icon Warning | Out-Null
         } else {
             $hidden = $script:dnaCheckedIds.Count - $lstDevices.CheckedIndices.Count
             $note = if ($hidden -gt 0) { " ($hidden not visible with the current filter)" } else { '' }
             Write-Log -Message "Applied selection: $($selected.Count) device(s) selected for DNA Center operations$note" -Color 'Green' -LogBox $dnaLogBox
-            Show-OctoMessage -Text "Selection applied successfully!`nSelected: $($selected.Count) device(s)$note" -Title 'Success' | Out-Null
+            Show-NetGuiMessage -Text "Selection applied successfully!`nSelected: $($selected.Count) device(s)$note" -Title 'Success' | Out-Null
         }
     } catch {
         Write-Log -Message "Error applying selection: $($_.Exception.Message)" -Color 'Red' -LogBox $dnaLogBox
@@ -5831,7 +6824,7 @@ $btnResetDeviceFilter.Add_Click({
         $script:dnaCheckedIds.Clear()
         Reset-DNADeviceSelection -LogBox $dnaLogBox
         Update-DnaDeviceList
-        Show-OctoMessage -Text 'Filters and selection have been reset.' -Title 'Reset' | Out-Null
+        Show-NetGuiMessage -Text 'Filters and selection have been reset.' -Title 'Reset' | Out-Null
     } catch {
         Write-Log -Message "Error resetting filters: $($_.Exception.Message)" -Color 'Red' -LogBox $dnaLogBox
     }
@@ -5908,35 +6901,31 @@ Update-DnaFavorites
 # TAB: FILE COMPARE
 # ============================================
 
-$tab4 = New-OctoTab -Text 'File Compare' -Icon '<>' -MinWidth 980 -MinHeight 700
-$compareMainPanel = New-OctoControl Panel @(10, 10, 940, 620) ([ordered]@{ Anchor = 'Top,Bottom,Left,Right' }) $tab4
-[void](New-OctoControl Label @(0, 0, 940, 35) ([ordered]@{ Text = 'File Comparison Tool'; Font = $script:Fonts.Title; ForeColor = [System.Drawing.Color]::FromArgb(30, 60, 114) }) $compareMainPanel)
-$fileSelectGroupBox = New-OctoControl GroupBox @(0, 40, 940, 110) ([ordered]@{ Text = 'Select Files to Compare'; Anchor = 'Top,Left,Right' }) $compareMainPanel
-[void](New-OctoControl Label @(15, 28, 90, 23) ([ordered]@{ Text = 'Original File:'; Font = $script:Fonts.Bold }) $fileSelectGroupBox)
-$txtFile1Path = New-OctoControl TextBox @(110, 25, 680, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $fileSelectGroupBox
-$btnBrowseFile1 = New-OctoControl Button @(800, 24, 120, 26) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $fileSelectGroupBox
-[void](New-OctoControl Label @(15, 63, 90, 23) ([ordered]@{ Text = 'Modified File:'; Font = $script:Fonts.Bold }) $fileSelectGroupBox)
-$txtFile2Path = New-OctoControl TextBox @(110, 60, 680, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $fileSelectGroupBox
-$btnBrowseFile2 = New-OctoControl Button @(800, 59, 120, 26) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $fileSelectGroupBox
-$compareActionPanel = New-OctoControl Panel @(0, 155, 940, 45) $null $compareMainPanel
-$btnExportDiff = New-OctoControl Button @(0, 5, 180, 35) ([ordered]@{ Text = 'Compare && Export HTML'; Font = $script:Fonts.Header; BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87); ForeColor = [System.Drawing.Color]::White; FlatStyle = 'Flat' }) $compareActionPanel
-$btnSwapFiles = New-OctoControl Button @(190, 5, 100, 35) ([ordered]@{ Text = 'Swap Files' }) $compareActionPanel
-$btnClearCompare = New-OctoControl Button @(300, 5, 80, 35) ([ordered]@{ Text = 'Clear' }) $compareActionPanel
-[void](New-OctoControl Label @(400, 12, 500, 20) ([ordered]@{ Text = 'The comparison is computed by your browser (fast, works offline)'; ForeColor = [System.Drawing.Color]::Gray }) $compareActionPanel)
-$compareInfoPanel = New-OctoControl Panel @(0, 200, 940, 410) ([ordered]@{ Anchor = 'Top,Bottom,Left,Right'; BorderStyle = 'FixedSingle' }) $compareMainPanel
-[void](New-OctoControl Label @(20, 20, 900, 380) ([ordered]@{
-    Text = "1. Select two files using the 'Browse...' buttons above`n" +
-        "2. Click 'Compare && Export HTML' and choose where to save the report`n" +
-        "3. The report opens in your browser with:`n" +
-        "     - Side-by-side view with changed characters highlighted`n" +
-        "     - Prev / Next buttons and keyboard navigation (j / k or arrow keys)`n" +
-        "     - Counts of added, removed and unchanged lines`n" +
-        "     - 'Ignore blank lines' option`n`n" +
-        "Lines are matched with a minimal diff (longest common subsequence), so repeated`n" +
-        "lines such as '!' or 'exit' in switch configs no longer make unrelated lines`n" +
-        "show up as changed."
-    Font = New-Object System.Drawing.Font('Segoe UI', 11); ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80); Anchor = 'Top,Bottom,Left,Right'
-}) $compareInfoPanel)
+$tab4 = New-NetGuiTab -Text 'File Compare'
+$compareFilesCard = New-NetGuiCard -Bounds @(16, 16, 1148, 176) -Title 'Files to Compare' -Parent $tab4 -Anchor 'Top,Left,Right'
+[void](New-NetGuiControl Label @(16, 51, 90, 20) ([ordered]@{ Text = 'Original File' }) $compareFilesCard)
+$txtFile1Path = New-NetGuiControl TextBox @(110, 48, 914, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $compareFilesCard
+$btnBrowseFile1 = New-NetGuiControl Button @(1034, 46, 98, 28) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $compareFilesCard
+[void](New-NetGuiControl Label @(16, 85, 90, 20) ([ordered]@{ Text = 'Modified File' }) $compareFilesCard)
+$txtFile2Path = New-NetGuiControl TextBox @(110, 82, 914, 23) ([ordered]@{ Font = $script:Fonts.Mono; Anchor = 'Top,Left,Right' }) $compareFilesCard
+$btnBrowseFile2 = New-NetGuiControl Button @(1034, 80, 98, 28) ([ordered]@{ Text = 'Browse...'; Anchor = 'Top,Right' }) $compareFilesCard
+$btnExportDiff = New-NetGuiControl Button @(16, 124, 200, 36) ([ordered]@{ Text = 'Compare && Export HTML'; Tag = 'Primary' }) $compareFilesCard
+$btnSwapFiles = New-NetGuiControl Button @(224, 124, 110, 36) ([ordered]@{ Text = 'Swap Files' }) $compareFilesCard
+$btnClearCompare = New-NetGuiControl Button @(342, 124, 80, 36) ([ordered]@{ Text = 'Clear' }) $compareFilesCard
+[void](New-NetGuiControl Label @(438, 133, 600, 20) ([ordered]@{ Text = 'The comparison runs in your browser - fast, and works offline.'; Tag = 'Muted' }) $compareFilesCard)
+$compareHowCard = New-NetGuiCard -Bounds @(16, 204, 1148, 390) -Title 'How It Works' -Parent $tab4 -Anchor 'Top,Bottom,Left,Right'
+[void](New-NetGuiControl Label @(16, 48, 1116, 326) ([ordered]@{
+    Text = "1.  Select the original and the modified file with the Browse buttons.`n" +
+        "2.  Click 'Compare && Export HTML' and choose where to save the report.`n" +
+        "3.  The report opens in your browser:`n" +
+        "       - side-by-side view with the changed characters highlighted`n" +
+        "       - Prev / Next buttons and keyboard navigation (j / k or the arrow keys)`n" +
+        "       - counts of added, removed and unchanged lines`n" +
+        "       - an 'Ignore blank lines' option`n`n" +
+        "Lines are matched with a minimal diff (longest common subsequence), so repeated lines such as '!' or 'exit'`n" +
+        "in switch configurations do not make unrelated lines show up as changed."
+    Font = $script:Fonts.Body; Anchor = 'Top,Bottom,Left,Right'
+}) $compareHowCard)
 
 function ConvertTo-JsStringArray {
     <#
@@ -6269,12 +7258,12 @@ $btnExportDiff.Add_Click({
     $file1 = $txtFile1Path.Text.Trim().Trim('"')
     $file2 = $txtFile2Path.Text.Trim().Trim('"')
     if (-not $file1 -or -not $file2) {
-        Show-OctoMessage -Text 'Please select both files to compare.' -Title 'Files Required' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text 'Please select both files to compare.' -Title 'Files Required' -Icon Warning | Out-Null
         return
     }
     foreach ($pair in @(@('Original', $file1), @('Modified', $file2))) {
         if (-not (Test-Path -LiteralPath $pair[1] -PathType Leaf)) {
-            Show-OctoMessage -Text "$($pair[0]) file not found:`n$($pair[1])" -Title 'File Not Found' -Icon Error | Out-Null
+            Show-NetGuiMessage -Text "$($pair[0]) file not found:`n$($pair[1])" -Title 'File Not Found' -Icon Error | Out-Null
             return
         }
     }
@@ -6286,15 +7275,15 @@ $btnExportDiff.Add_Click({
     try {
         $btnExportDiff.Enabled = $false
         $btnExportDiff.Text = 'Exporting...'
-        Set-OctoStatus -Text 'Creating comparison report...'
+        Set-NetGuiStatus -Text 'Creating comparison report...'
         [System.Windows.Forms.Application]::DoEvents()
         Export-FileComparisonHtml -OriginalPath $file1 -ModifiedPath $file2 -OutputPath $saveDialog.FileName
         Add-ExportHistory -Settings $script:Settings -FilePath $saveDialog.FileName -Operation 'File Compare' -Format 'HTML'
-        Set-OctoStatus -Text "Comparison exported: $($saveDialog.FileName)"
+        Set-NetGuiStatus -Text "Comparison exported: $($saveDialog.FileName)"
         Start-Process -FilePath $saveDialog.FileName
     } catch {
-        Set-OctoStatus -Text 'Comparison failed' -IsError
-        Show-OctoMessage -Text "Error creating comparison:`n`n$($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null
+        Set-NetGuiStatus -Text 'Comparison failed' -IsError
+        Show-NetGuiMessage -Text "Error creating comparison:`n`n$($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null
     } finally {
         $btnExportDiff.Enabled = $true
         $btnExportDiff.Text = 'Compare && Export HTML'
@@ -6305,36 +7294,34 @@ $btnExportDiff.Add_Click({
 # TAB: RDOX EXPORTS
 # ============================================
 
-$tab7 = New-OctoTab -Text 'RDOX Exports' -Icon '^' -MinWidth 980 -MinHeight 500
-[void](New-OctoControl Label @(15, 15, 900, 35) ([ordered]@{ Text = 'RDOX Resource Export'; Font = $script:Fonts.Title; ForeColor = [System.Drawing.Color]::FromArgb(30, 60, 114) }) $tab7)
-[void](New-OctoControl Label @(15, 55, 900, 25) ([ordered]@{ Text = 'Export embedded RDOX resource files. Select files from the list below and choose an export location.'; ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80) }) $tab7)
-$resourcesGroupBox = New-OctoControl GroupBox @(15, 90, 920, 350) ([ordered]@{ Text = 'Embedded Resources (.RDOX Files)'; Anchor = 'Top,Bottom,Left,Right' }) $tab7
-$script:lstResources = New-OctoControl ListBox @(15, 25, 700, 280) ([ordered]@{ Font = $script:Fonts.MonoLarge; SelectionMode = 'MultiExtended'; Anchor = 'Top,Bottom,Left,Right'; IntegralHeight = $false }) $resourcesGroupBox
+$tab7 = New-NetGuiTab -Text 'RDOX Exports'
+$resourcesCard = New-NetGuiCard -Bounds @(16, 16, 1148, 578) -Title 'Embedded RDOX Files' -Parent $tab7 -Anchor 'Top,Bottom,Left,Right'
+[void](New-NetGuiControl Label @(16, 46, 900, 20) ([ordered]@{ Text = 'Select files to export (Ctrl+Click for several), or select none to export all of them.'; Tag = 'Muted' }) $resourcesCard)
+$script:lstResources = New-NetGuiControl ListBox @(16, 72, 916, 490) ([ordered]@{ Font = $script:Fonts.MonoLarge; SelectionMode = 'MultiExtended'; Anchor = 'Top,Bottom,Left,Right'; IntegralHeight = $false }) $resourcesCard
 if ($script:EmbeddedResources -and $script:EmbeddedResources.Count -gt 0) {
     $script:lstResources.Items.AddRange([object[]]@(Get-EmbeddedResourceList))
 } else {
     [void]$script:lstResources.Items.Add('(No embedded resources - run Package-Resources.ps1)')
     $script:lstResources.Enabled = $false
 }
-$btnExportToWorkDir = New-OctoControl Button @(730, 25, 170, 35) ([ordered]@{ Text = 'Export to Working Directory'; Anchor = 'Top,Right' }) $resourcesGroupBox
-$btnExportToCustomDir = New-OctoControl Button @(730, 70, 170, 35) ([ordered]@{ Text = 'Export to Folder...'; Anchor = 'Top,Right' }) $resourcesGroupBox
-[void](New-OctoControl Label @(730, 115, 170, 50) ([ordered]@{ Text = "Select files to export (Ctrl+Click for multiple)`nor leave empty to export all"; ForeColor = [System.Drawing.Color]::Gray; Anchor = 'Top,Right' }) $resourcesGroupBox)
+$btnExportToWorkDir = New-NetGuiControl Button @(948, 72, 184, 34) ([ordered]@{ Text = 'Export to Working Directory'; Tag = 'Primary'; Anchor = 'Top,Right' }) $resourcesCard
+$btnExportToCustomDir = New-NetGuiControl Button @(948, 114, 184, 34) ([ordered]@{ Text = 'Export to Folder...'; Anchor = 'Top,Right' }) $resourcesCard
 
 function Export-SelectedResources {
     param([string]$Folder)
     if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
-        Show-OctoMessage -Text 'No embedded resources available.' -Title 'No Resources' | Out-Null
+        Show-NetGuiMessage -Text 'No embedded resources available.' -Title 'No Resources' | Out-Null
         return
     }
     $names = @($script:lstResources.SelectedItems | ForEach-Object { [string]$_ })
     if ($names.Count -eq 0) { $names = @(Get-EmbeddedResourceList) }
-    try { Export-OctoResources -Names $names -Folder $Folder }
-    catch { Show-OctoMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null }
+    try { Export-NetGuiResources -Names $names -Folder $Folder }
+    catch { Show-NetGuiMessage -Text "Error exporting: $($_.Exception.Message)" -Title 'Export Error' -Icon Error | Out-Null }
 }
 $btnExportToWorkDir.Add_Click({ Export-SelectedResources -Folder (Get-Location).Path })
 $btnExportToCustomDir.Add_Click({
     if (-not $script:EmbeddedResources -or $script:EmbeddedResources.Count -eq 0) {
-        Show-OctoMessage -Text 'No embedded resources available.' -Title 'No Resources' | Out-Null
+        Show-NetGuiMessage -Text 'No embedded resources available.' -Title 'No Resources' | Out-Null
         return
     }
     $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -6347,37 +7334,41 @@ $btnExportToCustomDir.Add_Click({
 # TAB: PORT CONFIGURATION
 # ============================================
 
-$tab5 = New-OctoTab -Text 'Port Config' -Icon '*' -MinWidth 950 -MinHeight 650
-$portInputGroup = New-OctoControl GroupBox @(10, 10, 400, 280) ([ordered]@{ Text = 'Configuration Parameters' }) $tab5
+$tab5 = New-NetGuiTab -Text 'Port Config'
+$portInputCard = New-NetGuiCard -Bounds @(16, 16, 400, 578) -Title 'Configuration Parameters' -Parent $tab5 -Anchor 'Top,Bottom,Left'
+# Old VLAN is last: it is hidden for vendors that do not use it, without leaving a gap
 $portFields = [ordered]@{
-    Vendor = 'Vendor:'; PortType = 'Port Type:'; Interface = 'Interface:'; Description = 'Description:'
-    Vlan = 'VLAN:'; OldVlan = 'Old VLAN:'; VoiceVlan = 'Voice VLAN:'; Status = 'Status:'
+    Vendor = 'Vendor'; PortType = 'Port Type'; Interface = 'Interface'; Description = 'Description'
+    Vlan = 'VLAN'; VoiceVlan = 'Voice VLAN'; Status = 'Status'; OldVlan = 'Old VLAN'
 }
 $portDefaults = @{ Interface = 'Gi1/0/1'; Description = 'User PC'; Vlan = '100'; OldVlan = ''; VoiceVlan = '200'; Status = 'no shutdown' }
 $portInputs = @{}
 $portLabels = @{}
-$y = 30
+$y = 48
 foreach ($key in $portFields.Keys) {
-    $portLabels[$key] = New-OctoControl Label @(15, $y, 100, 20) ([ordered]@{ Text = $portFields[$key] }) $portInputGroup
+    $portLabels[$key] = New-NetGuiControl Label @(16, ($y + 3), 100, 20) ([ordered]@{ Text = $portFields[$key] }) $portInputCard
     if ($key -eq 'Vendor' -or $key -eq 'PortType') {
-        $portInputs[$key] = New-OctoControl ComboBox @(120, ($y - 3), 250, 25) ([ordered]@{ DropDownStyle = 'DropDownList' }) $portInputGroup
+        $portInputs[$key] = New-NetGuiControl ComboBox @(120, $y, 264, 23) ([ordered]@{ DropDownStyle = 'DropDownList' }) $portInputCard
     } else {
-        $portInputs[$key] = New-OctoControl TextBox @(120, ($y - 3), 250, 25) ([ordered]@{ Text = $portDefaults[$key] }) $portInputGroup
+        $portInputs[$key] = New-NetGuiControl TextBox @(120, $y, 264, 23) ([ordered]@{ Text = $portDefaults[$key] }) $portInputCard
     }
-    $y += 30
+    $y += 34
 }
 $cboVendor = $portInputs.Vendor
 $cboPortType = $portInputs.PortType
 [void]$cboVendor.Items.AddRange([object[]]@('Cisco', 'ICX/FCX 8030', 'FCX 7.3'))
 
-$btnGenerateConfig = New-OctoControl Button @(10, 300, 130, 35) ([ordered]@{ Text = 'Generate Config'; Font = $script:Fonts.Header; BackColor = [System.Drawing.Color]::FromArgb(46, 139, 87); ForeColor = [System.Drawing.Color]::White; FlatStyle = 'Flat' }) $tab5
-$btnCopyConfig = New-OctoControl Button @(150, 300, 130, 35) ([ordered]@{ Text = 'Copy to Clipboard' }) $tab5
-$btnClearConfig = New-OctoControl Button @(290, 300, 80, 35) ([ordered]@{ Text = 'Clear' }) $tab5
-$btnSaveTemplate = New-OctoControl Button @(10, 345, 130, 35) ([ordered]@{ Text = 'Save as Template' }) $tab5
-$btnLoadTemplate = New-OctoControl Button @(150, 345, 110, 35) ([ordered]@{ Text = 'Load Template' }) $tab5
-[void](New-OctoControl Label @(10, 390, 400, 35) ([ordered]@{ Text = "Placeholders: {{INTERFACE}} {{DESCRIPTION}} {{VLAN}}`n{{OLD_VLAN}} {{VOICE_VLAN}} {{STATUS}}"; Font = New-Object System.Drawing.Font('Consolas', 8); ForeColor = [System.Drawing.Color]::Gray }) $tab5)
-$portOutputGroup = New-OctoControl GroupBox @(420, 10, 500, 600) ([ordered]@{ Text = 'Generated Configuration / Template Editor (paste template with {{PLACEHOLDERS}})'; Padding = (New-Object System.Windows.Forms.Padding(5, 20, 5, 5)); Anchor = 'Top,Bottom,Left,Right' }) $tab5
-$txtConfigOutput = New-OctoControl TextBox $null ([ordered]@{ Dock = 'Fill'; Multiline = $true; ScrollBars = 'Both'; WordWrap = $false; Font = $script:Fonts.MonoLarge; MaxLength = 0 }) $portOutputGroup
+$btnGenerateConfig = New-NetGuiControl Button @(16, 330, 118, 34) ([ordered]@{ Text = 'Generate Config'; Tag = 'Primary' }) $portInputCard
+$btnCopyConfig = New-NetGuiControl Button @(142, 330, 134, 34) ([ordered]@{ Text = 'Copy to Clipboard' }) $portInputCard
+$btnClearConfig = New-NetGuiControl Button @(284, 330, 100, 34) ([ordered]@{ Text = 'Clear' }) $portInputCard
+$btnSaveTemplate = New-NetGuiControl Button @(16, 372, 130, 34) ([ordered]@{ Text = 'Save as Template' }) $portInputCard
+$btnLoadTemplate = New-NetGuiControl Button @(154, 372, 122, 34) ([ordered]@{ Text = 'Load Template' }) $portInputCard
+[void](New-NetGuiControl Label @(16, 422, 368, 18) ([ordered]@{ Text = 'Placeholders'; Font = $script:Fonts.Semibold }) $portInputCard)
+[void](New-NetGuiControl Label @(16, 442, 368, 40) ([ordered]@{ Text = "{{INTERFACE}} {{DESCRIPTION}} {{VLAN}}`n{{VOICE_VLAN}} {{OLD_VLAN}} {{STATUS}}"; Font = $script:Fonts.Mono; Tag = 'Muted' }) $portInputCard)
+$portOutputCard = New-NetGuiCard -Bounds @(428, 16, 736, 578) -Title 'Configuration / Template Editor' -Parent $tab5 -Anchor 'Top,Bottom,Left,Right'
+[void](New-NetGuiControl Label @(272, 19, 448, 20) ([ordered]@{ Text = 'Paste a template with {{PLACEHOLDERS}} here, or generate a configuration.'; Tag = 'Muted'; Anchor = 'Top,Left,Right' }) $portOutputCard)
+$portEditorFrame = New-NetGuiFrame -Bounds @(16, 48, 704, 514) -Parent $portOutputCard
+$txtConfigOutput = New-NetGuiControl TextBox $null ([ordered]@{ Dock = 'Fill'; BorderStyle = 'None'; Multiline = $true; ScrollBars = 'Both'; WordWrap = $false; Font = $script:Fonts.MonoLarge; MaxLength = 0 }) $portEditorFrame
 
 function ConvertTo-WindowsNewLines {
     # A multi-line TextBox shows a line break only for CR LF
@@ -6409,13 +7400,13 @@ function Get-SelectedPortTemplateKey {
     param([switch]$RequireTemplate)
     $vendor = [string]$cboVendor.SelectedItem
     $portType = [string]$cboPortType.SelectedItem
-    if (-not $vendor) { Show-OctoMessage -Text 'Please select a vendor.' -Title 'Error' -Icon Error | Out-Null; return $null }
+    if (-not $vendor) { Show-NetGuiMessage -Text 'Please select a vendor.' -Title 'Error' -Icon Error | Out-Null; return $null }
     if (-not $portType) {
-        Show-OctoMessage -Text 'Please select a port type. If the Port Type dropdown is empty, no templates are available for the selected vendor.' -Title 'Error' -Icon Error | Out-Null
+        Show-NetGuiMessage -Text 'Please select a port type. If the Port Type dropdown is empty, no templates are available for the selected vendor.' -Title 'Error' -Icon Error | Out-Null
         return $null
     }
     if ($RequireTemplate -and -not ($script:PortTemplates.ContainsKey($vendor) -and $script:PortTemplates[$vendor].ContainsKey($portType))) {
-        Show-OctoMessage -Text "No template found for:`n`nVendor: $vendor`nPort Type: $portType`n`nPaste your config with {{PLACEHOLDERS}} and click 'Save as Template'." -Title 'No Template' | Out-Null
+        Show-NetGuiMessage -Text "No template found for:`n`nVendor: $vendor`nPort Type: $portType`n`nPaste your config with {{PLACEHOLDERS}} and click 'Save as Template'." -Title 'No Template' | Out-Null
         return $null
     }
     return @{ Vendor = $vendor; PortType = $portType }
@@ -6430,18 +7421,18 @@ $btnGenerateConfig.Add_Click({
     $config = $config.Replace('{{VLAN}}', $portInputs.Vlan.Text).Replace('{{OLD_VLAN}}', $portInputs.OldVlan.Text)
     $config = $config.Replace('{{VOICE_VLAN}}', $portInputs.VoiceVlan.Text).Replace('{{STATUS}}', $portInputs.Status.Text)
     $txtConfigOutput.Text = ConvertTo-WindowsNewLines -Text $config
-    Set-OctoStatus -Text "Config generated for $($key.Vendor) - $($key.PortType)"
+    Set-NetGuiStatus -Text "Config generated for $($key.Vendor) - $($key.PortType)"
 })
 $btnCopyConfig.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtConfigOutput.Text)) {
-        Show-OctoMessage -Text 'No configuration to copy. Generate a config first.' -Title 'Nothing to Copy' | Out-Null
+        Show-NetGuiMessage -Text 'No configuration to copy. Generate a config first.' -Title 'Nothing to Copy' | Out-Null
         return
     }
     try {
         [System.Windows.Forms.Clipboard]::SetText($txtConfigOutput.Text)
-        Set-OctoStatus -Text 'Configuration copied to clipboard'
+        Set-NetGuiStatus -Text 'Configuration copied to clipboard'
     } catch {
-        Show-OctoMessage -Text "Could not copy to the clipboard: $($_.Exception.Message)" -Title 'Clipboard' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text "Could not copy to the clipboard: $($_.Exception.Message)" -Title 'Clipboard' -Icon Warning | Out-Null
     }
 })
 $btnClearConfig.Add_Click({
@@ -6453,10 +7444,10 @@ $btnSaveTemplate.Add_Click({
     if (-not $key) { return }
     $templateContent = $txtConfigOutput.Text
     if ([string]::IsNullOrWhiteSpace($templateContent)) {
-        Show-OctoMessage -Text "Please paste your template configuration in the text area first.`n`nUse placeholders like {{INTERFACE}}, {{VLAN}}, etc. where variables should go." -Title 'No Template Content' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text "Please paste your template configuration in the text area first.`n`nUse placeholders like {{INTERFACE}}, {{VLAN}}, etc. where variables should go." -Title 'No Template Content' -Icon Warning | Out-Null
         return
     }
-    $confirm = Show-OctoMessage -Text "Save this template for:`n`nVendor: $($key.Vendor)`nPort Type: $($key.PortType)`n`nThis will overwrite any existing template for this combination." -Title 'Confirm Save Template' -Icon Question -Buttons YesNo
+    $confirm = Show-NetGuiMessage -Text "Save this template for:`n`nVendor: $($key.Vendor)`nPort Type: $($key.PortType)`n`nThis will overwrite any existing template for this combination." -Title 'Confirm Save Template' -Icon Question -Buttons YesNo
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
     if (-not $script:PortTemplates.ContainsKey($key.Vendor)) { $script:PortTemplates[$key.Vendor] = @{} }
     $script:PortTemplates[$key.Vendor][$key.PortType] = $templateContent
@@ -6467,191 +7458,177 @@ $btnSaveTemplate.Add_Click({
         if (-not $saved.ContainsKey($key.Vendor)) { $saved[$key.Vendor] = @{} }
         $saved[$key.Vendor][$key.PortType] = $templateContent
         $saved | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:PortTemplatesFile -Encoding UTF8
-        Set-OctoStatus -Text "Template saved: $($key.Vendor) / $($key.PortType)"
-        Show-OctoMessage -Text "Template saved successfully!`n`nVendor: $($key.Vendor)`nPort Type: $($key.PortType)`n`nSaved to: $script:PortTemplatesFile" -Title 'Template Saved' | Out-Null
+        Set-NetGuiStatus -Text "Template saved: $($key.Vendor) / $($key.PortType)"
+        Show-NetGuiMessage -Text "Template saved successfully!`n`nVendor: $($key.Vendor)`nPort Type: $($key.PortType)`n`nSaved to: $script:PortTemplatesFile" -Title 'Template Saved' | Out-Null
     } catch {
-        Show-OctoMessage -Text "Error saving template file:`n`n$($_.Exception.Message)`n`nTemplate is saved for this session only." -Title 'Save Error' -Icon Warning | Out-Null
+        Show-NetGuiMessage -Text "Error saving template file:`n`n$($_.Exception.Message)`n`nTemplate is saved for this session only." -Title 'Save Error' -Icon Warning | Out-Null
     }
 })
 $btnLoadTemplate.Add_Click({
     $key = Get-SelectedPortTemplateKey -RequireTemplate
     if (-not $key) { return }
     $txtConfigOutput.Text = ConvertTo-WindowsNewLines -Text ([string]$script:PortTemplates[$key.Vendor][$key.PortType])
-    Set-OctoStatus -Text "Template loaded: $($key.Vendor) / $($key.PortType)"
+    Set-NetGuiStatus -Text "Template loaded: $($key.Vendor) / $($key.PortType)"
 })
 
 # ============================================
 # TAB: HELP GUIDE
 # ============================================
 
-$tab6 = New-OctoTab -Text 'Help Guide' -Icon '?'
-$helpText = New-OctoControl RichTextBox @(10, 10, 950, 600) ([ordered]@{
-    ReadOnly = $true; BorderStyle = 'None'; Font = $script:Fonts.MonoLarge; Anchor = 'Top,Bottom,Left,Right'; DetectUrls = $false; WordWrap = $true
-}) $tab6
-$helpText.Text = @'
-===============================================================================
-                              OCTONAV HELP GUIDE
-===============================================================================
+$tab6 = New-NetGuiTab -Text 'Help Guide'
+$helpCard = New-NetGuiCard -Bounds @(16, 16, 1148, 578) -Parent $tab6 -Anchor 'Top,Bottom,Left,Right'
+$helpText = New-NetGuiControl RichTextBox @(24, 18, 1108, 544) ([ordered]@{
+    ReadOnly = $true; BorderStyle = 'None'; Anchor = 'Top,Bottom,Left,Right'; DetectUrls = $false; WordWrap = $true; Tag = 'Card'
+}) $helpCard
 
-OctoNav runs as a standard user. Only the Network Configuration tab needs
-"Run as Administrator" (it changes adapter IP settings).
-
-
--------------------------------------------------------------------------------
-NETWORK CONFIGURATION
--------------------------------------------------------------------------------
-
-WHAT IT DOES:
-   Changes your computer's IP address and starts the TFTP server.
-   Useful when you need to connect directly to a switch for configuration
-   or firmware uploads.
-
-   IMPORTANT: this tab needs Administrator rights
-   (right-click the script -> "Run as Administrator").
-
-HOW TO USE IT:
-   STEP 1: Fill in the IP settings
-      - New IP Address: the IP you want (example: 192.168.1.101)
-      - Gateway: usually the switch's IP (example: 192.168.1.1)
-      - Prefix Length: usually 24 (same as subnet mask 255.255.255.0)
-
-   STEP 2: Click "Apply Configuration"
-      - Finds the unidentified network adapter automatically
-      - Applies your IP configuration
-      - Changes the network from Public to Private
-      - Starts the TFTP server (RunStandAloneMT.bat) if present
-
-   STEP 3: When done, click "Restore Defaults"
-      - Stops the TFTP server
-      - Sets your adapter back to DHCP (automatic IP)
-
-   "What IP should I use?"
-      - If the switch is 192.168.1.1 -> use 192.168.1.100 (same first 3 numbers)
-      - The last number just needs to be different from the switch
-
-
--------------------------------------------------------------------------------
-DHCP STATISTICS
--------------------------------------------------------------------------------
-
-WHAT IT DOES:
-   Collects scope usage from your Windows DHCP servers, many servers at once.
-
-HOW TO USE IT:
-   STEP 1: Select DHCP servers
-      - "Refresh Server List" reads the servers from Active Directory
-      - Check the servers you want, or type names (comma-separated)
-      - Nothing selected = all domain DHCP servers
-
-   STEP 2: (Optional) Select specific scopes
-      - "Refresh Cache" loads all scopes
-      - Filter (3+ characters, comma = OR) and Prefix (2+ characters)
-      - "Select All Visible"; selections are kept when you change the filter
-      - The server and scope caches are encrypted with ONE password. If a cache
-        does not open, you can type its password again or skip it; after a skip,
-        "Refresh Cache" rebuilds it with your current password.
-
-   STEP 3: Options
-      - DNS (Option 6), Option 60, Option 43, or all configured options
-      - Parallel Operations: how many servers are queried at the same time
-
-   STEP 4: Click "Collect DHCP Statistics" (Stop keeps what is collected)
-      - A summary is written to the log and a CSV is exported automatically
-      - A server that fails is tried once more; servers that still fail are
-        named in the summary (scopes only they serve are missing)
-      - After a full collection the log compares the result with the scope
-        cache and lists every cached scope that was not collected, and why
-
-HOW THE NUMBERS ARE CALCULATED (redundancy-aware):
-   - Failover partners (load balance or hot standby) both report the WHOLE
-     scope, so a failover scope is counted ONCE - not twice.
-   - A scope split across servers without failover (split scope) has each
-     server's part of the pool added together.
-   - Added-up pools can never exceed the scope's address range: copies that
-     hand out the same addresses without failover are capped at the range and
-     marked "OVERLAPPING POOLS".
-   - The same scope ID under different scope names on different servers is
-     treated as separate networks (each pool counted), marked "DIFFERENT SCOPE
-     NAMES". The per-server export lists each one.
-   - Inactive copies of a scope are not counted.
-   - "Group by Scope ID on Export" writes one row per scope with the columns
-     Redundancy, FailoverPartner, FailoverState and Notes (for example a
-     degraded failover relationship or pools that differ between partners).
-   - Percentage in use = in use / (in use + free), per scope and overall.
-
-
--------------------------------------------------------------------------------
-DNA CENTER
--------------------------------------------------------------------------------
-
-   STEP 1: Select the server, enter username and password, click "Connect"
-   STEP 2: Click "Load Devices"
-   STEP 3: Filter by hostname, family, role or IP (optional)
-   STEP 4: Check devices and click "Apply Selection"
-           (no selection = reports use all loaded devices;
-            the CLI Command Runner always needs a selection)
-   STEP 5: Double-click a function in the tree (or a favorite)
-           Right-click a function to add it to Favorites.
-
-   Device queries run in parallel; "Stop" cancels a running report.
-   Reports are exported as CSV to the Export Path.
-
-
--------------------------------------------------------------------------------
-FILE COMPARE
--------------------------------------------------------------------------------
-
-   1. Browse to the ORIGINAL (before) file and the MODIFIED (after) file
-   2. Click "Compare & Export HTML" and choose where to save the report
-   3. The report opens in your browser:
-      - Green = added lines, red = removed lines, changed characters highlighted
-      - Prev / Next buttons, keyboard: j / k or arrow keys
-      - "Ignore blank lines" option
-   "Swap Files" switches the two files, "Clear" empties both boxes.
-
-
--------------------------------------------------------------------------------
-PORT CONFIG
--------------------------------------------------------------------------------
-
-   1. Pick the switch type (Cisco, ICX/FCX 8030, FCX 7.3) and a Port Type
-   2. Fill in Interface, Description, VLAN, Voice VLAN and Status
-      (Old VLAN is only used by FCX 7.3)
-   3. Click "Generate Config", then "Copy to Clipboard"
-
-   Custom templates: paste your config into the text box, replace the values
-   with placeholders, select Vendor and Port Type, click "Save as Template".
-
-   PLACEHOLDERS:
-      {{INTERFACE}}    = port name
-      {{DESCRIPTION}}  = port description
-      {{VLAN}}         = data VLAN
-      {{VOICE_VLAN}}   = voice VLAN
-      {{OLD_VLAN}}     = old VLAN (FCX 7.3 only)
-      {{STATUS}}       = no shutdown / shutdown
-
-
--------------------------------------------------------------------------------
-GENERAL TIPS
--------------------------------------------------------------------------------
-
-   - Each tab has a log / status area - check it when something fails
-   - View -> Toggle Theme switches between the Light and Dark themes
-   - The RDOX Exports tab exports embedded resource files
-   - Settings and caches are stored next to OctoNav.ps1, or in
-     %LOCALAPPDATA%\OctoNav when that folder is read-only
-   - The window size is saved when you close OctoNav
+# '# ' title, '## ' section, '### ' label, '- ' bullet ('  - ' nested), '1. ' step
+$script:HelpMarkup = @'
+# NetGUI Help
+NetGUI runs as a standard user. Only the Network Configuration tab needs "Run as Administrator" (it changes adapter IP settings).
+Switch tabs with the bar at the top, or with Ctrl+Tab and Ctrl+Shift+Tab.
+## Network Configuration
+### What it does
+Changes your computer's IP address and starts the TFTP server - useful when you connect directly to a switch for configuration or firmware uploads. This tab needs Administrator rights (right-click the script and choose "Run as Administrator").
+### How to use it
+1. Fill in the IP settings:
+  - New IP Address: the address you want (example: 192.168.1.101)
+  - Gateway: usually the switch's IP (example: 192.168.1.1)
+  - Prefix Length: usually 24 (the same as subnet mask 255.255.255.0)
+2. Click "Apply Configuration". It finds the unidentified network adapter, applies your IP settings, changes the network from Public to Private and starts the TFTP server (RunStandAloneMT.bat) if it is present.
+3. When you are done, click "Restore Defaults". It stops the TFTP server and sets the adapter back to DHCP (automatic IP).
+### Which IP should I use?
+- If the switch is 192.168.1.1, use for example 192.168.1.100 (the same first three numbers).
+- The last number just has to be different from the switch.
+## DHCP Statistics
+### What it does
+Collects scope usage from your Windows DHCP servers, many servers at once.
+### How to use it
+1. Select DHCP servers:
+  - "Refresh Server List" reads the servers from Active Directory
+  - Check the servers you want, or type names (comma-separated)
+  - Nothing selected = all domain DHCP servers
+2. Optional - select specific scopes:
+  - "Refresh Cache" loads all scopes
+  - Filter (3+ characters, comma = OR): the scope name contains the text, the scope ID starts with the numbers (10.1 finds 10.1.x.x but not 10.10.x.x or 110.1.x.x), or the scope ID is in the subnet (10.1.0.0/20)
+  - Prefix (2+ characters): the scope name starts with the text; numbers and subnets work as in Filter - 10 finds every 10.x.x.x scope
+  - "Add Subnets" finds a site's scopes that are not named after it: type the site code, click it, and the subnets of the matching scopes (for example 10.45.0.0/20) are added to the filter. The log names every scope that comes in this way. A subnet is only widened while differently named scopes in it stay fewer than the matching ones, so a neighbouring site's block is not added
+  - The DHCP server name is not searched, so a site code in a server name does not bring in the other sites that server serves
+  - "Select All Visible"; selections are kept when you change the filter
+  - The server and scope caches are encrypted with ONE password. If a cache does not open, you can type its password again or skip it; after a skip, "Refresh Cache" rebuilds it with your current password.
+3. Options:
+  - DNS Servers (Option 6), Option 60, Option 43, or all configured options
+  - Parallel queries: how many servers are queried at the same time
+4. Click "Collect DHCP Statistics" ("Stop" keeps what is collected so far):
+  - A summary is written to the log and a CSV is exported automatically
+  - A server that fails is tried once more; servers that still fail are named in the summary (scopes only they serve are missing)
+  - An option lookup that fails is tried once more (one scope at a time, after the server's other lookups finish). If it fails again, its option columns say "(lookup failed)" and the summary lists it
+  - After a full collection the log compares the result with the scope cache and lists every cached scope that was not collected, and why
+### How the numbers are calculated (redundancy-aware)
+- Failover partners (load balance or hot standby) both report the WHOLE scope, so a failover scope is counted ONCE - not twice.
+- A scope split across servers without failover (split scope) has each server's part of the pool added together.
+- Added-up pools can never exceed the scope's address range: copies that hand out the same addresses without failover are capped at the range and marked "OVERLAPPING POOLS".
+- The same scope ID under different scope names on different servers is treated as separate networks (each pool counted), marked "DIFFERENT SCOPE NAMES". The per-server export lists each one.
+- Inactive copies of a scope are not counted.
+- "Group by Scope ID on Export" writes one row per scope with the columns Redundancy, FailoverPartner, FailoverState and Notes (for example a degraded failover relationship or pools that differ between partners).
+- Percentage in use = in use / (in use + free), per scope and overall.
+- The log shows two counts: scope ROWS (one per scope per server - what the old tool reported) and UNIQUE scopes (a scope on a failover pair or split across servers is one scope).
+- A server listed more than once in Active Directory (one entry per IP, aliases, stale entries whose name no longer resolves) is queried once; the log lists every skipped entry and why.
+## DNA Center
+1. Select the server, enter username and password, and click "Connect".
+2. Click "Load Devices".
+3. Optional - filter by hostname, family, role or IP.
+4. Check devices and click "Apply Selection". No selection = reports use all loaded devices; the CLI Command Runner always needs a selection.
+5. Double-click a function in the tree (or a favorite). Right-click a function to add it to Favorites.
+- Device queries run in parallel; "Stop" cancels a running report.
+- A request that fails for a temporary reason (no answer, timeout, rate limit, server error) is tried once more after a pause, 2 at a time. Devices that still fail are named in the log with the error.
+- Reports are exported as CSV to the Export Folder.
+## File Compare
+1. Browse to the ORIGINAL (before) file and the MODIFIED (after) file.
+2. Click "Compare & Export HTML" and choose where to save the report.
+3. The report opens in your browser:
+  - Green = added lines, red = removed lines, changed characters highlighted
+  - Prev / Next buttons; keyboard: j / k or the arrow keys
+  - "Ignore blank lines" option
+"Swap Files" switches the two files, "Clear" empties both boxes.
+## Port Config
+1. Pick the switch type (Cisco, ICX/FCX 8030, FCX 7.3) and a Port Type.
+2. Fill in Interface, Description, VLAN, Voice VLAN and Status (Old VLAN is only used by FCX 7.3).
+3. Click "Generate Config", then "Copy to Clipboard".
+Custom templates: paste your config into the editor, replace the values with placeholders, select Vendor and Port Type, and click "Save as Template".
+### Placeholders
+- {{INTERFACE}} - port name
+- {{DESCRIPTION}} - port description
+- {{VLAN}} - data VLAN
+- {{VOICE_VLAN}} - voice VLAN
+- {{OLD_VLAN}} - old VLAN (FCX 7.3 only)
+- {{STATUS}} - no shutdown / shutdown
+## General Tips
+- Each tab has a log or status area - check it when something fails
+- View > Toggle Theme (Ctrl+T) switches between the Light and Dark themes
+- The RDOX Exports tab exports embedded resource files
+- Settings and caches are stored next to NetGUI.ps1, or in %LOCALAPPDATA%\NetGUI when that folder is read-only
+- The window size is saved when you close NetGUI
 '@
+
+function Set-NetGuiHelpText {
+    <#
+    .SYNOPSIS
+        Renders the help markup with the current theme's colours.
+    #>
+    $theme = $script:CurrentTheme
+    $helpText.Clear()
+    foreach ($raw in ($script:HelpMarkup -split "`r?`n")) {
+        $text = $raw; $font = $script:Fonts.Body; $color = $theme.Text
+        $indent = 0; $hanging = 0; $bullet = $false; $gap = $false
+        if ($raw.StartsWith('# ')) { $text = $raw.Substring(2); $font = $script:Fonts.HelpTitle; $color = $theme.NavSelected }
+        elseif ($raw.StartsWith('## ')) { $text = $raw.Substring(3); $font = $script:Fonts.HelpHeading; $gap = $true }
+        elseif ($raw.StartsWith('### ')) { $text = $raw.Substring(4); $font = $script:Fonts.HelpLabel; $gap = $true }
+        elseif ($raw -match '^(\s*)- (.*)$') { $text = $Matches[2]; $bullet = $true; $indent = if ($Matches[1]) { 44 } else { 22 } }
+        elseif ($raw -match '^\d+\. ') { $indent = 4; $hanging = 18 }
+        # A small empty line before headings (the RichTextBox has no paragraph spacing)
+        $lines = [System.Collections.Generic.List[object]]::new()
+        if ($gap) { $lines.Add(@('', $script:Fonts.Spacer)) }
+        $lines.Add(@($text, $font))
+        foreach ($line in $lines) {
+            $helpText.SelectionStart = $helpText.TextLength
+            $helpText.SelectionLength = 0
+            $helpText.SelectionFont = $line[1]
+            $helpText.SelectionColor = $color
+            $helpText.SelectionBullet = ($bullet -and $line[0])
+            $helpText.BulletIndent = 8
+            $helpText.SelectionIndent = $indent
+            $helpText.SelectionHangingIndent = $hanging
+            $helpText.AppendText($line[0] + "`n")
+        }
+    }
+    $helpText.SelectionStart = 0
+    $helpText.ScrollToCaret()
+}
 
 # ============================================
 # STATUS BAR, THEME, CACHES, SHOW
 # ============================================
 
 $script:StatusBarPanels = New-EnhancedStatusBar -Form $mainForm
-Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
-Reset-ScopeFilterBoxes   # the theme recolours text boxes; keep the placeholders grey
+# Docked last = fills what the status bar, menu and navigation bar leave
+$script:pageHost.BringToFront()
 
-function ConvertTo-OctoDateTime {
+function Set-NetGuiTheme {
+    # Recolours the whole window for $script:CurrentTheme
+    $mainForm.SuspendLayout()
+    try {
+        Set-ThemeToControl -Control $mainForm -Theme $script:CurrentTheme
+        Update-NetGuiNav
+        Update-ScopeFilterColors
+        Set-NetGuiHelpText
+    } finally { $mainForm.ResumeLayout() }
+    $mainForm.Invalidate($true)
+}
+
+Select-NetGuiPage -Index 0
+Set-NetGuiTheme
+
+function ConvertTo-NetGuiDateTime {
     # Cache timestamps are ISO 8601 strings (older caches: local date/time text)
     param($Value)
     if ($null -eq $Value) { return $null }
@@ -6669,7 +7646,7 @@ try {
     $serverCache = Read-DhcpCache -Kind Servers
     if (@($serverCache.Items).Count -gt 0) {
         Set-DhcpServerList -Servers @($serverCache.Items)
-        $updated = ConvertTo-OctoDateTime $serverCache.LastUpdated
+        $updated = ConvertTo-NetGuiDateTime $serverCache.LastUpdated
         $script:lblLastRefresh.Text = if ($updated) { "Last refreshed: $($updated.ToString('yyyy-MM-dd HH:mm:ss')) (cached)" } else { 'Last refreshed: (cached)' }
     }
 } catch {
@@ -6680,15 +7657,18 @@ try {
     $scopeCache = Read-DhcpCache -Kind Scopes
     if (@($scopeCache.Items).Count -gt 0) {
         Set-DhcpScopeList -Scopes @($scopeCache.Items)
-        $updated = ConvertTo-OctoDateTime $scopeCache.LastUpdated
+        $updated = ConvertTo-NetGuiDateTime $scopeCache.LastUpdated
         $script:scopeCacheUpdated = $updated
         $when = if ($updated) { " ($($updated.ToString('MM/dd HH:mm')))" } else { '' }
         $script:lblScopeCacheStatus.Text = "Cache: $($script:allDHCPScopes.Count) scope(s) loaded$when"
-        $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Green
+        Set-NetGuiTone -Control $script:lblScopeCacheStatus -Tone Success
     }
 } catch { }
 
-if ($script:Settings.ShowDashboardOnStartup) { $tabControl.SelectedIndex = 0 }
+if ($script:DataCopyError) {
+    Write-Log -Message "Settings and caches from %LOCALAPPDATA%\OctoNav could not all be copied to $($script:DataDir): $($script:DataCopyError) - the old folder is unchanged" -Color 'Warning' -LogBox $dhcpLogBox
+}
+
 if ($script:RequireStartupPassword) { Start-SessionMonitor -Form $mainForm }
 
 # Slow lookups run after the window is on screen
@@ -6703,18 +7683,19 @@ $mainForm.Add_Shown({
 $mainForm.Add_FormClosing({
     $script:AppClosing = $true
     try {
-        if ($script:dhcpJob -and -not $script:dhcpJob.Completed) { Stop-OctoJob -Job $script:dhcpJob }
+        if ($script:dhcpJob -and -not $script:dhcpJob.Completed) { Stop-NetGuiJob -Job $script:dhcpJob }
         if ($script:Dna.Shared) { $script:Dna.Shared.Stop = $true }
         $bounds = if ($mainForm.WindowState -eq [System.Windows.Forms.FormWindowState]::Normal) { $mainForm.Bounds } else { $mainForm.RestoreBounds }
         if ($bounds.Width -ge 800 -and $bounds.Height -ge 500) { $script:Settings.WindowSize = @{ Width = $bounds.Width; Height = $bounds.Height } }
         $script:Settings.WindowMaximized = ($mainForm.WindowState -eq [System.Windows.Forms.FormWindowState]::Maximized)
-        [void](Save-OctoNavSettings -Settings $script:Settings)
+        [void](Save-NetGuiSettings -Settings $script:Settings)
     } catch { }
 })
 
 $mainForm.ResumeLayout()
+$script:pageHost.ResumeLayout()
 [void]$mainForm.ShowDialog()
 
 if ($script:SessionTimer) { try { $script:SessionTimer.Stop(); $script:SessionTimer.Dispose() } catch { } }
-Close-OctoRunspacePool -Pool $script:Dna.Pool
+Close-NetGuiRunspacePool -Pool $script:Dna.Pool
 $mainForm.Dispose()
