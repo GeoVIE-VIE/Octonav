@@ -47,6 +47,13 @@ account for both:
 | Failover information unavailable | Counted once, as before, and marked `Unknown` |
 
 Percentage in use = in use / (in use + free), rounded to 2 decimals.
+
+The log shows two counts: scope rows (one per scope per server, which is what the
+old tool reported as "Found N scope(s)") and unique scopes (a scope on a failover
+pair or split across servers counts once). A server listed more than once in
+Active Directory (one entry per IP address, aliases, or stale entries whose name no
+longer resolves) is queried once, and the log lists every skipped entry and why.
+Before, such a server was queried twice and its scopes were counted twice.
 The export has these extra columns: `TotalAddresses`, `ScopeState`, `Redundancy`,
 `FailoverPartner`, `FailoverState` and `Notes` (for example a degraded failover
 relationship, or pool sizes that differ between partners). "Group by Scope ID on

@@ -1667,18 +1667,29 @@ function Merge-DhcpServerList {
     .DESCRIPTION
         Querying the same server twice would count its standalone scopes twice,
         so duplicates are removed:
-          - names are compared case-insensitively
-          - an entry whose IP matches an earlier entry is the same server
-            (Get-DhcpServerInDC lists multi-homed servers once per IP)
+          - names are compared case-insensitively (Get-DhcpServerInDC lists a
+            multi-homed server once per IP address)
+          - an entry whose IP matches an earlier entry is the same server, unless
+            DNS says otherwise: a name that no longer resolves is a stale Active
+            Directory entry (the name that does resolve is kept), and two names
+            that resolve to different addresses are different servers (both kept)
           - a bare host name ("dhcp01") is dropped when exactly one FQDN with that
             first label ("dhcp01.contoso.com") is also present
     .PARAMETER Entries
         Strings, or objects/hashtables with Name and optional IP.
+    .PARAMETER Resolved
+        Optional: name -> addresses the name resolves to now (empty = does not resolve).
+    .PARAMETER Notes
+        Optional list that receives one line for every entry that is not queried on its own.
     #>
-    param([AllowEmptyCollection()][object[]]$Entries)
+    param(
+        [AllowEmptyCollection()][object[]]$Entries,
+        [hashtable]$Resolved,
+        [AllowNull()][System.Collections.Generic.List[string]]$Notes
+    )
 
     $seenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $seenIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ipOwner = @{}
     $kept = [System.Collections.Generic.List[object]]::new()
 
     foreach ($entry in $Entries) {
@@ -1691,17 +1702,49 @@ function Merge-DhcpServerList {
         $parsed = $null
         $nameIsIp = [System.Net.IPAddress]::TryParse($name, [ref]$parsed)
         if ($nameIsIp -and [string]::IsNullOrWhiteSpace($ipText)) { $ipText = $name }
+        $ip = if ([string]::IsNullOrWhiteSpace($ipText)) { '' } else { $ipText.Trim() }
+        $item = [pscustomobject]@{ Name = $name; IP = $ip; IsFqdn = ((-not $nameIsIp) -and $name.IndexOf('.') -gt 0) }
 
-        if (-not $seenNames.Add($name)) { continue }
-        if (-not [string]::IsNullOrWhiteSpace($ipText) -and -not $seenIPs.Add($ipText.Trim())) { continue }
-        $kept.Add([pscustomobject]@{ Name = $name; IsFqdn = ((-not $nameIsIp) -and $name.IndexOf('.') -gt 0) })
+        if (-not $seenNames.Add($name)) {
+            if ($null -ne $Notes) { $Notes.Add("$name$(if ($ip) { " ($ip)" }): the same server listed again (one entry per IP address)") }
+            continue
+        }
+        if ($ip -and $ipOwner.ContainsKey($ip)) {
+            $ownerIndex = $ipOwner[$ip]
+            $owner = $kept[$ownerIndex]
+            $ownerAddr = $null; $newAddr = $null
+            if ($Resolved -and $Resolved.ContainsKey($owner.Name) -and $Resolved.ContainsKey($name)) {
+                $ownerAddr = @($Resolved[$owner.Name] | Where-Object { $_ })
+                $newAddr = @($Resolved[$name] | Where-Object { $_ })
+            }
+            if ($null -ne $ownerAddr -and $ownerAddr.Count -eq 0 -and $newAddr.Count -gt 0) {
+                # the earlier entry is stale: the live server now has this address
+                $kept[$ownerIndex] = $item
+                if ($null -ne $Notes) { $Notes.Add("$($owner.Name) ($ip): stale Active Directory entry - the name no longer resolves; $name has this address now") }
+                continue
+            }
+            if ($null -ne $newAddr -and $newAddr.Count -gt 0 -and $ownerAddr.Count -gt 0 -and
+                @($newAddr | Where-Object { $ownerAddr -contains $_ }).Count -eq 0) {
+                # same address in Active Directory, different machines in DNS: query both
+                if ($null -ne $Notes) { $Notes.Add("$name and $($owner.Name) share $ip in Active Directory but resolve to different addresses - both are queried") }
+                $kept.Add($item)
+                continue
+            }
+            if ($null -ne $Notes) {
+                if ($null -ne $newAddr -and $newAddr.Count -eq 0) { $Notes.Add("$name ($ip): stale Active Directory entry - the name does not resolve; $($owner.Name) has this address") }
+                else { $Notes.Add("$name ($ip): same IP address as $($owner.Name) - treated as the same server") }
+            }
+            continue
+        }
+        $kept.Add($item)
+        if ($ip) { $ipOwner[$ip] = $kept.Count - 1 }
     }
 
-    $fqdnLabelCount = @{}
+    $fqdnByLabel = @{}
     foreach ($k in $kept) {
         if ($k.IsFqdn) {
             $label = Get-DhcpServerShortName -Name $k.Name
-            if ($fqdnLabelCount.ContainsKey($label)) { $fqdnLabelCount[$label]++ } else { $fqdnLabelCount[$label] = 1 }
+            if ($fqdnByLabel.ContainsKey($label)) { $fqdnByLabel[$label] = '' } else { $fqdnByLabel[$label] = $k.Name }
         }
     }
 
@@ -1709,7 +1752,10 @@ function Merge-DhcpServerList {
     foreach ($k in $kept) {
         if (-not $k.IsFqdn -and $k.Name.IndexOf('.') -lt 0) {
             $label = $k.Name.ToLowerInvariant()
-            if ($fqdnLabelCount.ContainsKey($label) -and $fqdnLabelCount[$label] -eq 1) { continue }
+            if ($fqdnByLabel.ContainsKey($label) -and $fqdnByLabel[$label]) {
+                if ($null -ne $Notes) { $Notes.Add("$($k.Name): short name of $($fqdnByLabel[$label])") }
+                continue
+            }
         }
         $result.Add($k.Name)
     }
@@ -2167,7 +2213,23 @@ try {
         if ($null -eq $s) { continue }
         $list.Add([pscustomobject]@{ Name = [string]$s.DnsName; IP = [string]$s.IPAddress })
     }
-    [pscustomobject]@{ Success = $true; Servers = $list.ToArray(); Message = '' }
+    # Different names registered with the same IP: look the names up now, so a stale
+    # entry (server gone, address reused) is not taken for the live server
+    $namesByIp = @{}
+    foreach ($e in $list) {
+        if (-not $e.IP -or -not $e.Name) { continue }
+        if (-not $namesByIp.ContainsKey($e.IP)) { $namesByIp[$e.IP] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase) }
+        [void]$namesByIp[$e.IP].Add($e.Name)
+    }
+    $resolved = @{}
+    foreach ($ip in @($namesByIp.Keys)) {
+        if ($namesByIp[$ip].Count -lt 2) { continue }
+        foreach ($n in $namesByIp[$ip]) {
+            try { $resolved[$n] = @([System.Net.Dns]::GetHostAddresses($n) | ForEach-Object { $_.IPAddressToString }) }
+            catch { $resolved[$n] = @() }
+        }
+    }
+    [pscustomobject]@{ Success = $true; Servers = $list.ToArray(); Resolved = $resolved; Message = '' }
 } catch {
     [pscustomobject]@{ Success = $false; Servers = @(); Message = $_.Exception.Message }
 }
@@ -2477,12 +2539,13 @@ function Receive-DhcpTaskResult {
     switch ($Descriptor.Kind) {
         'Discover' {
             if ($out -and $out.Success) {
-                $names = @(Merge-DhcpServerList -Entries @($out.Servers))
+                $mergeNotes = [System.Collections.Generic.List[string]]::new()
+                $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $mergeNotes)
                 if ($names.Count -eq 0) {
                     $State.Error = 'No DHCP servers are registered in Active Directory.'
                     Add-DhcpLog $State 'Error' $State.Error
                 } else {
-                    Add-DhcpLog $State 'Success' "Found $($names.Count) DHCP server(s) in Active Directory"
+                    foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $mergeNotes)) { $State.Log.Add($line) }
                     foreach ($t in @(New-DhcpServerTasks -State $State -Servers $names)) { $next.Add($t) }
                 }
             } else {
@@ -2611,7 +2674,18 @@ function Get-DhcpSummaryLines {
             $lines.Add(@{ Color = 'Warning'; Message = ('Options: {0} of {1} scope lookups failed' -f $State.OptionFailures, $State.OptionScopes) })
         }
     }
-    $lines.Add(@{ Color = 'Info'; Message = ('Unique scopes: {0} (active {1}, inactive {2})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes) })
+    $unique = 'Unique scopes: {0:N0} (active {1:N0}, inactive {2:N0})' -f $s.UniqueScopes, $s.ActiveScopes, $s.InactiveScopes
+    if ($s.ServerRows -gt $s.UniqueScopes) {
+        $unique += (' from {0:N0} scope rows - {1:N0} row(s) are the same scope on another server (failover partner or split scope) and count once' -f $s.ServerRows, ($s.ServerRows - $s.UniqueScopes))
+    }
+    $lines.Add(@{ Color = 'Info'; Message = $unique })
+    if ($State) {
+        # (assigned first: the function returns its list of groups as one array)
+        $identical = Find-DhcpIdenticalServers -Rows $State.Rows.ToArray()
+        foreach ($twins in $identical) {
+            $lines.Add(@{ Color = 'Warning'; Message = ('{0} returned identical scopes (same IDs, names, ranges and pool sizes) without a failover relationship - probably one server listed twice in Active Directory under different names, so its scopes are counted twice' -f (@($twins) -join ' and ')) })
+        }
+    }
     $lines.Add(@{ Color = 'Info'; Message = ('Redundancy: failover {0} (degraded {1}) | single server {2} | split {3} | mixed {4} | unknown {5}' -f $s.FailoverScopes, $s.DegradedFailover, $s.SingleServer, $s.SplitScopes, $s.MixedScopes, $s.UnknownScopes) })
     if ($s.NoStatsRows -gt 0) {
         $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) returned no statistics, even when asked one by one - listed with 0 / 0 (see Notes)' -f $s.NoStatsRows) })
@@ -2632,6 +2706,70 @@ function Get-DhcpSummaryLines {
         }
     }
     return $lines.ToArray()
+}
+
+function Get-DhcpServerListLines {
+    # Log lines for "N Active Directory entries -> M servers", with every skipped entry
+    param([int]$EntryCount, [int]$ServerCount, [AllowNull()][System.Collections.Generic.List[string]]$Notes)
+    $lines = [System.Collections.Generic.List[object]]::new()
+    $lines.Add(@{ Color = 'Success'; Message = ('Active Directory lists {0} DHCP server entr{1} - {2} server(s) to query' -f $EntryCount, $(if ($EntryCount -eq 1) { 'y' } else { 'ies' }), $ServerCount) })
+    if ($Notes) {
+        foreach ($n in $Notes) {
+            $color = if ($n -like '*stale*' -or $n -like '*both are queried*') { 'Warning' } else { 'Info' }
+            $lines.Add(@{ Color = $color; Message = "  $n" })
+        }
+    }
+    return $lines.ToArray()
+}
+
+function Find-DhcpIdenticalServers {
+    <#
+    .SYNOPSIS
+        Groups of servers that returned exactly the same scopes (IDs, names, ranges,
+        states and pool sizes) without a failover relationship between them -
+        usually one server listed twice in Active Directory under two names.
+    .DESCRIPTION
+        Pool size (free + in use) is part of the comparison, so the two halves of a
+        split scope (different exclusions) and failover partners are not reported.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows)
+    $scopesByServer = @{}
+    $partners = @{}
+    foreach ($r in $Rows) {
+        $server = [string]$r.DHCPServer
+        if (-not $scopesByServer.ContainsKey($server)) {
+            $scopesByServer[$server] = [System.Collections.Generic.List[string]]::new()
+            $partners[$server] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        }
+        $pool = [long]$r.AddressesFree + [long]$r.AddressesInUse
+        $scopesByServer[$server].Add(('{0}|{1}|{2}|{3}|{4}|{5}' -f $r.ScopeId, $r.Name, $r.StartRange, $r.EndRange, $r.ScopeState, $pool).ToLowerInvariant())
+        if ($r.FailoverPartner) { [void]$partners[$server].Add((Get-DhcpServerShortName -Name ([string]$r.FailoverPartner))) }
+    }
+    $serversBySignature = @{}
+    foreach ($server in $scopesByServer.Keys) {
+        $items = $scopesByServer[$server].ToArray()
+        [Array]::Sort($items, [System.StringComparer]::Ordinal)
+        $signature = [string]::Join("`n", $items)
+        if (-not $serversBySignature.ContainsKey($signature)) { $serversBySignature[$signature] = [System.Collections.Generic.List[string]]::new() }
+        $serversBySignature[$signature].Add($server)
+    }
+    $groups = [System.Collections.Generic.List[object]]::new()
+    foreach ($signature in $serversBySignature.Keys) {
+        $servers = $serversBySignature[$signature]
+        if ($servers.Count -lt 2) { continue }
+        $linked = $false
+        foreach ($a in $servers) {
+            foreach ($b in $servers) {
+                if ($a -ne $b -and $partners[$a].Contains((Get-DhcpServerShortName -Name $b))) { $linked = $true }
+            }
+        }
+        if (-not $linked) {
+            $sorted = $servers.ToArray()
+            [Array]::Sort($sorted, [System.StringComparer]::OrdinalIgnoreCase)
+            $groups.Add($sorted)
+        }
+    }
+    return ,$groups.ToArray()
 }
 
 function Compare-DhcpScopeCache {
@@ -4362,6 +4500,7 @@ $script:selectedScopeNames = [System.Collections.Generic.HashSet[string]]::new([
 $script:suppressScopeItemCheck = $false
 $script:scopeCacheUpdated = $null
 $script:dhcpRunUsedSelection = $false
+$script:dhcpServerResolved = @{}
 
 # DNA Center tab
 $script:dnaVisibleDevices = [System.Collections.Generic.List[object]]::new()
@@ -4938,10 +5077,18 @@ function Start-DhcpServerDiscovery {
         param($job, $task, $result)
         $out = $result.Output
         if ($out -and $out.Success) {
-            $servers = @(foreach ($s in $out.Servers) { [pscustomobject]@{ DnsName = $s.Name; IPAddress = $s.IP } })
+            # Show the servers that will actually be queried (duplicates / stale entries merged)
+            $script:dhcpServerResolved = $out.Resolved
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $notes)
+            $ipByName = @{}
+            foreach ($s in $out.Servers) { if ($s.Name -and -not $ipByName.ContainsKey([string]$s.Name)) { $ipByName[[string]$s.Name] = [string]$s.IP } }
+            $servers = @(foreach ($n in $names) { [pscustomobject]@{ DnsName = $n; IPAddress = $ipByName[$n] } })
             Set-DhcpServerList -Servers $servers
             $script:lblLastRefresh.Text = "Last refreshed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-            Write-Log -Message "Found $($script:lstDHCPServers.Items.Count) DHCP server(s)" -Color 'Success' -LogBox $dhcpLogBox
+            foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $notes)) {
+                Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+            }
             if ($servers.Count -gt 0) { [void](Save-DhcpCache -Kind Servers -Items $servers) }
         } else {
             $msg = if ($out) { $out.Message } else { $result.Error }
@@ -4957,7 +5104,7 @@ function Start-DhcpServerDiscovery {
 
 function Start-DhcpScopeCacheRefresh {
     if ($script:dhcpJob -and -not $script:dhcpJob.Completed) { return }
-    $servers = @(Merge-DhcpServerList -Entries @(Get-CheckedDhcpServerEntries))
+    $servers = @(Merge-DhcpServerList -Entries @(Get-CheckedDhcpServerEntries) -Resolved $script:dhcpServerResolved)
     Set-DhcpBusy -Busy $true
     $script:lblScopeCacheStatus.Text = 'Cache: Updating...'
     $script:lblScopeCacheStatus.ForeColor = [System.Drawing.Color]::Orange
@@ -4968,8 +5115,12 @@ function Start-DhcpScopeCacheRefresh {
         $out = $result.Output
         if ($task.Descriptor.Kind -eq 'Discover') {
             if ($out -and $out.Success) {
-                $names = @(Merge-DhcpServerList -Entries @($out.Servers))
-                Write-Log -Message "Found $($names.Count) DHCP server(s) in Active Directory" -Color 'Success' -LogBox $dhcpLogBox
+                $script:dhcpServerResolved = $out.Resolved
+                $notes = [System.Collections.Generic.List[string]]::new()
+                $names = @(Merge-DhcpServerList -Entries @($out.Servers) -Resolved $out.Resolved -Notes $notes)
+                foreach ($line in @(Get-DhcpServerListLines -EntryCount @($out.Servers).Count -ServerCount $names.Count -Notes $notes)) {
+                    Write-Log -Message $line.Message -Color $line.Color -LogBox $dhcpLogBox
+                }
                 $data.Total = $names.Count
                 foreach ($n in $names) { Add-OctoJobTask -Job $job -Script $script:DhcpWorkerScripts.ScopeList -Argument @{ Server = $n } -Descriptor @{ Kind = 'ScopeList' } }
             } else {
@@ -5091,7 +5242,9 @@ function Start-DhcpCollection {
                 return
             }
         }
-        $request.Servers = @(Merge-DhcpServerList -Entries $entries.ToArray())
+        $notes = [System.Collections.Generic.List[string]]::new()
+        $request.Servers = @(Merge-DhcpServerList -Entries $entries.ToArray() -Resolved $script:dhcpServerResolved -Notes $notes)
+        foreach ($n in $notes) { Write-Log -Message "  $n" -Color 'Info' -LogBox $dhcpLogBox }
     }
 
     $script:dhcpState = New-DhcpCollectionState -Request $request
@@ -6578,6 +6731,12 @@ HOW THE NUMBERS ARE CALCULATED (redundancy-aware):
      Redundancy, FailoverPartner, FailoverState and Notes (for example a
      degraded failover relationship or pools that differ between partners).
    - Percentage in use = in use / (in use + free), per scope and overall.
+   - The log shows two counts: scope ROWS (one per scope per server - what
+     the old tool reported) and UNIQUE scopes (a scope on a failover pair or
+     split across servers is one scope).
+   - A server listed more than once in Active Directory (one entry per IP,
+     aliases, stale entries whose name no longer resolves) is queried once;
+     the log lists every skipped entry and why.
 
 
 -------------------------------------------------------------------------------
