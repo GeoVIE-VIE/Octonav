@@ -37,6 +37,31 @@ powershell.exe -ExecutionPolicy Bypass -File .\NetGUI.ps1
   NetGUI asks for that password and can re-save the cache with your main one.
 - **Resources:** `Package-Resources.ps1` now embeds files into `NetGUI.ps1`.
 
+### NetGUIH2.ps1 (hacker look)
+
+`NetGUIH2.ps1` is NetGUI with a terminal look, in its own file. It has the same tabs
+and features, and it uses the same settings, caches and cache password as NetGUI,
+so you can switch between the two.
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\NetGUIH2.ps1
+```
+
+- **Look:** neon text on black, Consolas everywhere, captions in capitals, and
+  corner brackets on every section.
+- **Themes:** View > Toggle Theme (Ctrl+T) cycles Matrix (green), Amber and Cyber
+  (cyan and magenta). This choice is saved separately from NetGUI's Light/Dark theme.
+- **Dashboard:** an ASCII logo, a prompt with a blinking cursor, and falling code.
+  The code only moves while the dashboard is on screen and the window is not
+  minimised. If drawing ever fails, the falling code stops and the rest of the tool
+  carries on.
+- **Logs:** each line starts with a marker: `[+]` success, `[*]` info, `[!]` warning,
+  `[-]` error. The status bar reads like a terminal (`> READY`, `LINK DOWN`, `PRIV: USER`).
+- **Separate file:** a change to `NetGUI.ps1` does not reach `NetGUIH2.ps1` until it
+  is made there too.
+- **Resources:** run `Package-Resources.ps1 -TargetScript .\NetGUIH2.ps1` to embed
+  resources into NetGUIH2.
+
 ### DHCP numbers with and without redundancy
 
 Some scopes run on a failover pair and some on a single server. The totals now
@@ -144,6 +169,7 @@ Empty files, one-line files and lines containing `</script>` are handled correct
 
 ### Main Application
 - **NetGUI.ps1** - Main GUI application, everything in one file (see above)
+- **NetGUIH2.ps1** - NetGUI with the hacker look, also in one file (see above)
 - **OctoNav-CompleteGUI-FIXED.ps1** - Older version of the GUI (~3,300 lines), kept for reference
   - ✅ Merged: XFER network configuration (Tab 1)
   - ✅ Merged: DHCP statistics collection (Tab 2 - Redesigned UI)
