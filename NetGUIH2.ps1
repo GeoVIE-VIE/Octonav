@@ -488,11 +488,14 @@ function Export-NetGuiCsv {
         invariant format so Excel/other locales read them the same way.
     .PARAMETER Columns
         Column order; defaults to the first row's properties.
+    .PARAMETER Headers
+        Column names written to the file (same order as Columns); default = Columns.
     #>
     param(
         [AllowEmptyCollection()][object[]]$Rows,
         [string[]]$Columns,
-        [Parameter(Mandatory = $true)][string]$Path
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$Headers
     )
     if ($null -eq $Rows) { $Rows = @() }
     if (-not $Columns -or $Columns.Count -eq 0) {
@@ -503,7 +506,8 @@ function Export-NetGuiCsv {
     $writer = [System.IO.StreamWriter]::new($Path, $false, [System.Text.UTF8Encoding]::new($true))
     try {
         $cells = New-Object string[] $Columns.Count
-        for ($c = 0; $c -lt $Columns.Count; $c++) { $cells[$c] = '"' + $Columns[$c].Replace('"', '""') + '"' }
+        if (-not $Headers -or $Headers.Count -ne $Columns.Count) { $Headers = $Columns }
+        for ($c = 0; $c -lt $Columns.Count; $c++) { $cells[$c] = '"' + $Headers[$c].Replace('"', '""') + '"' }
         $writer.WriteLine(($cells -join ','))
         foreach ($row in $Rows) {
             if ($null -eq $row) { continue }
@@ -1889,7 +1893,11 @@ function Stop-NetGuiJob {
 #     database, so EACH partner reports the WHOLE scope's free/in-use numbers.
 #     Partners must be de-duplicated (never summed).
 #   * Split scope / same ScopeId on unrelated servers (no failover relationship):
-#     each server only owns its own part of the pool. Parts must be summed.
+#     each server only owns its own part of the pool and its own leases. Parts must
+#     be summed (100 in use on one + 100 on the other = 200 in use for the scope).
+#     The summed pool can never be larger than the scope's address range - unless
+#     the summed leases are too: then the copies are separate networks reusing the
+#     subnet, and every pool is counted.
 #   * Inactive copies of a scope do not hand out addresses, so they are not
 #     counted when an active copy exists.
 # The failover relationship reported by Get-DhcpServerv4Failover decides which
@@ -2091,9 +2099,16 @@ function Get-DhcpScopeAnalysis {
              could not report failover information joins the relationship that names
              it as partner, otherwise such copies are treated as replicas of each
              other (never double counted).
-          4. Cluster value = MAX(pool) and MAX(in use) over its members (replicas
-             report the same scope-wide numbers). Scope total = SUM over clusters
-             (independent pools).
+          4. Cluster value = pool and in use of ONE member, the one reporting the
+             most in use (replicas report the same scope-wide numbers; when they
+             disagree, both numbers still come from the same server). Scope total =
+             SUM over clusters (independent pools and leases).
+          5. Summed pools larger than the scope range are capped at the range while
+             the summed leases fit in it (same network, overlapping pools); when the
+             leases do not fit, the copies are separate networks and nothing is capped.
+        Each per-server row also gets that server's own share (ServerAddresses*: for
+        a failover partner the "on this server" part, so per-server rows add up to
+        the scope) and the scope-wide numbers (Scope*).
         Every per-server row also gets its own TotalAddresses/PercentageInUse and the
         group's Redundancy and Notes, so a per-server export explains itself.
 
@@ -2149,7 +2164,7 @@ function Get-DhcpScopeAnalysis {
 
     $groups = [System.Collections.Generic.List[object]]::new()
     $stats = @{
-        Failover = 0; FailoverDegraded = 0; Single = 0; Split = 0; Unknown = 0; Mixed = 0; Overlap = 0; NameConflict = 0
+        Failover = 0; FailoverDegraded = 0; Single = 0; Split = 0; Unknown = 0; Mixed = 0; Overlap = 0; NameConflict = 0; Reused = 0
         Active = 0; Inactive = 0; Total = [long]0; InUse = [long]0; Free = [long]0; Over80 = 0; Over90 = 0
     }
     $top = [System.Collections.Generic.List[object]]::new()
@@ -2179,6 +2194,18 @@ function Get-DhcpScopeAnalysis {
             $m.TotalAddresses = $t
             if ($t -gt 0) { $m.PercentageInUse = [math]::Round(([decimal]$u * 100) / $t, 2, $awayFromZero) }
             else { $m.PercentageInUse = [decimal]0 }
+            # This server's own share: a failover partner reports the whole scope, plus
+            # the part it serves itself ("on this server")
+            $su = $u; $sf = [long]$m.AddressesFree
+            if (([string]$m.FailoverRelationship).Trim().Length -gt 0 -and $null -ne $m.InUseOnThisServer -and $null -ne $m.FreeOnThisServer -and
+                ([long]$m.InUseOnThisServer + [long]$m.FreeOnThisServer) -gt 0) {
+                $su = [long]$m.InUseOnThisServer; $sf = [long]$m.FreeOnThisServer
+            }
+            $m.ServerAddressesInUse = $su
+            $m.ServerAddressesFree = $sf
+            $m.ServerTotalAddresses = $su + $sf
+            if (($su + $sf) -gt 0) { $m.ServerPercentageInUse = [math]::Round(([decimal]$su * 100) / ($su + $sf), 2, $awayFromZero) }
+            else { $m.ServerPercentageInUse = [decimal]0 }
 
             $isInactive = ([string]$m.ScopeState -eq 'InActive')
             if ($isInactive) { $inactiveServers.Add($server) } else { $active.Add($m) }
@@ -2272,13 +2299,15 @@ function Get-DhcpScopeAnalysis {
         $modes = [System.Collections.Generic.List[string]]::new()
         $badStates = [System.Collections.Generic.List[string]]::new()
         foreach ($c in $clusters) {
-            $maxPool = [long]0; $maxUse = [long]0; $minPool = [long]::MaxValue
+            $maxPool = [long]0; $minPool = [long]::MaxValue
+            $repPool = [long]-1; $repUse = [long]-1
             foreach ($r in $c.Rows) {
                 $p = [long]$r.TotalAddresses
                 $iu = [long]$r.AddressesInUse
                 if ($p -gt $maxPool) { $maxPool = $p }
                 if ($p -lt $minPool) { $minPool = $p }
-                if ($iu -gt $maxUse) { $maxUse = $iu }
+                # the member with the most in use (then the bigger pool) gives both numbers
+                if ($iu -gt $repUse -or ($iu -eq $repUse -and $p -gt $repPool)) { $repUse = $iu; $repPool = $p }
                 if ($c.Kind -eq 'Failover') {
                     $mode = [string]$r.FailoverMode
                     if ($mode -and -not $modes.Contains($mode)) { $modes.Add($mode) }
@@ -2286,8 +2315,8 @@ function Get-DhcpScopeAnalysis {
                     if ($st -and $st -ne 'Normal' -and -not $badStates.Contains($st)) { $badStates.Add($st) }
                 }
             }
-            $total += $maxPool
-            $inUse += $maxUse
+            $total += [Math]::Max([long]0, $repPool)
+            $inUse += [Math]::Max([long]0, $repUse)
 
             switch ($c.Kind) {
                 'Failover' { $foCount++ }
@@ -2307,7 +2336,7 @@ function Get-DhcpScopeAnalysis {
         # that hand out the same addresses without failover are capped at the range
         # Copies with different scope names are usually separate networks (sites)
         # that reuse the same subnet: they keep their own pools and are flagged.
-        $overlap = $false; $nameConflict = $false
+        $overlap = $false; $nameConflict = $false; $reused = $false
         if ($clusters.Count -gt 1) {
             $scopeNames.Clear()
             foreach ($m in $contributing) {
@@ -2320,10 +2349,16 @@ function Get-DhcpScopeAnalysis {
             } else {
                 $rangeSize = Get-DhcpRangeSize -Rows $contributing
                 if ($rangeSize -gt 0 -and $total -gt $rangeSize) {
-                    $notes.Add("Copies overlap: the pools add up to $total addresses but the scope range holds $rangeSize - counted as $rangeSize (use failover, or exclusions that do not overlap)")
-                    $total = $rangeSize
-                    if ($inUse -gt $total) { $inUse = $total }
-                    $overlap = $true
+                    if ($inUse -le $rangeSize) {
+                        # one network: in use is summed, the pool cannot be bigger than the range
+                        $notes.Add("Copies overlap: the pools add up to $total addresses but the scope range holds $rangeSize - counted as $rangeSize, with the $inUse in use on all copies (use failover, or exclusions that do not overlap)")
+                        $total = $rangeSize
+                        $overlap = $true
+                    } else {
+                        # more leases than the range holds: these are separate networks
+                        $notes.Add("The copies have $inUse addresses in use but the scope range holds $rangeSize - separate networks reusing this subnet; every pool is counted")
+                        $reused = $true
+                    }
                 }
             }
         }
@@ -2354,14 +2389,17 @@ function Get-DhcpScopeAnalysis {
 
         if ($overlap) { $redundancy += ' - OVERLAPPING POOLS (capped at scope range)' }
         if ($nameConflict) { $redundancy += ' - DIFFERENT SCOPE NAMES (separate networks?)' }
+        if ($reused) { $redundancy += ' - SUBNET REUSED (separate networks, every pool counted)' }
         $notesText = $notes -join '; '
+        # --- 6. grouped row
+        if ($total -gt 0) { $pct = [math]::Round(([decimal]$inUse * 100) / $total, 2, $awayFromZero) } else { $pct = [decimal]0 }
         foreach ($m in $all) {
             $m.Redundancy = $redundancy
             $m.Notes = $notesText
+            $m.ScopeAddressesInUse = $inUse
+            $m.ScopeTotalAddresses = $total
+            $m.ScopePercentageInUse = $pct
         }
-
-        # --- 6. grouped row
-        if ($total -gt 0) { $pct = [math]::Round(([decimal]$inUse * 100) / $total, 2, $awayFromZero) } else { $pct = [decimal]0 }
         $group = [pscustomobject][ordered]@{
             ScopeId              = $scopeId
             DHCPServer           = ($servers -join ', ')
@@ -2391,6 +2429,7 @@ function Get-DhcpScopeAnalysis {
             $stats.Active++
             if ($overlap) { $stats.Overlap++ }
             if ($nameConflict) { $stats.NameConflict++ }
+            if ($reused) { $stats.Reused++ }
             $stats.Total += $total
             $stats.InUse += $inUse
             $stats.Free += $free
@@ -2424,6 +2463,7 @@ function Get-DhcpScopeAnalysis {
         UnknownScopes    = $stats.Unknown
         OverlapScopes    = $stats.Overlap
         DifferentNameScopes = $stats.NameConflict
+        ReusedSubnetScopes = $stats.Reused
         NoStatsRows      = $noStatsRows
         TotalAddresses   = $stats.Total
         AddressesInUse   = $stats.InUse
@@ -2450,7 +2490,8 @@ function New-DhcpScopeRow {
         [string]$SubnetMask, [string]$StartRange, [string]$EndRange, [string]$ScopeState = 'Active',
         [long]$AddressesFree, [long]$AddressesInUse, [long]$Reserved, [long]$Pending, [bool]$StatsMissing = $false,
         [bool]$FailoverInfoAvailable = $true, [string]$FailoverRelationship, [string]$FailoverPartner,
-        [string]$FailoverMode, [string]$FailoverState, [string]$FailoverServerRole
+        [string]$FailoverMode, [string]$FailoverState, [string]$FailoverServerRole,
+        $InUseOnThisServer = $null, $FreeOnThisServer = $null
     )
     [pscustomobject][ordered]@{
         ScopeId               = $ScopeId
@@ -2472,6 +2513,8 @@ function New-DhcpScopeRow {
         FailoverMode          = $FailoverMode
         FailoverState         = $FailoverState
         FailoverServerRole    = $FailoverServerRole
+        InUseOnThisServer     = $InUseOnThisServer
+        FreeOnThisServer      = $FreeOnThisServer
         DNSServers            = $null
         Option60              = $null
         Option43              = $null
@@ -2479,6 +2522,13 @@ function New-DhcpScopeRow {
         OptionsFailed         = $false
         TotalAddresses        = $null
         PercentageInUse       = $null
+        ServerAddressesFree   = $null
+        ServerAddressesInUse  = $null
+        ServerTotalAddresses  = $null
+        ServerPercentageInUse = $null
+        ScopeAddressesInUse   = $null
+        ScopeTotalAddresses   = $null
+        ScopePercentageInUse  = $null
         Redundancy            = $null
         Notes                 = $null
     }
@@ -2642,10 +2692,14 @@ try {
                 $id = $sc.ScopeId.ToString()
                 $st = $statsById[$id]
                 $statsMissing = ($null -eq $st)
+                $usedHere = $null; $freeHere = $null
                 if ($statsMissing) {
                     $noStats++
                     $free = 0; $used = 0; $resv = 0; $pend = 0
                 } else {
+                    # failover scopes: the part this server serves itself (the partner has the rest)
+                    $usedHere = $st.AddressesInUseOnThisServer
+                    $freeHere = $st.AddressesFreeOnThisServer
                     $free = $st.AddressesFree; if ($null -eq $free) { $free = $st.Free }
                     $used = $st.AddressesInUse; if ($null -eq $used) { $used = $st.InUse }
                     $resv = $st.ReservedAddress; if ($null -eq $resv) { $resv = $st.Reserved }
@@ -2675,6 +2729,8 @@ try {
                     FailoverMode          = $(if ($rel) { [string]$rel.Mode } else { '' })
                     FailoverState         = $(if ($rel) { [string]$rel.State } else { '' })
                     FailoverServerRole    = $(if ($rel) { [string]$rel.ServerRole } else { '' })
+                    InUseOnThisServer     = $(if ($rel -and $null -ne $usedHere) { [long]$usedHere } else { $null })
+                    FreeOnThisServer      = $(if ($rel -and $null -ne $freeHere) { [long]$freeHere } else { $null })
                     DNSServers            = $null
                     Option60              = $null
                     Option43              = $null
@@ -2682,6 +2738,13 @@ try {
                     OptionsFailed         = $false
                     TotalAddresses        = $null
                     PercentageInUse       = $null
+                    ServerAddressesFree   = $null
+                    ServerAddressesInUse  = $null
+                    ServerTotalAddresses  = $null
+                    ServerPercentageInUse = $null
+                    ScopeAddressesInUse   = $null
+                    ScopeTotalAddresses   = $null
+                    ScopePercentageInUse  = $null
                     Redundancy            = $null
                     Notes                 = $null
                 })
@@ -3123,7 +3186,10 @@ function Get-DhcpSummaryLines {
         $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope ID(s) exist on several servers under different scope names - probably separate networks reusing the subnet. The per-server export lists each one; the grouped export shows each scope ID once (see Notes)' -f $s.DifferentNameScopes) })
     }
     if ($s.OverlapScopes -gt 0) {
-        $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) run on several servers without failover and their pools overlap - counted at most once per address (see Notes)' -f $s.OverlapScopes) })
+        $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope(s) run on several servers without failover and their pools overlap - in use is summed, the pool is counted at most once per address (see Notes)' -f $s.OverlapScopes) })
+    }
+    if ($s.ReusedSubnetScopes -gt 0) {
+        $lines.Add(@{ Color = 'Warning'; Message = ('{0} scope ID(s) have more addresses in use across their servers than the range holds - separate networks reusing the subnet, every pool counted (see Notes)' -f $s.ReusedSubnetScopes) })
     }
     $lines.Add(@{ Color = 'Success'; Message = ('Capacity (active, de-duplicated): {0:N0} addresses | in use {1:N0} ({2}%) | free {3:N0}' -f $s.TotalAddresses, $s.AddressesInUse, $s.PercentageInUse, $s.AddressesFree) })
     $warnColor = if ($s.ScopesOver90 -gt 0) { 'Warning' } else { 'Info' }
@@ -3571,17 +3637,33 @@ function Get-DhcpScopeSubnets {
 }
 
 function Get-DhcpExportColumns {
+    <#
+    .SYNOPSIS
+        Export columns. Per server, AddressesFree / AddressesInUse / PercentageInUse /
+        TotalAddresses are that server's own share (a failover partner's "on this
+        server" part), so the rows of one scope add up to the scope; the Scope*
+        columns repeat the scope-wide numbers on every row.
+    .OUTPUTS
+        @{ Columns = property names; Headers = CSV column names }
+    #>
     param([hashtable]$Options, [switch]$Grouped)
     $cols = [System.Collections.Generic.List[string]]::new()
-    foreach ($c in @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')) { $cols.Add($c) }
-    if ($Options.IncludeDNS) { $cols.Add('DNSServers') }
-    if ($Options.IncludeOption60) { $cols.Add('Option60') }
-    if ($Options.IncludeOption43) { $cols.Add('Option43') }
-    if ($Options.ShowAllOptions) { $cols.Add('AllOptions') }
-    foreach ($c in @('TotalAddresses', 'ScopeState', 'Redundancy', 'FailoverPartner', 'FailoverState')) { $cols.Add($c) }
-    if ($Grouped) { $cols.Add('ServerCount') }
-    $cols.Add('Notes')
-    return $cols.ToArray()
+    $heads = [System.Collections.Generic.List[string]]::new()
+    $share = -not $Grouped
+    foreach ($c in @('ScopeId', 'DHCPServer', 'Description', 'AddressesFree', 'AddressesInUse', 'PercentageInUse')) {
+        $heads.Add($c)
+        $perServer = $share -and ($c -in @('AddressesFree', 'AddressesInUse', 'PercentageInUse'))
+        $cols.Add($(if ($perServer) { 'Server' + $c } else { $c }))
+    }
+    foreach ($o in @(@('IncludeDNS', 'DNSServers'), @('IncludeOption60', 'Option60'), @('IncludeOption43', 'Option43'), @('ShowAllOptions', 'AllOptions'))) {
+        if ($Options[$o[0]]) { $cols.Add($o[1]); $heads.Add($o[1]) }
+    }
+    $cols.Add($(if ($share) { 'ServerTotalAddresses' } else { 'TotalAddresses' })); $heads.Add('TotalAddresses')
+    foreach ($c in @('ScopeState', 'Redundancy', 'FailoverPartner', 'FailoverState')) { $cols.Add($c); $heads.Add($c) }
+    if ($Grouped) { $cols.Add('ServerCount'); $heads.Add('ServerCount') }
+    else { foreach ($c in @('ScopeAddressesInUse', 'ScopeTotalAddresses', 'ScopePercentageInUse')) { $cols.Add($c); $heads.Add($c) } }
+    $cols.Add('Notes'); $heads.Add('Notes')
+    return @{ Columns = $cols.ToArray(); Headers = $heads.ToArray() }
 }
 # ============================================
 # DNA CENTER
@@ -6422,7 +6504,7 @@ function Export-DhcpResults {
     $columns = Get-DhcpExportColumns -Options $script:dhcpRunOptions -Grouped:$grouped
     $baseName = if ($grouped) { 'DHCPScopeStats_Grouped' } else { 'DHCPScopeStats' }
     $path = Get-NetGuiExportPath -Folder $Folder -BaseName $baseName
-    [void](Export-NetGuiCsv -Rows $rows -Columns $columns -Path $path)
+    [void](Export-NetGuiCsv -Rows $rows -Columns $columns.Columns -Headers $columns.Headers -Path $path)
     $kind = if ($grouped) { 'unique scope(s), failover-aware' } else { 'server row(s)' }
     Write-Log -Message "Exported $(@($rows).Count) $kind to: $path" -Color 'Success' -LogBox $dhcpLogBox
     Add-ExportHistory -Settings $script:Settings -FilePath $path -Operation 'DHCP Statistics'
@@ -7774,8 +7856,9 @@ Collects scope usage from your Windows DHCP servers, many servers at once.
 ### How the numbers are calculated (redundancy-aware)
 - Failover partners (load balance or hot standby) both report the WHOLE scope, so a failover scope is counted ONCE - not twice.
 - A scope split across servers without failover (split scope) has each server's part of the pool added together.
-- Added-up pools can never exceed the scope's address range: copies that hand out the same addresses without failover are capped at the range and marked "OVERLAPPING POOLS".
+- In use on copies without failover is always added up (100 on one server + 100 on the other = 200 in use). Added-up pools can never exceed the scope's address range: they are capped at the range and marked "OVERLAPPING POOLS" - unless more addresses are in use than the range holds, which means separate networks reusing the subnet: then every pool counts and the scope is marked "SUBNET REUSED".
 - The same scope ID under different scope names on different servers is treated as separate networks (each pool counted), marked "DIFFERENT SCOPE NAMES". The per-server export lists each one.
+- The per-server export shows each server's own share: for a failover partner, the addresses it serves itself, so the rows of one scope add up to the scope. The ScopeAddressesInUse, ScopeTotalAddresses and ScopePercentageInUse columns repeat the whole scope's numbers on every row.
 - Inactive copies of a scope are not counted.
 - "Group by Scope ID on Export" writes one row per scope with the columns Redundancy, FailoverPartner, FailoverState and Notes (for example a degraded failover relationship or pools that differ between partners).
 - Percentage in use = in use / (in use + free), per scope and overall.
