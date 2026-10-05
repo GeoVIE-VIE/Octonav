@@ -72,12 +72,22 @@ account for both:
 | Failover pair (load balance or hot standby) | Both partners report the whole scope, so it is counted **once** |
 | Single server | Counted once |
 | Same scope ID on several servers without failover (split scope) | Each server's part of the pool is **added** |
-| Copies without failover whose pools overlap (each hands out the same addresses) | Added, but never more than the scope's address range, and marked `OVERLAPPING POOLS` |
+| Same scope on several servers without failover | In use is **added** (100 on one + 100 on the other = 200 in use); pools are added too |
+| ... whose added pools are bigger than the scope's address range | The pool is capped at the range and marked `OVERLAPPING POOLS`; in use is still the sum |
+| ... with more addresses in use than the range can hold | Must be separate networks reusing the subnet: every pool counted, marked `SUBNET REUSED` |
 | Same scope ID with different scope names on different servers (sites reusing a subnet) | Treated as separate networks: each pool counted, marked `DIFFERENT SCOPE NAMES` |
 | Inactive copy of a scope | Not counted in the totals |
 | Failover information unavailable | Counted once, as before, and marked `Unknown` |
 
-Percentage in use = in use / (in use + free), rounded to 2 decimals.
+Percentage in use = in use / (in use + free), rounded to 2 decimals. For a failover
+pair, both numbers come from one partner (the one reporting the most in use), so a
+pair that briefly disagrees is never mixed.
+
+In the per-server export (Group by Scope ID off), `AddressesFree`, `AddressesInUse`,
+`TotalAddresses` and `PercentageInUse` are each server's own share: for a failover
+partner, the addresses it serves itself, so the rows of a scope add up to the scope
+instead of counting it twice. `ScopeAddressesInUse`, `ScopeTotalAddresses` and
+`ScopePercentageInUse` repeat the whole scope's numbers on every row.
 
 The log shows two counts: scope rows (one per scope per server, which is what the
 old tool reported as "Found N scope(s)") and unique scopes (a scope on a failover
